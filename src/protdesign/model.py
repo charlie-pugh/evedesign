@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, Self, Tuple
 from protdesign.entity import EntityOrEntityList
+from protdesign.utils import StatusCallback
 
 
 class Scorer(Protocol):
@@ -83,16 +84,82 @@ class BaseModel(ABC):
     """
     Core definition of a model for sequence design
     """
-    def __init__(self):
-        # TODO: store if model can handle insertions/deletions/fixed length
-        # TODO: store if model needs a fixed WT sequence?
-        # TODO: store if model needs sequences / MSA (or can use optionally)
-        # TODO: store if model needs structure (or can use optionally)
-        # TODO: add properties to retrieve those
-        # TODO: can parallelize
-        # TODO: gpu_required: bool (cpu possible? gpu possible?)
-        # TODO: is model built/fitted or not (long-running)
-        # TODO: keep model or not
+    @property
+    @abstractmethod
+    # plain-text name of method
+    def name(self) -> str:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model has long-running build step (e.g. EVE VAE)
+    def requires_heavy_build(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model *must* be run on GPU
+    def requires_gpu(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model *can* be run on GPU (implies this is an advantage, otherwise set this to False)
+    def supports_gpu(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model *can* be parallelized on CPU (implies this is an advantage, otherwise set this to False)
+    def supports_cpu_parallel(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model *can* be parallelized on GPU (implies this is an advantage, otherwise set this to False)
+    def supports_gpu_parallel(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model needs a specified target sequence
+    def requires_target(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model needs unaligned sequences as input
+    def requires_seqs(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model needs aligned sequences as input
+    def requires_msa(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model needs 3D structures as input
+    def requires_3d(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model requires fixed-length sequences
+    def requires_fixed_length(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model is able to model insertions
+    def handles_insertions(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    # whether model is able to model deletions
+    def handles_deletions(self) -> bool:
         pass
 
     @classmethod
@@ -146,7 +213,11 @@ class BaseModel(ABC):
         pass
 
     @abstractmethod
-    def build(self, system: EntityOrEntityList) -> Self:
+    def build(
+        self,
+        system: EntityOrEntityList,
+        status_callback: StatusCallback | None = None,
+    ) -> Self:
         """
         Prepare model for calculations on a given molecular system (e.g. scoring or sampling).
         In the case of inference-only approaches, implementations of this method will be very light
@@ -166,13 +237,12 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        status_callback
+            Callback function to receive progress updates
 
         Returns
         -------
         self
             Reference to the instance for method chaining
         """
-        # TODO: add extra parameters for supplying MSA, structures, etc.
-        # TODO: add status callback argument
         pass
-

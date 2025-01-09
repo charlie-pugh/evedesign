@@ -1,37 +1,54 @@
 """
 Wrapper class around EVmutation2/picasso model
 """
+from os import PathLike
+from typing import Self, Tuple
+
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import EntityOrEntityList, PROTEIN
-from protdesign.utils import ensure_sequence
-from typing import Protocol, Self, Tuple
+from protdesign.utils import ensure_sequence, DeviceType, StatusCallback
 
 try:
     import picasso_model
-    import_available = True
+    IMPORT_AVAILABLE = True
 except ImportError:
-    import_available = False
+    IMPORT_AVAILABLE = False
 
 
 class EVmutation2(BaseModel, Scorer, Generator):
-    available = import_available
+    available = IMPORT_AVAILABLE
+    name: str = "EVmutation2"
+
+    requires_heavy_build: bool = False
+    requires_gpu: bool = False
+    supports_gpu: bool = True
+    supports_gpu_parallel: bool = False
+    supports_cpu_parallel: bool = False
+
+    requires_target: bool = True
+    requires_seqs: bool = True
+    requires_msa: bool = True
+    requires_3d: bool = False
+    requires_fixed_length: bool = True
+    handles_insertions: bool = False
+    handles_deletions: bool = True
 
     def __init__(
         self,
-        model_file_path: str,
+        model_file_path: str | PathLike,
+        keep_model_loaded: bool = False,
+        device: DeviceType = "cpu",
     ):
-        # TODO: call super constructor?
-        # TODO: where to specify device?
-        """
-        """
+        super().__init__()
         self.model_file_path = model_file_path
+        self.keep_model_loaded = keep_model_loaded
+        self.device = device
 
         # lazy-load model when needed
         self.model = None
 
-        # TODO: device?
-        # TODO: encoder params
-        # TODO: decoder params
+        # TODO: store encoder params
+        # TODO: store decoder params
 
         # encodings created when calling build() method
         self.encoding = None
@@ -72,7 +89,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         return m
 
-    def build(self, system: EntityOrEntityList) -> Self:
+    def build(
+        self,
+        system: EntityOrEntityList,
+        status_callback: StatusCallback | None = None
+    ) -> Self:
         print("building...")
         # TODO: verify if we can actually model the system
         print(self.can_model(system))

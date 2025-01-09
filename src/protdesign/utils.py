@@ -1,7 +1,11 @@
 from protdesign.constants import AA_TO_INDEX, INDEX_TO_AA, MASK, GAP
-from typing import Tuple, List, Sequence, Any, TypeVar
+from typing import Any, Callable, Tuple, List, Literal, Sequence, TypeVar
 
 T = TypeVar("T")
+DeviceType = Literal["cpu", "gpu"]
+Status = Literal["running", "done", "failed"]
+# status, progress (optional), message (optional)
+StatusCallback = Callable[[Status, float | None, str | None], Any]
 
 
 def valid_protein_sequence(
