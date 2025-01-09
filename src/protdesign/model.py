@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, Self, Tuple
-from protdesign.entity import EntityOrEntitySequence
+from protdesign.entity import EntityOrEntityList
 
 
 class Scorer(Protocol):
@@ -18,9 +18,18 @@ class Scorer(Protocol):
 
     @abstractmethod
     def score_single(self) -> None:
+        # TODO: break this method out into its own Protocol? Some methods may be able to compute
+        #  P(x_i | x_\i) but not P(x_1, ..., x_n) - for Gibbs, we only need the former!
+
+        # TODO: this should score one position across many different WT sequences
+        #  (batch across sequences)
+
         # TODO: add actual return types
+        # TODO: should this also support deletions/insertions?
         pass
 
+    # TODO: add status callback argument
+    # TODO: another method to score all singles for a given sequence (batch across positions)
     # TODO: method to return all sites of interest for Gibbs sampler?
     # TODO: device specification
 
@@ -35,6 +44,7 @@ class Generator(Protocol):
         # TODO: add actual return types
         # TODO: parameters? number of designs, flexible positions, etc.
         # TODO: device specification
+        # TODO: add status callback argument
         pass
 
 
@@ -44,34 +54,50 @@ class Embedder(Protocol):
     (designs/sequences, vector per token)
 
     # TODO: add more efficient method to score and embed?
+    # TODO: add methods for single-mutant embeddings
     # TODO: pooling / protein-level embedding
     """
     @abstractmethod
     def embed(self) -> None:
         # TODO: add return types
         # TODO: device specification
+        # TODO: add status callback argument
         pass
 
 
 @dataclass
 class RequiredResources:
-    # TODO: seperate between training and inference?
-    # TODO: training time
-    # TODO: inference time
-    gpu_required: bool
-    gpu_cores: int | None
-    gpu_ram_per_core: int | None
-    cpu_cores: int | None
-    cpu_ram_per_core: int | None
+    """
+    All memory resources in megabytes, times in minutes
+    """
+    min_gpu_cores: int | None
+    min_gpu_memory_per_core: int | None
+
+    min_cpu_cores: int | None
+    min_cpu_memory_per_core: int | None
+
+    time: int | None
 
 
 class BaseModel(ABC):
+    """
+    Core definition of a model for sequence design
+    """
     def __init__(self):
+        # TODO: store if model can handle insertions/deletions/fixed length
+        # TODO: store if model needs a fixed WT sequence?
+        # TODO: store if model needs sequences / MSA (or can use optionally)
+        # TODO: store if model needs structure (or can use optionally)
+        # TODO: add properties to retrieve those
+        # TODO: can parallelize
+        # TODO: gpu_required: bool (cpu possible? gpu possible?)
+        # TODO: is model built/fitted or not (long-running)
+        # TODO: keep model or not
         pass
 
     @classmethod
     @abstractmethod
-    def can_model(cls, system: EntityOrEntitySequence) -> Tuple[bool, str]:
+    def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
         molecular system
@@ -92,7 +118,12 @@ class BaseModel(ABC):
 
     @classmethod
     @abstractmethod
-    def required_resources(cls, system: EntityOrEntitySequence) -> RequiredResources:
+    def required_resources(
+        cls,
+        system: EntityOrEntityList,
+        use_gpu: bool = True,
+        build: bool = True,
+    ) -> RequiredResources:
         """
         Estimate the required resources to perform computations on molecular system
 
@@ -100,6 +131,12 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        use_gpu
+            Set to True if you want to estimate resources making use of GPU
+            (only for models supporting GPU-based computations)
+        build
+            Set as True to estimate resources for model building. Set as False to
+            estimate resources for inference (scoring / sampling).
 
         Returns
         -------
@@ -109,12 +146,12 @@ class BaseModel(ABC):
         pass
 
     @abstractmethod
-    def build(self, system: EntityOrEntitySequence) -> Self:
+    def build(self, system: EntityOrEntityList) -> Self:
         """
         Prepare model for calculations on a given molecular system (e.g. scoring or sampling).
         In the case of inference-only approaches, implementations of this method will be very light
-        (e.g. compute an encoding), whereas for others this method may be compute-heavy (e.g.
-        VAE models trained on a specific MSA)
+        (e.g. do nothing, or compute an encoding), whereas for others this method may be compute-heavy
+        (e.g. EVE VAE models trained on a family-specific MSA)
 
         Note: implementations of this method should always verify if the system can
         be modelled or raise a ValueError instead
@@ -136,5 +173,6 @@ class BaseModel(ABC):
             Reference to the instance for method chaining
         """
         # TODO: add extra parameters for supplying MSA, structures, etc.
+        # TODO: add status callback argument
         pass
 

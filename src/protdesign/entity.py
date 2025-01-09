@@ -1,7 +1,7 @@
 """
 Specification of components of molecular design system (proteins, nucleic acids, ligands, etc.)
 """
-from typing import Literal, Sequence
+from typing import Literal, List
 from protdesign.utils import valid_protein_sequence
 
 PROTEIN = "protein"
@@ -58,8 +58,8 @@ class Entity:
         self.first_index = first_index
 
 
-EntitySequence = Sequence[Entity]
-EntityOrEntitySequence = Entity | EntitySequence
+EntityList = List[Entity]
+EntityOrEntityList = Entity | EntityList
 
 
 class Protein(Entity):
