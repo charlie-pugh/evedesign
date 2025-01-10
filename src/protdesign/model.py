@@ -147,19 +147,21 @@ class BaseModel(ABC):
     @property
     @abstractmethod
     # whether model requires fixed-length sequences
+    # (implies insertions cannot be modeled)
     def requires_fixed_length(self) -> bool:
         pass
 
     @property
     @abstractmethod
-    # whether model is able to model insertions
-    def handles_insertions(self) -> bool:
+    # whether model is able to model deletions (may be possible for models
+    # with required fixed length depending on alphabet)
+    def handles_deletions(self) -> bool:
         pass
 
     @property
     @abstractmethod
-    # whether model is able to model deletions
-    def handles_deletions(self) -> bool:
+    # indicates if model was built and is ready for scoring/generation
+    def ready(self) -> str:
         pass
 
     @classmethod
@@ -232,6 +234,10 @@ class BaseModel(ABC):
         Note: implementations should pay careful attention whether any external model parameters
         (e.g. PyTorch model) are stored inside the class to avoid potential problems and inflated
         memory usage if instances of the class are serialized
+
+        # TODO: add parameter for labelled examples for supervised setting
+        # TODO: rename this method to _build and create an implementation for build() that
+        #   calls can_model and sets model.build = True?
 
         Parameters
         ----------

@@ -6,10 +6,11 @@ from typing import Self, Tuple
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import EntityOrEntityList
-from protdesign.utils import ensure_sequence, DeviceType, StatusCallback
+from protdesign.utils import ensure_sequence, model_param_context, DeviceType, StatusCallback
 
 try:
-    import picasso_model
+    from picasso_model import model, features, parsers
+    import torch
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -30,28 +31,35 @@ class EVmutation2(BaseModel, Scorer, Generator):
     requires_msa: bool = True
     requires_3d: bool = False
     requires_fixed_length: bool = True
-    handles_insertions: bool = False
     handles_deletions: bool = True
 
     def __init__(
         self,
         model_file_path: str | PathLike,
-        keep_model_loaded: bool = False,
+        keep_model: bool = False,
         device: DeviceType = "cpu",
     ):
         super().__init__()
         self.model_file_path = model_file_path
-        self.keep_model_loaded = keep_model_loaded
+        self.keep_model = keep_model
         self.device = device
 
         # lazy-load model when needed
         self.model = None
 
         # TODO: store encoder params
+        #   num_encoder_samples=1,
+        #   num_recycling_steps=4,
+        #   max_num_msa=2048,
+        #   decoder - num_samples
         # TODO: store decoder params
 
         # encodings created when calling build() method
         self.encoding = None
+
+    @property
+    def ready(self):
+        return self.encoding is not None
 
     @classmethod
     def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
@@ -59,10 +67,16 @@ class EVmutation2(BaseModel, Scorer, Generator):
         if len(system) != 1 or system[0].type_ != "protein":
             return False, "Can only handle single-component protein system"
 
-        if system[0].sequences is None:
+        if system[0].sequences is None or len(system[0].sequences.seqs) == 0:
             return False, "Must provide sequences for model inference"
 
-        # TODO: check that sequences are aligned
+        if not system[0].sequences.aligned:
+            return False, "Provided sequences must be aligned"
+
+        # TODO: verify alignment length matches target sequence length (sequence match itself
+        #   not stringly needed)
+
+        # TODO target_seq = msa.sequences[0]
 
         return True, ""
 
@@ -83,27 +97,64 @@ class EVmutation2(BaseModel, Scorer, Generator):
         )
 
     def _load_model(self):
-        device = "cpu"  # TODO: how to best set this?
-        # TODO: use load_from_checkpoint map_location argument instead of .to()?
-        m = picasso_model.model.Model.load_from_checkpoint(
-            self.model_file_path
-        ).to(device)
+        # avoid reloading if already loaded
+        if self.model is not None:
+            return
+
+        self.model = model.Model.load_from_checkpoint(
+            self.model_file_path, map_location=torch.device(self.device)
+        )
 
         # switch to evaluation mode
-        m.eval()
+        self.model.eval()
 
-        return m
+    def _delete_model(self):
+        self.model = None
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            torch.mps.empty_cache()
 
     def build(
         self,
         system: EntityOrEntityList,
         status_callback: StatusCallback | None = None
     ) -> Self:
-        print("building...")
-        # TODO: verify if we can actually model the system
-        print(self.can_model(system))
+        # verify if we can model the system
+        can_model, can_model_msg = self.can_model(system)
+        if not can_model:
+            raise ValueError(can_model_msg)
 
-        # TODO: keep model or not depending on setting
+        target = system[0]
+
+        # load MSA
+        # TODO: clunky hack - reassemble sequences back into one string and pass into parser;
+        #  should really update parser to receive sequences and headers
+        msa_a3m = target.sequences.to_a3m()
+        a3m_lines = "".join(
+            f">{seq.id_}\n{seq.seq}\n" for seq in msa_a3m.seqs
+        )
+
+        msa = parsers.parse_a3m(a3m_lines)
+
+        # featurize and batch
+        # TODO: add structure features eventually too
+        d = features.extract_msa_feature_data(msa)
+        f = features.prepare_msa_features(*d)
+        input_features = features.batch_features(
+            [f], device=self.device
+        )
+
+        # context for loading (and possibly destroying model parameters)
+        with model_param_context(self._load_model, self._delete_model, self.keep_model):
+            print("in context:", self.model is not None)   # TODO: remove
+            with torch.no_grad():
+                s, p = self.model.encoder(
+                    input_features,
+                    # **encoder_kwargs,  # TODO: forward these
+                )
+        print("after context:", self.model is not None)   # TODO: remove
+
         return self
 
     def score(self):

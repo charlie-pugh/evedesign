@@ -40,6 +40,12 @@ class Sequence:
         self.key = key
         self.type_ = type
 
+    def __repr__(self) -> str:
+        return (
+            f"Sequence(id={self.id_} key={self.key} type={self.type_} " 
+            f"seq={(self.seq[:50] + '...') if len(self.seq) > 50 else self.seq})"
+        )
+
 
 class Sequences:
     """
@@ -65,7 +71,8 @@ class Sequences:
         self.format_ = format
         # TODO: check alignment integrity and/or autodetect properties/format
 
-    def from_file(self, f: TextIO):
+    @classmethod
+    def from_file(cls, f: TextIO):
          # TODO: parameter for different format types
          # TODO: callback param for header parsing
         raise NotImplementedError(
