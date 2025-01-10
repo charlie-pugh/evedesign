@@ -56,10 +56,12 @@ class EVmutation2(BaseModel, Scorer, Generator):
     @classmethod
     def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
         system = ensure_sequence(system)
-        if len(system) != 1 or system[0].entity_type != "protein":
+        if len(system) != 1 or system[0].type_ != "protein":
             return False, "Can only handle single-component protein system"
 
-        # TODO: check that sequences are present
+        if system[0].sequences is None:
+            return False, "Must provide sequences for model inference"
+
         # TODO: check that sequences are aligned
 
         return True, ""

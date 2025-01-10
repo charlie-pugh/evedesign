@@ -10,13 +10,13 @@ from protdesign.types import EntityType
 class Entity:
     def __init__(
         self,
-        entity_type: EntityType,
-        repr: str | None = None,
+        type: EntityType,
+        rep: str | None = None,
         id: str | None = None,
         copies: int | None = None,
         first_index: int | None = None,
         sequences: Sequences | None = None,
-        structure_chains: StructureChainMap | None = None,
+        structures: StructureChainMap | None = None,
     ):
         """
         Create new generic entity for molecular system.
@@ -34,11 +34,11 @@ class Entity:
 
         Parameters
         ----------
-        entity_type
+        type
             Type of entity (protein, nucleotide, ligand, ...)
         id
             Unique identifier of entity
-        repr
+        rep
             Representation of entity (sequence, atom name, etc.)
         first_index
             Sequence index of first residue; must be specified
@@ -46,24 +46,32 @@ class Entity:
         copies
             Number of entity copies in molecular system. Set to None
             to leave variable.
+                sequences
+        sequences
+            Sequence record (e.g. multiple sequence alignment of homologs) of the target
+            sequence represented by this entity (only applies to proteins and nucleotides)
+        structures
+            Structure chains representing this entity. Use dict with structure identifiers
+            as keys to supply multiple different structures; use list to supply multiple copies
+            of the chain within the structure (homooligomer)
         """
-        self.entity_type = entity_type
-        self.repr = repr
-        self.id = id
+        self.type_ = type
+        self.rep = rep
+        self.id_ = id
         self.copies = copies
 
         # TODO: also allow for nucleotide entities once implemented
-        if entity_type != "protein" and sequences is not None:
+        if self.type_ != "protein" and sequences is not None:
             raise ValueError(
                 "Sequence record only supported for biopolymer entities"
             )
 
         self.sequences = sequences
-        self.structure_chains = structure_chains
+        self.structures = structures
 
-        if entity_type == "protein" and first_index is None:
+        if self.type_== "protein" and first_index is None:
             raise ValueError(
-                f"first_index must be specified for entity_type {entity_type}"
+                f"first_index must be specified for type {self.type_}"
             )
 
         self.first_index = first_index
@@ -84,7 +92,7 @@ class Protein(Entity):
         first_index: int = 1,
         copies: int | None = None,
         sequences: Sequences | None = None,
-        structure_chains: StructureChainMap | None = None,
+        structures: StructureChainMap | None = None,
     ):
         """
         Create new protein entity
@@ -100,6 +108,13 @@ class Protein(Entity):
             Sequence index of first residue (1-based numbering)
         copies
             Number of copies of protein chain in system (None to leave unspecified/variable)
+        sequences
+            Sequence record (e.g. multiple sequence alignment of homologs) of the target
+            sequence represented by this entity
+        structures
+            Structure chains representing this entity. Use dict with structure identifiers
+            as keys to supply multiple different structures; use list to supply multiple copies
+            of the chain within the structure (homooligomer)
         """
         # verify that protein sequence is valid if specified (including mask)
         if seq is not None:
@@ -111,11 +126,11 @@ class Protein(Entity):
                 raise ValueError(f"Invalid protein sequence: {invalid_aa}")
 
         super().__init__(
-            entity_type="protein",
+            type="protein",
             id=id,
-            repr=seq,
+            rep=seq,
             first_index=first_index,
             copies=copies,
             sequences=sequences,
-            structure_chains=structure_chains,
+            structures=structures,
         )

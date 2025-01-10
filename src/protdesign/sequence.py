@@ -1,25 +1,25 @@
 """
 Biopolymer sequence functionality (protein sequences etc.)
 """
-
-from typing import Literal, Tuple, List
-
+from typing import List, Literal, Self, TextIO, Tuple
+from collections import abc
 from protdesign.constants import AA_TO_INDEX, MASK, GAP, INDEX_TO_AA
 from protdesign.types import BioPolymer
 
 
 class Sequence:
     """
-    Single biopolymer sequence
+    Single biopolymer sequence (may include gaps and inserts in lowercase)
 
     # TODO: add methods for sequence verification and transformation
+    # TODO: add attributes for description and any other relevant metadata
     """
     def __init__(
         self,
         seq: str,
-        seq_id: str | None = None,
+        id: str | None = None,
         key: str | None = None,
-        seq_type: BioPolymer = "protein",
+        type: BioPolymer = "protein",
     ):
         """
         Create new sequence object
@@ -28,33 +28,83 @@ class Sequence:
         ----------
         seq
             Sequence (can contain lowercase characters and gaps)
-        seq_id
+        id
             Identifier of sequence
         key
             Key for matching sequence to other resources (e.g. paired alignment)
-        seq_type
-            Type of biopolymer (protein, rna, dna, ...)
+        type
+            Type of biopolymer sequence (protein, rna, dna, ...)
         """
         self.seq = seq
-        self.seq_id = seq_id,
+        self.id_ = id
         self.key = key
-        self.seq_type = seq_type
+        self.type_ = type
 
 
 class Sequences:
     """
     Collection of one or more biopolymer sequences, can be aligned or unaligned
 
-    # TODO: method to turn into different formats of alignments, and to dealign
-    # TODO: make this class a list? probably not good for extra attributes
-    #   can this be serialized?
-    #   (running alignment probably out of scope...)
+    This class only intends to be a thin wrapper around different alignment formats
+    to connect input sequences to the different types of formats expected by individual methods,
+    rather than a full-fledged class for computations on sequence alignments
     """
-    def __init__(self):
-        # TODO: store if aligned and what type of alignment
-        pass
+    def __init__(
+        self,
+        seqs: abc.Sequence[Sequence],
+        aligned: bool = False,
+        type: BioPolymer = "protein",
+        weights: List[float] | None = None,
+        format: Literal["a3m", "a2m", "fasta"] | None = None,
+    ):
 
+        self.seqs = seqs
+        self.aligned = aligned
+        self.type_ = type
+        self.weights = weights
+        self.format_ = format
+        # TODO: check alignment integrity and/or autodetect properties/format
 
+    def from_file(self, f: TextIO):
+         # TODO: parameter for different format types
+         # TODO: callback param for header parsing
+        raise NotImplementedError(
+            "Loading from file not yet implemented"
+        )
+
+    def dealign(self) -> Self:
+        # remove gaps from sequences and return new
+        raise NotImplementedError(
+            "Sequence dealigning not yet implemented"
+        )
+
+    def to_a3m(self) -> Self:
+        # return sequences in a3m format
+        if self.format_ == "a3m":
+            return self
+        else:
+            raise NotImplementedError(
+                "Conversion to a3m format not yet implemented"
+            )
+
+    def to_a2m(self) -> Self:
+        # return sequences in a2m format
+        # TODO: add parameter to specify strategy how to deal with inserts (drop or fully expand sequences)
+        #  cf. https://github.com/debbiemarkslab/EVcouplings/blob/75bfc9677fc9412ddb7089a9f26c7a01f65bfa12/evcouplings/align/alignment.py#L236
+        if self.format_ == "a2m":
+            return self
+        else:
+            raise NotImplementedError(
+                "Conversion into a2m format not yet implemented"
+            )
+
+    def to_fasta(self) -> Self:
+        if self.format_ == "fasta":
+            return self
+        else:
+            raise NotImplementedError(
+                "Conversion into fasta format not yet implemented"
+            )
 
 def valid_protein_sequence(
     seq: str,
@@ -94,3 +144,38 @@ def valid_protein_sequence(
     ]
 
     return len(invalid) == 0, invalid
+
+
+def read_fasta(f: TextIO):
+    """
+    Generator function to read a FASTA-format file
+    (includes aligned FASTA, A2M, A3M formats)
+
+    Parameters
+    ----------
+    f : file-like object
+        FASTA alignment file
+
+    Returns
+    -------
+    generator of (str, str) tuples
+        Returns tuples of (sequence ID, sequence)
+    """
+    current_sequence = ""
+    current_id = None
+
+    for line in f:
+        # Start reading new entry. If we already have
+        # seen an entry before, return it first.
+        if line.startswith(">"):
+            if current_id is not None:
+                yield current_id, current_sequence
+
+            current_id = line.rstrip()[1:]
+            current_sequence = ""
+
+        elif not line.startswith(";"):
+            current_sequence += line.rstrip()
+
+    # Also do not forget last entry in file
+    yield current_id, current_sequence

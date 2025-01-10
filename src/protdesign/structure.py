@@ -16,5 +16,8 @@ class Structure:
     """
     pass
 
+    def get_chain(self, chain_id: str) -> StructureChain:
+        raise NotImplementedError()
+
 # allow to receive single chain, or map from identifier to single chain or list of chains
 StructureChainMap = StructureChain | Dict[str, StructureChain | List[StructureChain]]
