@@ -1,11 +1,10 @@
 """
 Specification of components of molecular design system (proteins, nucleic acids, ligands, etc.)
 """
-from typing import Literal, List
-from protdesign.utils import valid_protein_sequence
-
-PROTEIN = "protein"
-EntityType = Literal[PROTEIN]
+from typing import List
+from protdesign.sequence import valid_protein_sequence, Sequences
+from protdesign.structure import StructureChainMap
+from protdesign.types import EntityType
 
 
 class Entity:
@@ -16,6 +15,8 @@ class Entity:
         id: str | None = None,
         copies: int | None = None,
         first_index: int | None = None,
+        sequences: Sequences | None = None,
+        structure_chains: StructureChainMap | None = None,
     ):
         """
         Create new generic entity for molecular system.
@@ -51,10 +52,20 @@ class Entity:
         self.id = id
         self.copies = copies
 
-        if entity_type == PROTEIN and first_index is None:
+        # TODO: also allow for nucleotide entities once implemented
+        if entity_type != "protein" and sequences is not None:
+            raise ValueError(
+                "Sequence record only supported for biopolymer entities"
+            )
+
+        self.sequences = sequences
+        self.structure_chains = structure_chains
+
+        if entity_type == "protein" and first_index is None:
             raise ValueError(
                 f"first_index must be specified for entity_type {entity_type}"
             )
+
         self.first_index = first_index
 
 
@@ -72,6 +83,8 @@ class Protein(Entity):
         seq: str | None = None,
         first_index: int = 1,
         copies: int | None = None,
+        sequences: Sequences | None = None,
+        structure_chains: StructureChainMap | None = None,
     ):
         """
         Create new protein entity
@@ -98,9 +111,11 @@ class Protein(Entity):
                 raise ValueError(f"Invalid protein sequence: {invalid_aa}")
 
         super().__init__(
-            entity_type=PROTEIN,
+            entity_type="protein",
             id=id,
             repr=seq,
             first_index=first_index,
             copies=copies,
+            sequences=sequences,
+            structure_chains=structure_chains,
         )

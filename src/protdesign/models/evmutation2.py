@@ -5,7 +5,7 @@ from os import PathLike
 from typing import Self, Tuple
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
-from protdesign.entity import EntityOrEntityList, PROTEIN
+from protdesign.entity import EntityOrEntityList
 from protdesign.utils import ensure_sequence, DeviceType, StatusCallback
 
 try:
@@ -56,8 +56,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
     @classmethod
     def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
         system = ensure_sequence(system)
-        if len(system) != 1 or system[0].entity_type != PROTEIN:
+        if len(system) != 1 or system[0].entity_type != "protein":
             return False, "Can only handle single-component protein system"
+
+        # TODO: check that sequences are present
+        # TODO: check that sequences are aligned
 
         return True, ""
 

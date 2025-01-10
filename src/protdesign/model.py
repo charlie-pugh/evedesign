@@ -82,7 +82,7 @@ class RequiredResources:
 
 class BaseModel(ABC):
     """
-    Core definition of a model for sequence design
+    Core abstract definition of a protein design model
     """
     @property
     @abstractmethod
