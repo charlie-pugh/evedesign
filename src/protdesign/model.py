@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
-from numpy.typing import ArrayLike
 from protdesign.entity import EntityOrEntityList, SystemInstance
 from protdesign.types import StatusCallback
 
@@ -58,17 +57,17 @@ class Scorer(Protocol):
         pass
 
     @abstractmethod
-    def score_single_pos(
+    def score_conditional(
         self,
         instances: Sequence[SystemInstance],
-        entities: ArrayLike,
-        positions: ArrayLike,
+        entities: Sequence[int],
+        positions: Sequence[int],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         """
         Compute scores for all substitutions in a single position
         across a batch of sequences (single position can differ between instances), e.g.
-        for Gibbs sampling multiple designs in parallel.
+        for Gibbs sampling-based generation of multiple designs in parallel.
 
         This function allows to exploit the fact that often single mutations for
         one position can be computed more efficiently than arbitrary full sequences
@@ -76,18 +75,21 @@ class Scorer(Protocol):
         this method should still wrap around score() for applications like Gibbs sampling.
 
         # TODO:
-        #  Break this method out into its own Protocol? Some methods may be able to compute
-        #  P(x_i | x_\i) but not P(x_1, ..., x_n) - for Gibbs, we only need the former!
+        # Break this method out into its own Protocol "ConditionalScorer"?
+        # Some methods may be able to compute P(x_i | x_\i) but not P(x_1, ..., x_n) - for Gibbs,
+        # we only need the former!
 
         Parameters
         ----------
         instances
-            Target instances/sequences for which scores should be calculated
+            Target instances/sequences for which scores should be calculated. Must
+            have same length as entities and positions.
         entities
-            List of entity indexes for which single mutant should be computed
+            List of entity indexes which selects exactly one entity per instance for scoring.
+            Must have same length as instances and positions.
         positions
-            Position in instance/entity combination for which mutant scores
-            should be computed
+            List of positions which selects exactly one position per instance/entity pair.
+            Must have same length as instances and entities.
         status_callback
             Callback function to track computation status
 
@@ -98,18 +100,18 @@ class Scorer(Protocol):
         """
         pass
 
-    def score_landscape(
+    @abstractmethod
+    def single_mutation_scan(
         self,
         instance: SystemInstance,
         entity: int,
-        positions: ArrayLike | None = None,
+        positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         """
-        Compute all single substitutions to given instance (aka "single mutation scan/DMS")
-        batching across all (or some subset thereof) positions. This is markedly different to score_single()
-        which batches substitutions to single position across many different target sequences.
-
+        Compute all single substitutions to one particular instance (aka "single mutation scan")
+        batching across different positions. This is markedly different to score_single_pos() which
+        batches substitutions to exactly one single position across many different instances.
 
         Parameters
         ----------
@@ -143,12 +145,33 @@ class Generator(Protocol):
         self,
         num_designs: int,
         entities: Sequence[int] | None = None,
-        fixed_pos: Sequence[int] | None = None,  # TODO: specify as list of lists
+        fixed_pos: Sequence[Sequence[int]] | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
-        # TODO: document parameters
-        # TODO: what entities to design/fix
+        """
+        Sample new sequences from generative model
+
+        Parameters
+        ----------
+        num_designs
+            Number of designs to generate
+        entities
+            Indices of entities in system that should be designed during generation (others will be kept fixed)
+            If None, will attempt to design all entities.
+        fixed_pos
+            Length of outer list should correspond to length of entities parameter. Leave inner list empty
+            if all positions in that entity should be designed (i.e. none are fixed). If this parameter is used,
+            entities parameter must be defined to match fixed_pos to corresponding entity indices.
+        temperature
+            Sampling temperature (higher values generate more diversity)
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Designed instances (sequences/structures) of system
+        """
         pass
 
 
@@ -168,6 +191,21 @@ class Embedder(Protocol):
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int, int], np.dtype[float]]:
+        """
+        Transform system instances to embeddings
+
+        Parameters
+        ----------
+        instances
+            List of system instances to be transformed
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Embeddings for given instances (instance x positions x feature dimension);
+        actual embedding features are in last dimension of tensor
+        """
         pass
 
 
@@ -332,9 +370,11 @@ class BaseModel(ABC):
     ) -> Self:
         """
         Prepare model for calculations on a given molecular system (e.g. scoring or sampling).
-        In the case of inference-only approaches, implementations of this method will be very light
-        (e.g. do nothing, or compute an encoding), whereas for others this method may be compute-heavy
-        (e.g. EVE VAE models trained on a family-specific MSA)
+        Conditional approaches will typically perform computations here whereas unconditional approaches
+        may simply do nothing other than return self.
+        In the case of inference-only conditional models, implementations of this method will be very
+        light (e.g. compute an encoding), whereas for other conditional models this method may be
+        compute-heavy (e.g. EVE VAE models trained on a family-specific MSA)
 
         Note: implementations of this method should always verify if the system can
         be modelled or raise a ValueError instead
@@ -345,7 +385,7 @@ class BaseModel(ABC):
         (e.g. PyTorch model) are stored inside the class to avoid potential problems and inflated
         memory usage if instances of the class are serialized
 
-        # TODO: add parameter for labelled examples for supervised setting
+        # TODO: add parameter for labelled examples for supervised setting or keep this base class zero shot-only?
 
         Parameters
         ----------

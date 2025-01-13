@@ -5,7 +5,7 @@ from os import PathLike
 from typing import Self, Tuple
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
-from protdesign.entity import EntityOrEntityList
+from protdesign.entity import EntityOrEntityList, SystemInstance
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback
 
@@ -88,7 +88,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
-        # TODO: implement meaningful requirements instead of defaults
+        # TODO: implement meaningful requirements depending on target size instead of made up values
         return RequiredResources(
             min_gpu_cores=1,
             min_gpu_memory_per_core=16000,
@@ -155,6 +155,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     input_features,
                     # **encoder_kwargs,  # TODO: forward these
                 )
+                # TODO: implement multiple samples
+
+                self.encoding = (
+                    s.cpu().numpy(), p.cpu().numpy()
+                )
         print("after context:", self.model is not None)   # TODO: remove
 
         return self
@@ -162,8 +167,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def score(self):
         return 123.
 
-    def score_single_pos(self):
+    def score_conditional(self):
         return 124.
+
+    def single_mutation_scan(self):
+        return None
 
     def positions(self):
         return []
