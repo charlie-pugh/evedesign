@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol, Self, Tuple
-from protdesign.entity import EntityOrEntityList
-from protdesign.utils import StatusCallback
+from typing import Protocol, List, Self, Tuple, Sequence
+import numpy as np
+from numpy.typing import ArrayLike
+from protdesign.entity import EntityOrEntityList, SystemInstance
+from protdesign.types import StatusCallback
 
 
 class Scorer(Protocol):
@@ -10,42 +12,143 @@ class Scorer(Protocol):
     Interface implemented by classes that can score
     (e.g. density/log likelihood) for existing designs/sequences
     (scalar value per design/sequence)
+
+    All methods of this interface are expected to return raw logits that can be compared
+    relatively within the returned array of scores (but not necessarily between different
+    calls to the function, where normalization e.g. to the target sequence
+    should be employed)
+
+    # TODO: add specialized method to score higher-order mutations (e.g. doubles)?
+    # TODO: add batch size to params? or infer in build() method?
     """
     @abstractmethod
-    def score(self) -> None:
-        # TODO: add actual return types
-        # TODO: mutants or just absolute sequences?
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        """
+        Score different realizations of the modelled system (e.g. different sequences
+        generated from a model)
+
+        Parameters
+        ----------
+        instances
+            Designs to score with model
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Vector of scores (one per instance, in same order as instances input parameter)
+        """
         pass
 
     @abstractmethod
-    def score_single(self) -> None:
-        # TODO: break this method out into its own Protocol? Some methods may be able to compute
-        #  P(x_i | x_\i) but not P(x_1, ..., x_n) - for Gibbs, we only need the former!
+    def positions(
+        self
+    ) -> List[List[int]]:
+        """
+        Return list of all available positions per entity that can be mutated using score_single()
 
-        # TODO: this should score one position across many different WT sequences
-        #  (batch across sequences)
-
-        # TODO: add actual return types
-        # TODO: should this also support deletions/insertions?
+        Returns
+        -------
+        List of position lists (outer list indexes over entities, inner list contains all positions)
+        """
         pass
 
-    # TODO: add status callback argument
-    # TODO: another method to score all singles for a given sequence (batch across positions)
-    # TODO: method to return all sites of interest for Gibbs sampler?
-    # TODO: device specification
+    @abstractmethod
+    def score_single_pos(
+        self,
+        instances: Sequence[SystemInstance],
+        entities: ArrayLike,
+        positions: ArrayLike,
+        status_callback: StatusCallback | None = None
+    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+        """
+        Compute scores for all substitutions in a single position
+        across a batch of sequences (single position can differ between instances), e.g.
+        for Gibbs sampling multiple designs in parallel.
+
+        This function allows to exploit the fact that often single mutations for
+        one position can be computed more efficiently than arbitrary full sequences
+        (e.g. in Potts model hamiltonian). If no customized implementation is available,
+        this method should still wrap around score() for applications like Gibbs sampling.
+
+        # TODO:
+        #  Break this method out into its own Protocol? Some methods may be able to compute
+        #  P(x_i | x_\i) but not P(x_1, ..., x_n) - for Gibbs, we only need the former!
+
+        Parameters
+        ----------
+        instances
+            Target instances/sequences for which scores should be calculated
+        entities
+            List of entity indexes for which single mutant should be computed
+        positions
+            Position in instance/entity combination for which mutant scores
+            should be computed
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Matrix of logit scores (seq x aa); first dimension indexes along different instances,
+        second dimension indexes over different states
+        """
+        pass
+
+    def score_landscape(
+        self,
+        instance: SystemInstance,
+        entity: int,
+        positions: ArrayLike | None = None,
+        status_callback: StatusCallback | None = None
+    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+        """
+        Compute all single substitutions to given instance (aka "single mutation scan/DMS")
+        batching across all (or some subset thereof) positions. This is markedly different to score_single()
+        which batches substitutions to single position across many different target sequences.
+
+
+        Parameters
+        ----------
+        instance
+            Target system instance specification to mutate
+        entity
+            Index of entity for which mutation scan should be computed
+        positions
+            Subset of positions to score. If None, scores for all positions will be computed.
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Matrix of logit scores (pos x aa); first dimension indexes over positions and second
+        dimension indexes over possible substitutions.
+        """
+        pass
 
 
 class Generator(Protocol):
     """
     Interface implemented by classes that can generate new samples
     (e.g. generative models or samplers on top of scoring models)
+
+    # TODO: add batch size to params? or infer in build() method?
+    # TODO: add parameters to bias or select/avoid amino acids (global or position-specific)
     """
     @abstractmethod
-    def generate(self) -> None:
-        # TODO: add actual return types
-        # TODO: parameters? number of designs, flexible positions, etc.
-        # TODO: device specification
-        # TODO: add status callback argument
+    def generate(
+        self,
+        num_designs: int,
+        entities: Sequence[int] | None = None,
+        fixed_pos: Sequence[int] | None = None,  # TODO: specify as list of lists
+        temperature: float = 1.0,
+        status_callback: StatusCallback | None = None
+    ) -> List[SystemInstance]:
+        # TODO: document parameters
+        # TODO: what entities to design/fix
         pass
 
 
@@ -54,15 +157,17 @@ class Embedder(Protocol):
     Interface implemented by methods than can compute embeddings
     (designs/sequences, vector per token)
 
-    # TODO: add more efficient method to score and embed?
-    # TODO: add methods for single-mutant embeddings
-    # TODO: pooling / protein-level embedding
+    # TODO: add method for combined scoring and embedding (don't compute twice, separate interface)?
+    # TODO: add specialized methods for single-mutant embeddings?
+    # TODO: pooling / protein-level embedding?
+    # TODO: add batch size to params? or infer in build() method?
     """
     @abstractmethod
-    def embed(self) -> None:
-        # TODO: add return types
-        # TODO: device specification
-        # TODO: add status callback argument
+    def embed(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None
+    ) -> np.ndarray[tuple[int, int, int], np.dtype[float]]:
         pass
 
 
@@ -76,6 +181,8 @@ class RequiredResources:
 
     min_cpu_cores: int | None
     min_cpu_memory_per_core: int | None
+
+    max_batch_size: int | None
 
     time: int | None
 
@@ -166,7 +273,10 @@ class BaseModel(ABC):
 
     @classmethod
     @abstractmethod
-    def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
+    def can_model(
+        cls,
+        system: EntityOrEntityList
+    ) -> Tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
         molecular system
@@ -236,8 +346,6 @@ class BaseModel(ABC):
         memory usage if instances of the class are serialized
 
         # TODO: add parameter for labelled examples for supervised setting
-        # TODO: rename this method to _build and create an implementation for build() that
-        #   calls can_model and sets model.build = True?
 
         Parameters
         ----------

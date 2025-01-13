@@ -5,6 +5,8 @@ Implementation assumes fixed length of sequences (no inserts, deletions can be s
 """
 from typing import List
 from protdesign.model import Generator, Scorer
+from protdesign.entity import SystemInstance
+from protdesign.types import StatusCallback
 
 
 class GibbsSampler(Generator):
@@ -26,7 +28,10 @@ class GibbsSampler(Generator):
         # TODO: number of steps
         pass
 
-    def generate(self) -> None:
+    def generate(
+        self,
+        status_callback: StatusCallback | None = None
+    ) -> List[SystemInstance]:
         # TODO: implement generation parameters
         # TODO: implement actual generation
         pass

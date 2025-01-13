@@ -6,7 +6,8 @@ from typing import Self, Tuple
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import EntityOrEntityList
-from protdesign.utils import ensure_sequence, model_param_context, DeviceType, StatusCallback
+from protdesign.utils import ensure_sequence, model_param_context
+from protdesign.types import DeviceType, StatusCallback
 
 try:
     from picasso_model import model, features, parsers
@@ -93,6 +94,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
             min_gpu_memory_per_core=16000,
             min_cpu_cores=1,
             min_cpu_memory_per_core=16000,
+            max_batch_size=512,
             time=1,
         )
 
@@ -160,8 +162,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def score(self):
         return 123.
 
-    def score_single(self):
+    def score_single_pos(self):
         return 124.
+
+    def positions(self):
+        return []
 
     def generate(self) -> None:
         return "LALALA"
