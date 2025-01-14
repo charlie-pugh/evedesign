@@ -152,6 +152,8 @@ class Generator(Protocol):
         """
         Sample new sequences from generative model
 
+        Note: Implementation should raise ValueError if any of the specified design options are not supported
+
         Parameters
         ----------
         num_designs
@@ -163,6 +165,8 @@ class Generator(Protocol):
             Length of outer list should correspond to length of entities parameter. Leave inner list empty
             if all positions in that entity should be designed (i.e. none are fixed). If this parameter is used,
             entities parameter must be defined to match fixed_pos to corresponding entity indices.
+            Numbering of fixed positions should match to sequence numbering of system entity representation
+            (with corresponding value of first_index, by default 1; i.e. one-based indexing of positions!)
         temperature
             Sampling temperature (higher values generate more diversity)
         status_callback
@@ -183,12 +187,15 @@ class Embedder(Protocol):
     # TODO: add method for combined scoring and embedding (don't compute twice, separate interface)?
     # TODO: add specialized methods for single-mutant embeddings?
     # TODO: pooling / protein-level embedding?
+    # TODO: all instances must have same length unless pooling
+    # TODO: can we compute embeddings across all entities?
     # TODO: add batch size to params? or infer in build() method?
     """
     @abstractmethod
     def embed(
         self,
         instances: Sequence[SystemInstance],
+        entity: int,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int, int], np.dtype[float]]:
         """
@@ -198,6 +205,8 @@ class Embedder(Protocol):
         ----------
         instances
             List of system instances to be transformed
+        entity:
+            The index of the entity to embed
         status_callback
             Callback function to track computation status
 

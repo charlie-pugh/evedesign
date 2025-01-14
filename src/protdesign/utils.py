@@ -23,7 +23,6 @@ def model_param_context(
         yield
     finally:
         if not keep_model:
-            print("DELETE")
             delete_func()
         else:
-            print("KEEP")
+            pass

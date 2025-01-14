@@ -27,9 +27,9 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Documentation = "https://github.com/Thomas Hopf/protdesign#readme"
-Issues = "https://github.com/Thomas Hopf/protdesign/issues"
-Source = "https://github.com/Thomas Hopf/protdesign"
+Documentation = "https://github.com/thomashopf/protdesign#readme"
+Issues = "https://github.com/thomashopf/protdesign/issues"
+Source = "https://github.com/thomashopf/protdesign"
 
 [tool.hatch.version]
 path = "src/protdesign/__about__.py"

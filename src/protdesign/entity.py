@@ -114,6 +114,9 @@ class SystemInstance:
         self.confidence = confidence
         # self.metadata = metadata
 
+    def __repr__(self):
+        return f"{self.reps} score={self.score}"
+
 
 EntityList = List[Entity]
 EntityOrEntityList = Entity | EntityList
