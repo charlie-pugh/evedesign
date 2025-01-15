@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
-from protdesign.entity import EntityOrEntityList, SystemInstance
+from protdesign.entity import System, Instance
 from protdesign.types import StatusCallback
 
 
@@ -23,7 +23,7 @@ class Scorer(Protocol):
     @abstractmethod
     def score(
         self,
-        instances: Sequence[SystemInstance],
+        instances: Sequence[Instance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         """
@@ -46,7 +46,7 @@ class Scorer(Protocol):
     @abstractmethod
     def score_conditional(
         self,
-        instances: Sequence[SystemInstance],
+        instances: Sequence[Instance],
         entities: Sequence[int],
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
@@ -89,7 +89,7 @@ class Scorer(Protocol):
     @abstractmethod
     def single_mutation_scan(
         self,
-        instance: SystemInstance,
+        instance: Instance,
         entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
@@ -134,7 +134,7 @@ class Generator(Protocol):
         fixed_pos: Sequence[Sequence[int]] | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> List[Instance]:
         """
         Sample new sequences from generative model
 
@@ -180,7 +180,7 @@ class Embedder(Protocol):
     @abstractmethod
     def embed(
         self,
-        instances: Sequence[SystemInstance],
+        instances: Sequence[Instance],
         entity: int,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int, int], np.dtype[float]]:
@@ -316,7 +316,7 @@ class BaseModel(ABC):
     @abstractmethod
     def can_model(
         cls,
-        system: EntityOrEntityList,
+        system: System,
     ) -> Tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
@@ -339,7 +339,7 @@ class BaseModel(ABC):
     @classmethod
     def can_model_or_raise(
         cls,
-        system: EntityOrEntityList,
+        system: System,
     ) -> None:
         """
         Check if the model is able to perform computations on the specified
@@ -365,7 +365,7 @@ class BaseModel(ABC):
     @abstractmethod
     def required_resources(
         cls,
-        system: EntityOrEntityList,
+        system: System,
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
@@ -393,7 +393,7 @@ class BaseModel(ABC):
     @abstractmethod
     def build(
         self,
-        system: EntityOrEntityList,
+        system: System,
         status_callback: StatusCallback | None = None,
     ) -> Self:
         """
@@ -449,3 +449,41 @@ class BaseModel(ABC):
         List of position lists (outer list indexes over entities, inner list contains all positions)
         """
         pass
+
+    def valid_positions(
+        self,
+        positions: Sequence[int],
+        entity: int = 0,
+        raise_invalid: bool = False,
+    ) -> List[int]:
+        """
+        Helper method to verify if a list of positions for a given entity in system is valid (via positions())
+
+        Parameters
+        ----------
+        positions
+            List of unique positions to check
+        entity
+            Index of entity in system to check positions in
+        raise_invalid
+            If invalid position contained in input list, raise a ValueError
+
+        Returns
+        -------
+        List of valid positions
+        """
+        available_positions = set(
+            pos for (entity_idx, pos) in self.positions() if entity_idx == entity
+        )
+
+        valid_positions = [
+            pos for pos in positions if pos in available_positions
+        ]
+
+        if raise_invalid and len(valid_positions) != len(positions):
+            raise ValueError(
+                f"Invalid positions for entity {entity}, valid options are {', '.join(map(str, available_positions))}"
+                f" but given are {', '.join(map(str, positions))}"
+            )
+
+        return valid_positions

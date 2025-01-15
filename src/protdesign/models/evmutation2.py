@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
-from protdesign.entity import EntityOrEntityList, SystemInstance
+from protdesign.entity import System, Instance
 from protdesign.constants import MASK
 from protdesign.utils import ensure_sequence, model_param_context, status_start, status_done
 from protdesign.types import DeviceType, StatusCallback, BatchSize
@@ -96,8 +96,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         return self.system is not None and self.encoding is not None
 
     @classmethod
-    def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
-        system = ensure_sequence(system)
+    def can_model(cls, system: System) -> Tuple[bool, str]:
         if len(system) != 1 or system[0].type_ != "protein":
             return False, "Can only handle single-component protein system"
 
@@ -115,7 +114,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
     @classmethod
     def required_resources(
         cls,
-        system: EntityOrEntityList,
+        system: System,
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
@@ -150,7 +149,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
     def build(
         self,
-        system: EntityOrEntityList,
+        system: System,
         status_callback: StatusCallback | None = None
     ) -> Self:
         # verify if we can model the system
@@ -211,6 +210,9 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     s.cpu(), p.cpu()
                 )
 
+        # TODO: automatically estimate good batch size for decoder if set to "auto"
+        #  depending on available resources, and update self.decoder_batch_size
+
         # return self to allow method chaining
         return self
 
@@ -258,7 +260,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         fixed_pos: Sequence[Sequence[int]] | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> List[Instance]:
         # TODO: support min_p sampling and sample_gaps
 
         self.ready_or_raise()
@@ -323,14 +325,14 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # TODO: what to do with extra designs? keep or discard?
 
         instances = [
-            SystemInstance(reps=[row.seq]) for _, row in designs[0].iterrows()
+            Instance(reps=[row.seq]) for _, row in designs[0].iterrows()
         ]
 
         return instances
 
     def score(
         self,
-        instances: Sequence[SystemInstance],
+        instances: Sequence[Instance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
@@ -340,30 +342,30 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
     def single_mutation_scan(
         self,
-        instance: SystemInstance,
+        instance: Instance,
         entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         self.ready_or_raise()
 
+        # check instance against molecular system, requiring fixed length of sequence
+        # as was used for entity specification as we have a fixed-length model
+        self.system.valid_instance(
+            instance, fixed_length=True, raise_invalid=True
+        )
+
         if entity != 0:
-            raise ValueError("Can only handle one single entity")
+            raise ValueError("Model can only handle one single entity")
 
+        # extract single target entity from system, nd get sequence from instance
+        # (we safely can access this as we have verified instance against system)
         target = self.system[0]
-
-        # validate positions - could move some of this logic to superclass if repeated in many models
-        if positions is not None:
-            valid_positions = set(
-                idx for (entity_idx, idx) in self.positions() if entity_idx == entity
-            )
-            if len(set(positions) & valid_positions) != len(positions):
-                raise ValueError(
-                    f"Invalid positions, valid options are: {', '.join(map(str, positions))}"
-                )
-
-        # TODO: check instance validity - length, number of sequences, etc. (verify via system)
         instance_seq = instance.reps[0]
+
+        # validate positions
+        if positions is not None:
+            positions = self.valid_positions(positions, raise_invalid=True)
 
         with (
             model_param_context(self._load_model, self._delete_model, self.keep_model),
@@ -421,7 +423,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
     def score_conditional(
         self,
-        instances: Sequence[SystemInstance],
+        instances: Sequence[Instance],
         entities: Sequence[int],
         positions: Sequence[int],
         status_callback: StatusCallback | None = None

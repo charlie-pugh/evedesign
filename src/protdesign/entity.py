@@ -78,49 +78,7 @@ class Entity:
 
         self.first_index = first_index
 
-
-EntityList = List[Entity]  # TODO: remove
-EntityOrEntityList = Entity | EntityList  # TODO: remove
-
-class BiomolecularSystem(UserList):
-    def __init__(self, entities: Entity | List[Entity]):
-        """
-        Create new biomolecular system for modeling/design
-
-        Parameters
-        ----------
-        entities
-            One or more entities comprising the system
-        """
-        # turn single entity into list of entities
-        entities = ensure_sequence(entities)
-        super().__init__(entities)
-
-    def __eq__(self, other):
-        # TODO: implement equality of molecular systems
-        raise NotImplementedError()
-
-    def valid_instance(self, instance: SystemInstance, fixed_length: bool=False) -> bool:
-        """
-        Verify if instance is valid representation of this biomolecular system
-
-        Parameters
-        ----------
-        instance
-            System instance to validate
-        fixed_length:
-            If True, require that length of instance sequence matches the system entity representation length
-            (only sensible for fixed-length models and biopolymers)
-
-        Returns
-        -------
-        True if valid instance, False otherwise
-        """
-        # TODO: implement this
-        raise NotImplementedError()
-
-
-class SystemInstance:
+class Instance:
     """
     Result designing the representation (structure/sequence) of the entity or entities
     in a system
@@ -158,7 +116,66 @@ class SystemInstance:
         # self.metadata = metadata
 
     def __repr__(self):
-        return f"{self.reps} score={self.score}"
+        return f"Instance({self.reps} score={self.score})"
+
+
+class System(UserList):
+    def __init__(self, entities: Entity | List[Entity]):
+        """
+        Create new biomolecular system for modeling/design
+
+        Parameters
+        ----------
+        entities
+            One or more entities comprising the system
+        """
+        # turn single entity into list of entities
+        entities = ensure_sequence(entities)
+        super().__init__(entities)
+
+    def __eq__(self, other):
+        # TODO: implement equality of molecular systems: same length, and equality of all attributes per entity
+        raise NotImplementedError()
+
+    def valid_instance(
+        self,
+        instance: Instance,
+        fixed_length: bool=False,
+        raise_invalid: bool=False
+    ) -> bool:
+        """
+        Verify if instance is valid representation of this biomolecular system
+
+        Parameters
+        ----------
+        instance
+            System instance to validate
+        fixed_length:
+            If True, require that length of instance sequence matches the system entity representation length
+            (only sensible for fixed-length models and biopolymers)
+        raise_invalid:
+            If True, raise ValueError if instance is invalid w.r.t. system
+
+        Returns
+        -------
+        True if valid instance, False otherwise
+        """
+        # instance representations always must have same length as number of entities
+        # in system by convention
+        valid = len(self.data) == len(instance.reps)
+
+        if fixed_length:
+            for entity, entity_instance_rep in zip(self.data, instance.reps):
+                # TODO: also implement comparison for nucleotides eventually
+                if entity.type_ == "protein":
+                    valid = valid and len(entity.rep) == len(entity_instance_rep)
+
+        if not valid and raise_invalid:
+            raise ValueError("Provided instance is not valid for biomolecular system")
+
+        # TODO: also verify if valid protein sequences eventually
+        return valid
+
 
 
 class Protein(Entity):

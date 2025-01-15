@@ -5,7 +5,7 @@ Implementation assumes fixed length of sequences (no inserts, deletions can be s
 """
 from typing import List, Sequence
 from protdesign.model import Generator, Scorer
-from protdesign.entity import SystemInstance
+from protdesign.entity import Instance
 from protdesign.types import StatusCallback
 
 
@@ -35,7 +35,7 @@ class GibbsSampler(Generator):
         fixed_pos: Sequence[Sequence[int]] | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> List[Instance]:
         # TODO: implement generation parameters
         # TODO: implement actual generation
         return []
