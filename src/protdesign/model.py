@@ -117,13 +117,43 @@ class Scorer(Protocol):
         """
         pass
 
+    @abstractmethod
+    def score_mutants(
+        self,
+        instance: Instance,
+        mutants: List[str],
+        status_callback: StatusCallback | None = None
+    ) -> None:
+        """
+        Compute logit scores for a list of mutations to a specified system instance
+        (can be any single or higher-order mutants); this method is to allow specialized, more efficient
+        implementations of mutant calculations than computing the full score of the WT and mutant sequence.
+        In case no such specialization is possible or needed for a method, it can simply call out to the
+        score() function.
+
+        # TODO: mutant format specification, how to best handle mutants across different entities?
+
+        Parameters
+        ----------
+        instance
+            Target system instance specification to mutate
+        mutants
+            List of mutations of any order to compute
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        # TODO: define
+        """
+        pass
+
 
 class Generator(Protocol):
     """
     Interface implemented by classes that can generate new samples
     (e.g. generative models or samplers on top of scoring models)
 
-    # TODO: add batch size to params? or infer in build() method?
     # TODO: add parameters to bias or select/avoid amino acids (global or position-specific)
     """
     @abstractmethod
@@ -175,7 +205,6 @@ class Embedder(Protocol):
     # TODO: pooling / protein-level embedding?
     # TODO: all instances must have same length unless pooling
     # TODO: can we compute embeddings across all entities?
-    # TODO: add batch size to params? or infer in build() method?
     """
     @abstractmethod
     def embed(

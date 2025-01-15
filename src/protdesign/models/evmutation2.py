@@ -421,6 +421,15 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # TODO: transform results into proper format (axes annotation, position/AA ordering, right alphabet)
         return effects
 
+    def score_mutants(
+        self,
+        instance: Instance,
+        mutants: List[str],
+        status_callback: StatusCallback | None = None
+    ) -> None:
+        self.ready_or_raise()
+        raise NotImplementedError()
+
     def score_conditional(
         self,
         instances: Sequence[Instance],
