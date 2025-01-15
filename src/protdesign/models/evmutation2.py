@@ -6,11 +6,13 @@ from typing import Self, Tuple, Sequence, List
 from contextlib import contextmanager
 
 import numpy as np
+import pandas as pd
+from loguru import logger
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import EntityOrEntityList, SystemInstance
 from protdesign.constants import MASK
-from protdesign.utils import ensure_sequence, model_param_context
+from protdesign.utils import ensure_sequence, model_param_context, status_start, status_done
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
@@ -54,6 +56,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
         device: DeviceType = "cpu",
     ):
         # TODO: document parameters
+        # TODO: support min_p sampling and sample_gaps
+
         super().__init__()
         self.model_file_path = model_file_path
         self.keep_model = keep_model
@@ -89,7 +93,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
     @property
     def ready(self):
-        return self.encoding is not None
+        return self.system is not None and self.encoding is not None
 
     @classmethod
     def can_model(cls, system: EntityOrEntityList) -> Tuple[bool, str]:
@@ -102,6 +106,9 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         if not system[0].sequences.aligned:
             return False, "Provided sequences must be aligned"
+
+        # TODO: more checks on alignment: does length match target rep;
+        #  and is alignment compatible with a3m format
 
         return True, ""
 
@@ -147,10 +154,9 @@ class EVmutation2(BaseModel, Scorer, Generator):
         status_callback: StatusCallback | None = None
     ) -> Self:
         # verify if we can model the system
-        can_model, can_model_msg = self.can_model(system)
-        if not can_model:
-            raise ValueError(can_model_msg)
+        self.can_model_or_raise(system)
 
+        # store system with this instance
         self.system = ensure_sequence(system)
         target = self.system[0]
 
@@ -163,14 +169,16 @@ class EVmutation2(BaseModel, Scorer, Generator):
         )
 
         msa = parsers.parse_a3m(a3m_lines)
-        # TODO: might want to move this check over to can_model
+
+        # ideally would move this check over to can_model() but checking can
+        # then become more resource-intensive
         if len(msa.sequences[0]) != len(target.rep):
             raise ValueError(
                 "Length of MSA does not map to length of target representation"
             )
 
-        # featurize and batch
-        # TODO: add structure features here eventually as well
+        # featurize and batch; add structure features here eventually as well when
+        # that part of EVmutation2 model is finished
         d = features.extract_msa_feature_data(msa)
         f = features.prepare_msa_features(*d)
         input_features = features.batch_features(
@@ -206,6 +214,19 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # return self to allow method chaining
         return self
 
+    def positions(
+        self
+    ) -> List[Tuple[int, int]]:
+        self.ready_or_raise()
+
+        # implementation here is very simple: we model all positions of exactly one target
+        # protein sequence; none of the positions along the sequence are excluded so
+        # we can simply enumerate starting from first_index
+        target = self.system[0]
+        return [
+            (0, idx) for idx, _ in enumerate(target.rep, start=target.first_index)
+        ]
+
     @contextmanager
     def _prepare(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -238,8 +259,10 @@ class EVmutation2(BaseModel, Scorer, Generator):
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
-        # TODO: support min_p sampling and sample_gaps via model parameters
-        # TODO: implement auto-estimation of batch size?
+        # TODO: support min_p sampling and sample_gaps
+
+        self.ready_or_raise()
+
         if entities is not None:
             entities = ensure_sequence(entities)
             if len(entities) != 1 or entities[0] != 0:
@@ -276,7 +299,13 @@ class EVmutation2(BaseModel, Scorer, Generator):
             else:
                 num_designs_adj = num_designs
 
+            logger.warning(
+                "Sampling using a very inefficient O(N^3) implementation which needs to be "
+                "improved to O(N^2) for production use"
+            )
+
             # note: method has @torch.inference_mode() so no_grad not necessary here
+            # TODO: update sampling method to update generation status dynamically with callback
             designs = self.model.decoder.sample_inefficient(
                 single=s,
                 pairwise=p,
@@ -291,10 +320,12 @@ class EVmutation2(BaseModel, Scorer, Generator):
             print(designs)
 
         # TODO: score the designs
+        # TODO: what to do with extra designs? keep or discard?
 
         instances = [
             SystemInstance(reps=[row.seq]) for _, row in designs[0].iterrows()
         ]
+
         return instances
 
     def score(
@@ -302,16 +333,91 @@ class EVmutation2(BaseModel, Scorer, Generator):
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        self.ready_or_raise()
+        # TODO: this should use multiple single / pair representations in correct way!
+
         raise NotImplementedError()
 
     def single_mutation_scan(
         self,
         instance: SystemInstance,
-        entity: int,
+        entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
-        raise NotImplementedError()
+        self.ready_or_raise()
+
+        if entity != 0:
+            raise ValueError("Can only handle one single entity")
+
+        target = self.system[0]
+
+        # validate positions - could move some of this logic to superclass if repeated in many models
+        if positions is not None:
+            valid_positions = set(
+                idx for (entity_idx, idx) in self.positions() if entity_idx == entity
+            )
+            if len(set(positions) & valid_positions) != len(positions):
+                raise ValueError(
+                    f"Invalid positions, valid options are: {', '.join(map(str, positions))}"
+                )
+
+        # TODO: check instance validity - length, number of sequences, etc. (verify via system)
+        instance_seq = instance.reps[0]
+
+        with (
+            model_param_context(self._load_model, self._delete_model, self.keep_model),
+            self._prepare() as (s, p, pos_mask)
+        ):
+            # get number of encoder samples (single/pair representations)
+            num_encodings = s.shape[0]
+            assert s.shape[0] == p.shape[0], "Number of single and pair representations does not agree"
+
+            # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
+            # different decoding orders will already have cancelled out. ultimately, this functionality should
+            # probably go inside the score_single_mutants() method in picasso...
+            effects = {}
+            for idx_enc in range(num_encodings):
+                # note: method has @torch.inference_mode() so no_grad not necessary here
+                effects[idx_enc] = self.model.decoder.score_single_mutants(
+                    seq=instance_seq,
+                    first_index=target.first_index,
+                    single=s[[idx_enc]],
+                    pairwise=p[[idx_enc]],
+                    pos_mask=pos_mask,
+                    position_subset=positions,
+                    num_samples=self.decoder_num_single_samples,
+                    batch_size=self.decoder_batch_size,
+                )
+
+            # assemble multiple scores
+            effects = pd.concat(
+                effects, axis=0, names=["encoder_sample"]
+            )
+
+        # TODO: normalize effects to WT
+        # normalize to WT, average decoder samples and reshape
+        # singles_rel = singles.sub(
+        #     singles.wt, axis=0
+        # ).drop(["wt"], axis=1).groupby(
+        #     level=["encoder_sample", "pos", "wt_aa"]
+        # ).mean().stack().unstack(
+        #     level="encoder_sample"
+        # ).assign(
+        #     avg=lambda df: df.mean(axis=1)
+        # )
+        #
+        # singles_rel.columns = [
+        #     f"effect_{c}" for c in singles_rel.columns
+        # ]
+        #
+        # singles_rel.index = [
+        #     f"{wt_aa}{pos}{to_aa}" for (pos, wt_aa, to_aa) in singles_rel.index
+        # ]
+        #
+        # singles_rel.index.name = mutant_col
+        # TODO: transform results into proper format (axes annotation, position/AA ordering, right alphabet)
+        return effects
 
     def score_conditional(
         self,
@@ -320,7 +426,5 @@ class EVmutation2(BaseModel, Scorer, Generator):
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
-        raise NotImplementedError()
-
-    def positions(self):
+        self.ready_or_raise()
         raise NotImplementedError()

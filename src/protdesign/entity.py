@@ -1,10 +1,12 @@
 """
 Specification of components of molecular design system (proteins, nucleic acids, ligands, etc.)
 """
+from collections import UserList
 from typing import List
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType, Metadata
+from protdesign.utils import ensure_sequence
 
 
 class Entity:
@@ -77,6 +79,47 @@ class Entity:
         self.first_index = first_index
 
 
+EntityList = List[Entity]  # TODO: remove
+EntityOrEntityList = Entity | EntityList  # TODO: remove
+
+class BiomolecularSystem(UserList):
+    def __init__(self, entities: Entity | List[Entity]):
+        """
+        Create new biomolecular system for modeling/design
+
+        Parameters
+        ----------
+        entities
+            One or more entities comprising the system
+        """
+        # turn single entity into list of entities
+        entities = ensure_sequence(entities)
+        super().__init__(entities)
+
+    def __eq__(self, other):
+        # TODO: implement equality of molecular systems
+        raise NotImplementedError()
+
+    def valid_instance(self, instance: SystemInstance, fixed_length: bool=False) -> bool:
+        """
+        Verify if instance is valid representation of this biomolecular system
+
+        Parameters
+        ----------
+        instance
+            System instance to validate
+        fixed_length:
+            If True, require that length of instance sequence matches the system entity representation length
+            (only sensible for fixed-length models and biopolymers)
+
+        Returns
+        -------
+        True if valid instance, False otherwise
+        """
+        # TODO: implement this
+        raise NotImplementedError()
+
+
 class SystemInstance:
     """
     Result designing the representation (structure/sequence) of the entity or entities
@@ -116,10 +159,6 @@ class SystemInstance:
 
     def __repr__(self):
         return f"{self.reps} score={self.score}"
-
-
-EntityList = List[Entity]
-EntityOrEntityList = Entity | EntityList
 
 
 class Protein(Entity):

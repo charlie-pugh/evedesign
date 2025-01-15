@@ -44,19 +44,6 @@ class Scorer(Protocol):
         pass
 
     @abstractmethod
-    def positions(
-        self
-    ) -> List[List[int]]:
-        """
-        Return list of all available positions per entity that can be mutated using score_single()
-
-        Returns
-        -------
-        List of position lists (outer list indexes over entities, inner list contains all positions)
-        """
-        pass
-
-    @abstractmethod
     def score_conditional(
         self,
         instances: Sequence[SystemInstance],
@@ -74,10 +61,9 @@ class Scorer(Protocol):
         (e.g. in Potts model hamiltonian). If no customized implementation is available,
         this method should still wrap around score() for applications like Gibbs sampling.
 
-        # TODO:
-        # Break this method out into its own Protocol "ConditionalScorer"?
-        # Some methods may be able to compute P(x_i | x_\i) but not P(x_1, ..., x_n) - for Gibbs,
-        # we only need the former!
+        TODO: if we encounter at least one relevant case of a method that is able to
+          compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
+          separate interface "ConditionalScorer" for use with the Gibbs sampler
 
         Parameters
         ----------
@@ -104,7 +90,7 @@ class Scorer(Protocol):
     def single_mutation_scan(
         self,
         instance: SystemInstance,
-        entity: int,
+        entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
@@ -118,7 +104,7 @@ class Scorer(Protocol):
         instance
             Target system instance specification to mutate
         entity
-            Index of entity for which mutation scan should be computed
+            Index of entity for which mutation scan should be computed. Defaults to first entity.
         positions
             Subset of positions to score. If None, scores for all positions will be computed.
         status_callback
@@ -318,11 +304,19 @@ class BaseModel(ABC):
     def ready(self) -> str:
         pass
 
+    def ready_or_raise(self) -> None:
+        """
+        Verifies if model is ready for predictions by checking ready property,
+        or raises a ValueError otherwise
+        """
+        if not self.ready:
+            raise ValueError("Must call build() first to use model")
+
     @classmethod
     @abstractmethod
     def can_model(
         cls,
-        system: EntityOrEntityList
+        system: EntityOrEntityList,
     ) -> Tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
@@ -341,6 +335,31 @@ class BaseModel(ABC):
             Message specifying why model is not able to handle the system
         """
         pass
+
+    @classmethod
+    def can_model_or_raise(
+        cls,
+        system: EntityOrEntityList,
+    ) -> None:
+        """
+        Check if the model is able to perform computations on the specified
+        molecular system via can_model(), raise a ValueError otherwise
+
+        Parameters
+        ----------
+        system
+            Molecular system to be modelled
+
+        Returns
+        -------
+        bool
+            True if model is able to handle the system, False otherwise
+        str
+            Message specifying why model is not able to handle the system
+        """
+        can_model, can_model_msg = cls.can_model(system)
+        if not can_model:
+            raise ValueError(can_model_msg)
 
     @classmethod
     @abstractmethod
@@ -386,15 +405,17 @@ class BaseModel(ABC):
         compute-heavy (e.g. EVE VAE models trained on a family-specific MSA)
 
         Note: implementations of this method should always verify if the system can
-        be modelled or raise a ValueError instead
+        be modelled using self.can_model() or raise a ValueError instead
 
         Note: Implementations of this method should always return self to allow method chaining
 
         Note: implementations should pay careful attention whether any external model parameters
         (e.g. PyTorch model) are stored inside the class to avoid potential problems and inflated
-        memory usage if instances of the class are serialized
+        memory usage if instances of the class are serialized; use the available context managers
+        to handle this behavior reliably
 
         # TODO: add parameter for labelled examples for supervised setting or keep this base class zero shot-only?
+        # TODO: add parameter "limit" to restrict system scoring to a certain region?
 
         Parameters
         ----------
@@ -407,5 +428,24 @@ class BaseModel(ABC):
         -------
         self
             Reference to the instance for method chaining
+        """
+        pass
+
+    @abstractmethod
+    def positions(
+        self
+    ) -> List[Tuple[int, int]]:
+        """
+        Return list of all available modelled positions per entity that can be potentially mutated
+
+        Note: positions that are not modelled (e.g. lowercase letters in EVmutation) should not
+        be returned by this method
+
+        Note: returned positions should be ordered in ascending order
+        by i) entity index, ii) position index in entity
+
+        Returns
+        -------
+        List of position lists (outer list indexes over entities, inner list contains all positions)
         """
         pass
