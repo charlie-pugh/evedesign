@@ -5,6 +5,7 @@ from typing import List, Literal, Self, TextIO, Tuple
 from collections import abc
 from protdesign.constants import AA_TO_INDEX, MASK, GAP, INDEX_TO_AA
 from protdesign.types import BioPolymer
+from protdesign.utils import shorten
 
 
 class Sequence:
@@ -42,8 +43,7 @@ class Sequence:
 
     def __repr__(self) -> str:
         return (
-            f"Sequence(id={self.id_} key={self.key} type={self.type_} " 
-            f"seq={(self.seq[:50] + '...') if len(self.seq) > 50 else self.seq})"
+            f"Sequence(id={self.id_} key={self.key} type={self.type_} seq={shorten(self.seq)})"
         )
 
 

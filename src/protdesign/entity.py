@@ -6,7 +6,7 @@ from typing import List
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType, Metadata
-from protdesign.utils import ensure_sequence
+from protdesign.utils import ensure_sequence, shorten
 
 
 class Entity:
@@ -33,6 +33,7 @@ class Entity:
             * modifications
             * different states / conformations
             * designable or not?
+            * hotspots, pair restraints / constraints
 
         Parameters
         ----------
@@ -78,15 +79,49 @@ class Entity:
 
         self.first_index = first_index
 
-class Instance:
+
+class EntityInstance:
     """
-    Result designing the representation (structure/sequence) of the entity or entities
-    in a system
+    Instantiation of a single entity in a system
     """
     def __init__(
         self,
-        reps: List[str | None],
-        structures: List[StructureChainMap | None ] = None,
+        rep: str | None = None,
+        structure_models: StructureChainMap | None = None,
+    ):
+        """
+        Create new instantiation of an entity in a sequence
+
+        Parameters
+        ----------
+        rep
+            Representation (e.g. sequence) of entity. Set to None if no
+            representation is yet available (e.g. just structural backbone but no sequence)
+        structure_models
+            Structural models associated with each of the entities in the system.
+            Set to None if no structural models are available.
+        """
+        self.rep = rep
+        self.structure_models = structure_models
+
+    def __repr__(self):
+        if self.structure_models is not None:
+            structure_info = len(self.structure_models)
+        else:
+            structure_info = self.structure_models
+
+        return f"Instance(rep={shorten( self.rep)}, structure_models={structure_info})"
+
+
+class SystemInstance(UserList):
+    """
+    Result designing the representations of the entity/entities
+    in a system, comprised of individual EntityInstances (one per entity),
+    mirroring the "System" class comprised of entities
+    """
+    def __init__(
+        self,
+        entity_instances: EntityInstance | List[EntityInstance],
         score: float | None = None,
         confidence: float | None = None,
         # metadata: Metadata | None = None,
@@ -94,29 +129,28 @@ class Instance:
         """
         Create new entity system instance
 
+        # TODO: activate metadata attribute once needed
+
         Parameters
         ----------
-        reps
-            List of representations for different entities in system.
-            If only structural model but no sequence available for any entity, set
-            element to None
-        structures
-            List of structural models associated with each of the entities in the system.
-            For any entity, set list element to None if no structural models are available.
+        entity_instances
+            One or more entity instances (must match entities in corresponding System)
         score
             Score describing quality/likelihood of the designed system instance
             (higher is better, ideally in logits)
         confidence
             Reliability of model score from 0 (lowest confidence) to 1 (highest confidence)
         """
-        self.reps = reps
-        self.structures = structures
+        # turn single instance into list of instances
+        entity_instances = ensure_sequence(entity_instances)
+        super().__init__(entity_instances)
+
         self.score = score
         self.confidence = confidence
         # self.metadata = metadata
 
     def __repr__(self):
-        return f"Instance({self.reps} score={self.score})"
+        return f"Instance({self.data} score={self.score})"
 
 
 class System(UserList):
@@ -139,7 +173,7 @@ class System(UserList):
 
     def valid_instance(
         self,
-        instance: Instance,
+        instance: SystemInstance,
         fixed_length: bool=False,
         raise_invalid: bool=False
     ) -> bool:
@@ -162,13 +196,13 @@ class System(UserList):
         """
         # instance representations always must have same length as number of entities
         # in system by convention
-        valid = len(self.data) == len(instance.reps)
+        valid = len(self.data) == len(instance)
 
         if fixed_length:
-            for entity, entity_instance_rep in zip(self.data, instance.reps):
+            for entity, entity_instance in zip(self.data, instance):
                 # TODO: also implement comparison for nucleotides eventually
                 if entity.type_ == "protein":
-                    valid = valid and len(entity.rep) == len(entity_instance_rep)
+                    valid = valid and len(entity.rep) == len(entity_instance.rep)
 
         if not valid and raise_invalid:
             raise ValueError("Provided instance is not valid for biomolecular system")

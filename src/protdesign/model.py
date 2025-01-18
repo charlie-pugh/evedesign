@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
-from protdesign.entity import System, Instance
+from protdesign.entity import System, SystemInstance
 from protdesign.types import StatusCallback
 
 
@@ -23,7 +23,7 @@ class Scorer(Protocol):
     @abstractmethod
     def score(
         self,
-        instances: Sequence[Instance],
+        instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         """
@@ -46,7 +46,7 @@ class Scorer(Protocol):
     @abstractmethod
     def score_conditional(
         self,
-        instances: Sequence[Instance],
+        instances: Sequence[SystemInstance],
         entities: Sequence[int],
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
@@ -60,6 +60,9 @@ class Scorer(Protocol):
         one position can be computed more efficiently than arbitrary full sequences
         (e.g. in Potts model hamiltonian). If no customized implementation is available,
         this method should still wrap around score() for applications like Gibbs sampling.
+
+        Note that logits are not relative to any particular sequence (e.g. "wildtype"), but
+        meant to be interpreted relative to each other (i.e. should be treated as raw logits)
 
         TODO: if we encounter at least one relevant case of a method that is able to
           compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
@@ -89,7 +92,7 @@ class Scorer(Protocol):
     @abstractmethod
     def single_mutation_scan(
         self,
-        instance: Instance,
+        instance: SystemInstance,
         entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
@@ -98,6 +101,10 @@ class Scorer(Protocol):
         Compute all single substitutions to one particular instance (aka "single mutation scan")
         batching across different positions. This is markedly different to score_single_pos() which
         batches substitutions to exactly one single position across many different instances.
+
+        Note that mutation logits should be *relative* to the given instance, so that self-substitutions
+        are assigned are score of 0. This differs from score_conditional, where there is no notion of a
+        "wildtype" sequence to compute relative scores to.
 
         Parameters
         ----------
@@ -120,7 +127,7 @@ class Scorer(Protocol):
     @abstractmethod
     def score_mutants(
         self,
-        instance: Instance,
+        instance: SystemInstance,
         mutants: List[str],
         status_callback: StatusCallback | None = None
     ) -> None:
@@ -164,11 +171,14 @@ class Generator(Protocol):
         fixed_pos: Sequence[Sequence[int]] | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
-    ) -> List[Instance]:
+    ) -> List[SystemInstance]:
         """
         Sample new sequences from generative model
 
         Note: Implementation should raise ValueError if any of the specified design options are not supported
+
+        Note: Method must always return at least num_designs elements in the output list,
+        but may also return more designs than requested e.g. if beneficial due to batch size
 
         Parameters
         ----------
@@ -209,7 +219,7 @@ class Embedder(Protocol):
     @abstractmethod
     def embed(
         self,
-        instances: Sequence[Instance],
+        instances: Sequence[SystemInstance],
         entity: int,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int, int], np.dtype[float]]:
@@ -433,12 +443,15 @@ class BaseModel(ABC):
         light (e.g. compute an encoding), whereas for other conditional models this method may be
         compute-heavy (e.g. EVE VAE models trained on a family-specific MSA)
 
-        Note: implementations of this method should always verify if the system can
+        Notes re implementation:
+        1) Should always verify if the system can
         be modelled using self.can_model() or raise a ValueError instead
 
-        Note: Implementations of this method should always return self to allow method chaining
+        2) Sould always assign system to self.system
 
-        Note: implementations should pay careful attention whether any external model parameters
+        3) Should always return self to allow method chaining
+
+        4) Should pay careful attention whether any external model parameters
         (e.g. PyTorch model) are stored inside the class to avoid potential problems and inflated
         memory usage if instances of the class are serialized; use the available context managers
         to handle this behavior reliably

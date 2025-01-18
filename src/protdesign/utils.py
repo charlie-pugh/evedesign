@@ -40,3 +40,6 @@ def status_done(
 ):
     if status_callback is not None:
         status_callback("done", None, message)
+
+def shorten(text: str, max_len=50):
+    return (text[:max_len] + "...") if len(text) > 50 else text

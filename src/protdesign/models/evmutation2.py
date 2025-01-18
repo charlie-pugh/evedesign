@@ -10,9 +10,10 @@ import pandas as pd
 from loguru import logger
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
-from protdesign.entity import System, Instance
+from protdesign.entity import System, SystemInstance, EntityInstance
 from protdesign.constants import MASK
-from protdesign.utils import ensure_sequence, model_param_context, status_start, status_done
+from protdesign.sequence import valid_protein_sequence
+from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
@@ -52,6 +53,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         decoder_batch_size: BatchSize = 64,
         decoder_num_full_samples: int = 16,
         decoder_num_single_samples: int = 16,
+        decoder_share_order_across_encodings: bool = True,
         keep_model: bool = False,
         device: DeviceType = "cpu",
     ):
@@ -76,6 +78,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.decoder_batch_size = decoder_batch_size
         self.decoder_num_full_samples = decoder_num_full_samples
         self.decoder_num_single_samples = decoder_num_single_samples
+        self.decoder_share_order_across_encodings = decoder_share_order_across_encodings
 
         if self.encoder_num_samples < 1 or self.decoder_num_single_samples < 1 or self.decoder_num_single_samples < 1:
             raise ValueError(
@@ -86,6 +89,9 @@ class EVmutation2(BaseModel, Scorer, Generator):
             raise ValueError(
                 "decoder_batch_size must be at least 1 or 'auto'"
             )
+
+        if self.decoder_batch_size == "auto":
+            raise NotImplementedError("Automatic batch_size not yet implemented")
 
         # encodings created when calling build() method
         self.encoding = None
@@ -100,11 +106,18 @@ class EVmutation2(BaseModel, Scorer, Generator):
         if len(system) != 1 or system[0].type_ != "protein":
             return False, "Can only handle single-component protein system"
 
-        if system[0].sequences is None or len(system[0].sequences.seqs) == 0:
+        target = system[0]
+        if target.sequences is None or len(target.sequences.seqs) == 0:
             return False, "Must provide sequences for model inference"
 
-        if not system[0].sequences.aligned:
+        if not target.sequences.aligned:
             return False, "Provided sequences must be aligned"
+
+        # this should be ensured by construction of system but check again to be safe
+        if not valid_protein_sequence(
+            target.rep, allow_mask=True, allow_gap=False, allow_ambiguous=True
+        ):
+            return False, "Input sequence may only contain AA symbols or mask"
 
         # TODO: more checks on alignment: does length match target rep;
         #  and is alignment compatible with a3m format
@@ -140,12 +153,15 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # switch to evaluation mode
         self.model.eval()
 
-    def _delete_model(self):
-        self.model = None
+    def _release_cache(self):
         if self.device == "cuda":
             torch.cuda.empty_cache()
         elif self.device == "mps":
             torch.mps.empty_cache()
+
+    def _delete_model(self):
+        self.model = None
+        self._release_cache()
 
     def build(
         self,
@@ -156,7 +172,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.can_model_or_raise(system)
 
         # store system with this instance
-        self.system = ensure_sequence(system)
+        self.system = system
         target = self.system[0]
 
         # load MSA
@@ -246,23 +262,26 @@ class EVmutation2(BaseModel, Scorer, Generator):
             s = s.to(self.device)
             p = p.to(self.device)
             pos_mask = self.pos_mask.to(self.device)
+            assert s.shape[0] == p.shape[0], "Number of single and pair representations does not agree"
 
             yield s, p, pos_mask
         finally:
             del s
             del p
             del pos_mask
+            self._release_cache()
 
     def generate(
         self,
         num_designs: int,
         entities: Sequence[int] | None = None,
-        fixed_pos: Sequence[Sequence[int]] | None = None,
+        fixed_pos: Sequence[Sequence[int]] | None = None,    # TODO: rework this to Dict[Sequence[int]] with custom type
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
-    ) -> List[Instance]:
-        # TODO: support min_p sampling and sample_gaps
-
+    ) -> List[SystemInstance]:
+        """
+        TODO: support min_p sampling and sample_gaps parameters eventually
+        """
         self.ready_or_raise()
 
         if entities is not None:
@@ -282,11 +301,12 @@ class EVmutation2(BaseModel, Scorer, Generator):
         else:
             fixed_pos = set()
 
+        target = self.system[0]
         # mark which positions to design (with mask symbol)
         base_seq = [
             symbol if pos in fixed_pos else MASK
             for pos, symbol in enumerate(
-                self.system[0].rep, start=self.system[0].first_index
+                target.rep, start=target.first_index
             )
         ]
 
@@ -319,30 +339,72 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 # min_p=None,  # TODO: implement
                 # sample_gaps=None,  # TODO: implement
             )
-            print(designs)
 
-        # TODO: score the designs
-        # TODO: what to do with extra designs? keep or discard?
+        # score the designs relative to entity sequence (ideally, user supplied WT sequence, but user can
+        # always rescore the designs later if needed)
 
+        # prepend reference sequence, and create instances
+        ref_and_designs = [target.rep] + list(designs[0].seq)
         instances = [
-            Instance(reps=[row.seq]) for _, row in designs[0].iterrows()
+            SystemInstance(
+                EntityInstance(rep=rep)
+            ) for rep in ref_and_designs
         ]
 
-        return instances
+        # score and attach to instances (normalize by reference score)
+        scores = self.score(instances)
+        ref_score = scores[0]
+
+        instances_with_score = [
+            SystemInstance(
+                EntityInstance(rep=seq),
+                score=score - ref_score
+            ) for seq, score in zip(ref_and_designs, scores)
+        ]
+
+        # return designs, remove reference in first position
+        return instances_with_score[1:]
 
     def score(
         self,
-        instances: Sequence[Instance],
+        instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
-        # TODO: this should use multiple single / pair representations in correct way!
 
-        raise NotImplementedError()
+        # validate sequences
+        _ = (
+            self.system.valid_instance(
+                instance, fixed_length=True, raise_invalid=True
+            ) for instance in instances
+        )
+
+        with (
+            model_param_context(self._load_model, self._delete_model, self.keep_model),
+            self._prepare() as (s, p, pos_mask)
+        ):
+            scores = self.model.decoder.score_full_probability(
+                [instance[0].rep for instance in instances],
+                single=s,
+                pairwise=p,
+                pos_mask=pos_mask,
+                batch_size=self.decoder_batch_size,
+                num_samples=self.decoder_num_full_samples,
+                share_decoding_order_across_encodings=self.decoder_share_order_across_encodings,
+            )
+
+        # average the logits and make sure aggregated dataframe it is sorted by sequence index
+        scores_agg = scores.groupby(
+            axis=0, level="seq_idx"
+        ).mean().sort_index()
+
+        # return as numpy vector
+        return scores_agg["score"].values
+
 
     def single_mutation_scan(
         self,
-        instance: Instance,
+        instance: SystemInstance,
         entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
@@ -361,7 +423,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # extract single target entity from system, nd get sequence from instance
         # (we safely can access this as we have verified instance against system)
         target = self.system[0]
-        instance_seq = instance.reps[0]
+        instance_seq = instance[0].rep
 
         # validate positions
         if positions is not None:
@@ -373,7 +435,6 @@ class EVmutation2(BaseModel, Scorer, Generator):
         ):
             # get number of encoder samples (single/pair representations)
             num_encodings = s.shape[0]
-            assert s.shape[0] == p.shape[0], "Number of single and pair representations does not agree"
 
             # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
             # different decoding orders will already have cancelled out. ultimately, this functionality should
@@ -423,7 +484,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
     def score_mutants(
         self,
-        instance: Instance,
+        instance: SystemInstance,
         mutants: List[str],
         status_callback: StatusCallback | None = None
     ) -> None:
@@ -432,10 +493,27 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
     def score_conditional(
         self,
-        instances: Sequence[Instance],
+        instances: Sequence[SystemInstance],
         entities: Sequence[int],
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         self.ready_or_raise()
+
+        # res[shared] = evm.model.decoder.score_conditional(
+        #     [target_seq] * len(target_seq),
+        #     positions=list(range(24, len(target_seq) + 24)),
+        #     # [target_seq, "C" * len(target_seq), target_seq, "A" * len(target_seq)],
+        #     # positions=[180, 180 180,, 1u0],
+        #     # [target_seq, target_seq, target_seq, target_seq],
+        #     # positions=[180, 24, 25, 26],
+        #     first_index=24,
+        #     single=evm.encoding[0].to("mps"),
+        #     pairwise=evm.encoding[1].to("mps"),
+        #     pos_mask=evm.pos_mask.to("mps"),
+        #     batch_size=64,
+        #     num_samples=16,
+        #     share_decoding_order_across_encodings=shared,
+        # )
+
         raise NotImplementedError()
