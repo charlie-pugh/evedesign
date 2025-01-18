@@ -274,8 +274,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def generate(
         self,
         num_designs: int,
-        entities: Sequence[int] | None = None,
-        fixed_pos: Sequence[Sequence[int]] | None = None,    # TODO: rework this to Dict[Sequence[int]] with custom type
+        entities: Sequence[int] | None = None,  # TODO: rework this as well?
+        fixed_pos: Sequence[Sequence[int]] | None = None,   # TODO: rework this to Dict[Sequence[int]] with custom type
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
@@ -393,7 +393,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 share_decoding_order_across_encodings=self.decoder_share_order_across_encodings,
             )
 
-        # average the logits and make sure aggregated dataframe it is sorted by sequence index
+        # average the logits across encoder and decoder samples,
+        # and make sure aggregated dataframe it is sorted by sequence index
         scores_agg = scores.groupby(
             axis=0, level="seq_idx"
         ).mean().sort_index()

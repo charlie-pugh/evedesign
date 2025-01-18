@@ -162,6 +162,7 @@ class Generator(Protocol):
     (e.g. generative models or samplers on top of scoring models)
 
     # TODO: add parameters to bias or select/avoid amino acids (global or position-specific)
+    # TODO: add parameter to allow indels (also need to specify min/max length range)
     """
     @abstractmethod
     def generate(
