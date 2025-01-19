@@ -226,7 +226,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     s.cpu(), p.cpu()
                 )
 
-        # TODO: automatically estimate good batch size for decoder if set to "auto"
+        # TODO: automatically estimate robust maximum possible batch size for decoder if set to "auto"
         #  depending on available resources, and update self.decoder_batch_size
 
         # return self to allow method chaining
@@ -302,13 +302,10 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 raise ValueError(
                     "Only accepting position mapping for entity 0"
                 )
+
             fixed_pos = set(fixed_pos[0])
-            valid_pos = {
-                pos for pos, _ in enumerate(target.rep, start=target.first_index)
-            }
-            invalid = fixed_pos - valid_pos
-            if len(invalid) > 0:
-                raise ValueError(f"Invalid fixed positions: {invalid}")
+            # verify if all positions are valid
+            self.valid_positions(fixed_pos, entity=0, raise_invalid=True)
         else:
             fixed_pos = set()
 
@@ -322,7 +319,6 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 target.rep, start=target.first_index
             )
         ]
-        print(base_seq)  # TODO: remove
 
         with (
             model_param_context(self._load_model, self._delete_model, self.keep_model),
@@ -389,7 +385,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # validate sequences
         _ = (
             self.system.valid_instance(
-                instance, fixed_length=True, raise_invalid=True
+                instance, fixed_length=True, validate_reps=True, raise_invalid=True
             ) for instance in instances
         )
 
@@ -416,7 +412,6 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # return as numpy vector
         return scores_agg["score"].values
 
-
     def single_mutation_scan(
         self,
         instance: SystemInstance,
@@ -429,7 +424,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # check instance against molecular system, requiring fixed length of sequence
         # as was used for entity specification as we have a fixed-length model
         self.system.valid_instance(
-            instance, fixed_length=True, raise_invalid=True
+            instance, fixed_length=True, validate_reps=True, raise_invalid=True,
         )
 
         if entity != 0:
@@ -504,6 +499,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
         status_callback: StatusCallback | None = None
     ) -> None:
         self.ready_or_raise()
+        # TODO: update mutant format
+        # TODO: proper return type
         raise NotImplementedError()
 
     def score_conditional(
@@ -515,20 +512,43 @@ class EVmutation2(BaseModel, Scorer, Generator):
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         self.ready_or_raise()
 
-        # res[shared] = evm.model.decoder.score_conditional(
-        #     [target_seq] * len(target_seq),
-        #     positions=list(range(24, len(target_seq) + 24)),
-        #     # [target_seq, "C" * len(target_seq), target_seq, "A" * len(target_seq)],
-        #     # positions=[180, 180 180,, 1u0],
-        #     # [target_seq, target_seq, target_seq, target_seq],
-        #     # positions=[180, 24, 25, 26],
-        #     first_index=24,
-        #     single=evm.encoding[0].to("mps"),
-        #     pairwise=evm.encoding[1].to("mps"),
-        #     pos_mask=evm.pos_mask.to("mps"),
-        #     batch_size=64,
-        #     num_samples=16,
-        #     share_decoding_order_across_encodings=shared,
-        # )
+        # validate instance sequences
+        [
+            self.system.valid_instance(
+                instance, fixed_length=True, validate_reps=True, raise_invalid=True
+            ) for instance in instances
+        ]
 
-        raise NotImplementedError()
+        # validate entity specification (only handle single entity for now)
+        if set(entities) != {0}:
+            raise ValueError("Can only specify entities with index 0")
+
+        target = self.system[0]
+
+        # validate positions
+        self.valid_positions(positions, entity=0, raise_invalid=True)
+
+        # extract sequences
+        seqs = [
+            instance[0].rep for instance in instances
+        ]
+
+        with (
+            model_param_context(self._load_model, self._delete_model, self.keep_model),
+            self._prepare() as (s, p, pos_mask)
+        ):
+            scores = self.model.decoder.score_conditional(
+                seqs=seqs,
+                positions=positions,
+                first_index=target.first_index,
+                single=s,
+                pairwise=p,
+                pos_mask=pos_mask,
+                batch_size=self.decoder_batch_size,
+                num_samples=self.decoder_num_single_samples,
+                share_decoding_order_across_encodings=self.decoder_share_order_across_encodings,
+            )
+
+        # TODO: define good return type (custom dataframe?)
+        return scores
+

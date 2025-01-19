@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Mapping
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
-from protdesign.types import EntityType, Metadata
+from protdesign.types import EntityType  #, Metadata
 from protdesign.utils import ensure_sequence, shorten
 
 
@@ -176,7 +176,8 @@ class System(UserList):
         self,
         instance: SystemInstance,
         fixed_length: bool=False,
-        raise_invalid: bool=False
+        validate_reps: bool=False,
+        raise_invalid: bool=False,
     ) -> bool:
         """
         Verify if instance is valid representation of this biomolecular system
@@ -185,10 +186,12 @@ class System(UserList):
         ----------
         instance
             System instance to validate
-        fixed_length:
+        fixed_length
             If True, require that length of instance sequence matches the system entity representation length
             (only sensible for fixed-length models and biopolymers)
-        raise_invalid:
+        validate_reps
+            If True, verify if sequence representations are comprised of valid amino acids/nucleotides
+        raise_invalid
             If True, raise ValueError if instance is invalid w.r.t. system
 
         Returns
@@ -199,16 +202,23 @@ class System(UserList):
         # in system by convention
         valid = len(self.data) == len(instance)
 
-        if fixed_length:
-            for entity, entity_instance in zip(self.data, instance):
-                # TODO: also implement comparison for nucleotides eventually
-                if entity.type_ == "protein":
+        for entity, entity_instance in zip(self.data, instance):
+            # TODO: also implement comparison for nucleotides eventually
+            if entity.type_ == "protein":
+                if fixed_length:
                     valid = valid and len(entity.rep) == len(entity_instance.rep)
+
+                if validate_reps:
+                    # allow gaps for deletion modeling, and mask for leaving parts of representation unspecified
+                    is_valid_seq = valid_protein_sequence(
+                        entity_instance.rep, allow_mask=True, allow_gap=True, allow_ambiguous=False
+                    )
+
+                    valid = valid and is_valid_seq
 
         if not valid and raise_invalid:
             raise ValueError("Provided instance is not valid for biomolecular system")
 
-        # TODO: also verify if valid protein sequences eventually
         return valid
 
 

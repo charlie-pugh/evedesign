@@ -146,7 +146,7 @@ def valid_protein_sequence(
             (allow_mask and aa == MASK) or
             (allow_gap and aa == GAP)
         ) or (
-            not allow_ambiguous and aa in AA_TO_INDEX and INDEX_TO_AA[AA_TO_INDEX[aa]] != "aa"
+            not allow_ambiguous and aa in AA_TO_INDEX and INDEX_TO_AA[AA_TO_INDEX[aa]] != aa
         )
     ]
 

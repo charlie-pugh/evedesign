@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
@@ -63,7 +64,7 @@ class Scorer(Protocol):
 
         Note that logits are not relative to any particular sequence (e.g. "wildtype"), but
         meant to be interpreted relative to each other (i.e. should be treated as raw logits)
-        *per* sampled instance/entity/position combination
+        across possible symbols *per* sampled instance/entity/position combination
 
         TODO: how handle different types of alphabets sampled at the same time?
 
@@ -105,9 +106,10 @@ class Scorer(Protocol):
         batching across different positions. This is markedly different to score_single_pos() which
         batches substitutions to exactly one single position across many different instances.
 
-        Note that mutation logits should be *relative* to the given instance, so that self-substitutions
-        are assigned are score of 0. This differs from score_conditional, where there is no notion of a
-        "wildtype" sequence to compute relative scores to.
+        Note that mutation logits should be *relative* to the given instance (like a log-odds score),
+        so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
+        and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+        no notion of a "wildtype" sequence to compute relative scores to.
 
         Parameters
         ----------
@@ -141,6 +143,11 @@ class Scorer(Protocol):
         In case no such specialization is possible or needed for a method, it can simply call out to the
         score() function.
 
+        Note that mutation logits should be *relative* to the given instance (like a log-odds score),
+        so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
+        and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+        no notion of a "wildtype" sequence to compute relative scores to.
+
         # TODO: mutant format specification, how to best handle mutants across different entities?
 
         Parameters
@@ -154,7 +161,7 @@ class Scorer(Protocol):
 
         Returns
         -------
-        # TODO: define
+        # TODO: define and change above
         """
         pass
 
@@ -498,7 +505,7 @@ class BaseModel(ABC):
 
     def valid_positions(
         self,
-        positions: Sequence[int],
+        positions: Iterable[int],
         entity: int = 0,
         raise_invalid: bool = False,
     ) -> List[int]:
