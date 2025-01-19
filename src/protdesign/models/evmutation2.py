@@ -433,7 +433,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # average the logits across encoder and decoder samples,
         # and make sure aggregated dataframe it is sorted by sequence index
         scores_agg = scores.groupby(
-            axis=0, level="seq_idx"
+            level="seq_idx"
         ).mean().sort_index()
 
         # return as numpy vector
@@ -626,7 +626,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         # average encoder and decoder samples
         scores_agg = scores.groupby(
-            axis=0, level=["seq_idx", "pos"]
+            level=["seq_idx", "pos"]
         ).mean().sort_index()
 
         # TODO: assign entity index to table

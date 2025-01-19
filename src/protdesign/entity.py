@@ -111,7 +111,7 @@ class EntityInstance:
         else:
             structure_info = self.structure_models
 
-        return f"Instance(rep={shorten( self.rep)}, structure_models={structure_info})"
+        return f"EntityInstance(rep={shorten( self.rep)}, structure_models={structure_info})"
 
 
 class SystemInstance(UserList):
@@ -151,7 +151,7 @@ class SystemInstance(UserList):
         # self.metadata = metadata
 
     def __repr__(self):
-        return f"Instance({self.data} score={self.score})"
+        return f"SystemInstance({self.data} score={self.score})"
 
 
 class System(UserList):
