@@ -3,7 +3,7 @@ Specification of components of molecular design system (proteins, nucleic acids,
 """
 from collections import UserList
 from collections.abc import Sequence
-from typing import Mapping
+from typing import Mapping, NamedTuple
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType  #, Metadata
@@ -279,3 +279,9 @@ class Protein(Entity):
 
 # mapping from entity index to positions in entity (e.g. for fixing positions)
 EntityPosList = Mapping[int, Sequence[int]]
+
+Mutation = NamedTuple(
+    "Mutation", [("entity", int), ("pos", int), ("ref", str), ("to", str)]
+)
+
+Mutant = Sequence[Mutation]

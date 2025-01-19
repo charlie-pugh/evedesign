@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
-from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList
+from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
 from protdesign.sequence import valid_protein_sequence
 from protdesign.utils import ensure_sequence, model_param_context
@@ -52,14 +52,41 @@ class EVmutation2(BaseModel, Scorer, Generator):
         encoder_max_num_msa: int | None = 2048,
         decoder_batch_size: BatchSize = 64,
         decoder_num_full_samples: int = 16,
-        decoder_num_single_samples: int = 16,
+        decoder_num_mutant_samples: int = 16,
         decoder_share_order_across_encodings: bool = True,
         keep_model: bool = False,
         device: DeviceType = "cpu",
     ):
-        # TODO: document parameters
-        # TODO: support min_p sampling and sample_gaps
+        """
+        Instantiate new EVcouplings2 model
 
+        TODO: support min_p sampling and sample_gaps
+
+        Parameters
+        ----------
+        model_file_path
+            Path to Lightning checkpoint
+        encoder_num_samples
+            Number of encoder samples to draw (at least 1), can improve model performance
+        encoder_num_recycling_steps
+            Recycling steps to run when computing encoding
+        encoder_max_num_msa
+            Number of sequences to sample from MSA when computing encoding
+        decoder_batch_size
+            Maximum number of sequences to decode concurrently
+        decoder_num_full_samples
+            Number of sampled decoding orders when computing full sequence scores
+        decoder_num_mutant_samples
+            Number of sampled decoding orders when computing mutant scores
+        decoder_share_order_across_encodings
+            Reuse decoding order across multiple encodings (if more than 1 used)
+        keep_model
+            If True, keep model parameters asssociated to instance after build step
+            to avoid reloading when scoring/generating. If serializing model, set to
+            False to avoid storing model parameters repeatedly.
+        device
+            Device to use for computations
+        """
         super().__init__()
         self.model_file_path = model_file_path
         self.keep_model = keep_model
@@ -77,10 +104,10 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.encoder_max_num_msa = encoder_max_num_msa
         self.decoder_batch_size = decoder_batch_size
         self.decoder_num_full_samples = decoder_num_full_samples
-        self.decoder_num_single_samples = decoder_num_single_samples
+        self.decoder_num_mutant_samples = decoder_num_mutant_samples
         self.decoder_share_order_across_encodings = decoder_share_order_across_encodings
 
-        if self.encoder_num_samples < 1 or self.decoder_num_single_samples < 1 or self.decoder_num_single_samples < 1:
+        if self.encoder_num_samples < 1 or self.decoder_num_full_samples < 1 or self.decoder_num_mutant_samples < 1:
             raise ValueError(
                 "encoder_num_samples, decoder_num_single_samples and decoder_num_single_samples must all be > 0"
             )
@@ -459,49 +486,97 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     pairwise=p[[idx_enc]],
                     pos_mask=pos_mask,
                     position_subset=positions,
-                    num_samples=self.decoder_num_single_samples,
+                    num_samples=self.decoder_num_mutant_samples,
                     batch_size=self.decoder_batch_size,
                 )
 
-            # assemble multiple scores
+            # assemble multiple scores and average logits
             effects = pd.concat(
                 effects, axis=0, names=["encoder_sample"]
-            )
+            ).groupby(
+                level=["pos", "wt_aa"]
+            ).mean()
 
-        # TODO: normalize effects to WT
-        # normalize to WT, average decoder samples and reshape
-        # singles_rel = singles.sub(
-        #     singles.wt, axis=0
-        # ).drop(["wt"], axis=1).groupby(
-        #     level=["encoder_sample", "pos", "wt_aa"]
-        # ).mean().stack().unstack(
-        #     level="encoder_sample"
-        # ).assign(
-        #     avg=lambda df: df.mean(axis=1)
-        # )
-        #
-        # singles_rel.columns = [
-        #     f"effect_{c}" for c in singles_rel.columns
-        # ]
-        #
-        # singles_rel.index = [
-        #     f"{wt_aa}{pos}{to_aa}" for (pos, wt_aa, to_aa) in singles_rel.index
-        # ]
-        #
-        # singles_rel.index.name = mutant_col
+        # TODO: rename index level
+        # TODO: assign entity index to table
+        # TODO: remove symbols except AAs, gap and mask (also drop "wt" column)
+        # TODO: define good return type (custom dataframe?)
         # TODO: transform results into proper format (axes annotation, position/AA ordering, right alphabet)
         return effects
 
     def score_mutants(
         self,
         instance: SystemInstance,
-        mutants: List[str],
+        mutants: Sequence[Mutant],
         status_callback: StatusCallback | None = None
     ) -> None:
         self.ready_or_raise()
-        # TODO: update mutant format
-        # TODO: proper return type
-        raise NotImplementedError()
+
+        # check instance against molecular system, requiring fixed length of sequence
+        # as was used for entity specification as we have a fixed-length model
+        self.system.valid_instance(
+            instance, fixed_length=True, validate_reps=True, raise_invalid=True,
+        )
+
+        # extract single target entity from system, nd get sequence from instance
+        # (we safely can access this as we have verified instance against system)
+        target = self.system[0]
+        instance_seq = instance[0].rep
+
+        # verify positions and entities in mutants
+        all_entities = {
+            subs.entity for mutant in mutants for subs in mutant
+        }
+        if all_entities != {0}:
+            raise ValueError("Can only model mutations to entity=0")
+
+        all_positions = {
+            subs.pos for mutant in mutants for subs in mutant
+        }
+        self.valid_positions(all_positions, entity=0, raise_invalid=True)
+
+        # transform mutants into format expected by EVmutation2
+        mutants_mapped = [
+            [
+                (subs.pos, subs.ref, subs.to) for subs in mutant
+            ] for mutant in mutants
+        ]
+
+        with (
+            model_param_context(self._load_model, self._delete_model, self.keep_model),
+            self._prepare() as (s, p, pos_mask)
+        ):
+            # get number of encoder samples (single/pair representations)
+            num_encodings = s.shape[0]
+
+            # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
+            # different decoding orders will already have cancelled out. ultimately, this functionality should
+            # probably go inside the score_single_mutants() method in picasso...
+            effects = {}
+            for idx_enc in range(num_encodings):
+                # note: method has @torch.inference_mode() so no_grad not necessary here
+                effects[idx_enc] = self.model.decoder.score_mutants(
+                    seq=instance_seq,
+                    mutants=mutants_mapped,
+                    first_index=target.first_index,
+                    single=s[[idx_enc]],
+                    pairwise=p[[idx_enc]],
+                    pos_mask=pos_mask,
+                    num_samples=self.decoder_num_mutant_samples,
+                    batch_size=self.decoder_batch_size,
+                )
+
+            # assemble multiple scores and average logits
+            effects = pd.concat(
+                effects, axis=0, names=["encoder_sample"]
+            ).groupby(
+                level="mutant"
+            ).mean()
+            # TODO: make sure sorting order is not messed up
+
+        # TODO: cannot assume that output list is necessarily ordered
+        # TODO: update return type, in signature and also in abstract class
+        return effects
 
     def score_conditional(
         self,
@@ -545,10 +620,17 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 pairwise=p,
                 pos_mask=pos_mask,
                 batch_size=self.decoder_batch_size,
-                num_samples=self.decoder_num_single_samples,
+                num_samples=self.decoder_num_mutant_samples,
                 share_decoding_order_across_encodings=self.decoder_share_order_across_encodings,
             )
 
+        # average encoder and decoder samples
+        scores_agg = scores.groupby(
+            axis=0, level=["seq_idx", "pos"]
+        ).mean().sort_index()
+
+        # TODO: assign entity index to table
+        # TODO: remove symbols except AAs, gap and mask
         # TODO: define good return type (custom dataframe?)
-        return scores
+        return scores_agg
 

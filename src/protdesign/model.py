@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
-from protdesign.entity import System, SystemInstance, EntityPosList
+from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
 from protdesign.types import StatusCallback
 
 
@@ -133,15 +133,15 @@ class Scorer(Protocol):
     def score_mutants(
         self,
         instance: SystemInstance,
-        mutants: List[str],
+        mutants: Sequence[Mutant],
         status_callback: StatusCallback | None = None
     ) -> None:
         """
         Compute logit scores for a list of mutations to a specified system instance
         (can be any single or higher-order mutants); this method is to allow specialized, more efficient
-        implementations of mutant calculations than computing the full score of the WT and mutant sequence.
-        In case no such specialization is possible or needed for a method, it can simply call out to the
-        score() function.
+        or accurate implementations of mutant calculations than computing the full score of the WT and
+        mutant sequence. In case no such specialization is possible or needed for a method, it can simply
+        call out to the score() function.
 
         Note that mutation logits should be *relative* to the given instance (like a log-odds score),
         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
@@ -171,9 +171,9 @@ class Generator(Protocol):
     Interface implemented by classes that can generate new samples
     (e.g. generative models or samplers on top of scoring models)
 
-    # TODO: add parameters to bias or select/avoid amino acids (global or position-specific)
-    # TODO: add parameter to allow indels (also need to specify min/max length range)
-    # TODO: add parameters for sampling strategy where available (e.g. min-p, top-k, etc.)
+    TODO: add parameters to bias or select/avoid amino acids (global or position-specific)
+    TODO: add flags to allow/disallow indels (also need to specify min/max length range)
+    TODO: add parameters for sampling strategy where available (e.g. min-p, top-k, etc.)
     """
     @abstractmethod
     def generate(
@@ -218,14 +218,19 @@ class Generator(Protocol):
 
 class Embedder(Protocol):
     """
-    Interface implemented by methods than can compute embeddings
+    Interface implemented by methods than can compute per-position embeddings
     (designs/sequences, vector per token)
 
-    # TODO: add method for combined scoring and embedding (don't compute twice, separate interface)?
-    # TODO: add specialized methods for single-mutant embeddings?
-    # TODO: pooling / protein-level embedding?
-    # TODO: all instances must have same length unless pooling
-    # TODO: can we compute embeddings across all entities?
+    TODO: add interface for combined scoring and embedding (don't compute twice, as embeddings will be
+        computed whenever density is computed
+
+    TODO: add separate interface for protein-level embedding (rather than positional embeddings, which can be pooled)
+
+    TODO: check if beneficial to add specialized methods for single-mutant embeddings?
+
+    TODO: all instances must have same length
+
+    TODO: make method more flexible so can we compute embeddings across all entities?
     """
     @abstractmethod
     def embed(
