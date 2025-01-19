@@ -2,7 +2,8 @@
 Specification of components of molecular design system (proteins, nucleic acids, ligands, etc.)
 """
 from collections import UserList
-from typing import List
+from collections.abc import Sequence
+from typing import Mapping
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType, Metadata
@@ -121,7 +122,7 @@ class SystemInstance(UserList):
     """
     def __init__(
         self,
-        entity_instances: EntityInstance | List[EntityInstance],
+        entity_instances: EntityInstance | Sequence[EntityInstance],
         score: float | None = None,
         confidence: float | None = None,
         # metadata: Metadata | None = None,
@@ -154,7 +155,7 @@ class SystemInstance(UserList):
 
 
 class System(UserList):
-    def __init__(self, entities: Entity | List[Entity]):
+    def __init__(self, entities: Entity | Sequence[Entity]):
         """
         Create new biomolecular system for modeling/design
 
@@ -265,3 +266,6 @@ class Protein(Entity):
             sequences=sequences,
             structures=structures,
         )
+
+# mapping from entity index to positions in entity (e.g. for fixing positions)
+EntityPosList = Mapping[int, Sequence[int]]

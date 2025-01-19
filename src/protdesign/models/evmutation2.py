@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
-from protdesign.entity import System, SystemInstance, EntityInstance
+from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList
 from protdesign.constants import MASK
 from protdesign.sequence import valid_protein_sequence
 from protdesign.utils import ensure_sequence, model_param_context
@@ -274,8 +274,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def generate(
         self,
         num_designs: int,
-        entities: Sequence[int] | None = None,  # TODO: rework this as well?
-        fixed_pos: Sequence[Sequence[int]] | None = None,   # TODO: rework this to Dict[Sequence[int]] with custom type
+        entities: Sequence[int] | None = None,
+        fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
@@ -284,24 +284,37 @@ class EVmutation2(BaseModel, Scorer, Generator):
         """
         self.ready_or_raise()
 
+        # verify validity of entity selection, even if not used since
+        # at this point method can only handle single entity
         if entities is not None:
             entities = ensure_sequence(entities)
             if len(entities) != 1 or entities[0] != 0:
                 raise ValueError("Can only design single entity (entities = [0] | None)")
         else:
+            # not used for now
             entities = [0]
+
+        target = self.system[0]
 
         # extract fixed pos for single chain
         if fixed_pos is not None:
-            if len(fixed_pos) != len(entities):
+            if len(fixed_pos) != 1 or list(fixed_pos)[0] != 0:
                 raise ValueError(
-                    "There must be one list of fixed positions (possibly empty) for ech designed entity"
+                    "Only accepting position mapping for entity 0"
                 )
             fixed_pos = set(fixed_pos[0])
+            valid_pos = {
+                pos for pos, _ in enumerate(target.rep, start=target.first_index)
+            }
+            invalid = fixed_pos - valid_pos
+            if len(invalid) > 0:
+                raise ValueError(f"Invalid fixed positions: {invalid}")
         else:
             fixed_pos = set()
 
-        target = self.system[0]
+        if len(fixed_pos) == len(target.rep):
+            raise ValueError("All positions fixed, need to sample at least one position")
+
         # mark which positions to design (with mask symbol)
         base_seq = [
             symbol if pos in fixed_pos else MASK
@@ -309,6 +322,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 target.rep, start=target.first_index
             )
         ]
+        print(base_seq)  # TODO: remove
 
         with (
             model_param_context(self._load_model, self._delete_model, self.keep_model),
@@ -322,13 +336,13 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 num_designs_adj = num_designs
 
             logger.warning(
-                "Sampling using a very inefficient O(N^3) implementation which needs to be "
+                "Sampling using a preliminary inefficient O(N^3) implementation which needs to be "
                 "improved to O(N^2) for production use"
             )
 
             # note: method has @torch.inference_mode() so no_grad not necessary here
             # TODO: update sampling method to update generation status dynamically with callback
-            designs = self.model.decoder.sample_inefficient(
+            designs, _ = self.model.decoder.sample_inefficient(
                 single=s,
                 pairwise=p,
                 pos_mask=pos_mask,
@@ -344,7 +358,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # always rescore the designs later if needed)
 
         # prepend reference sequence, and create instances
-        ref_and_designs = [target.rep] + list(designs[0].seq)
+        ref_and_designs = [target.rep] + list(designs.seq)
         instances = [
             SystemInstance(
                 EntityInstance(rep=rep)
@@ -362,7 +376,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
             ) for seq, score in zip(ref_and_designs, scores)
         ]
 
-        # return designs, remove reference in first position
+        # return designs, remove reference in first position again
         return instances_with_score[1:]
 
     def score(

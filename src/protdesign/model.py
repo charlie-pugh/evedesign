@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
-from protdesign.entity import System, SystemInstance
+from protdesign.entity import System, SystemInstance, EntityPosList
 from protdesign.types import StatusCallback
 
 
@@ -63,6 +63,9 @@ class Scorer(Protocol):
 
         Note that logits are not relative to any particular sequence (e.g. "wildtype"), but
         meant to be interpreted relative to each other (i.e. should be treated as raw logits)
+        *per* sampled instance/entity/position combination
+
+        TODO: how handle different types of alphabets sampled at the same time?
 
         TODO: if we encounter at least one relevant case of a method that is able to
           compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
@@ -163,13 +166,14 @@ class Generator(Protocol):
 
     # TODO: add parameters to bias or select/avoid amino acids (global or position-specific)
     # TODO: add parameter to allow indels (also need to specify min/max length range)
+    # TODO: add parameters for sampling strategy where available (e.g. min-p, top-k, etc.)
     """
     @abstractmethod
     def generate(
         self,
         num_designs: int,
         entities: Sequence[int] | None = None,
-        fixed_pos: Sequence[Sequence[int]] | None = None,
+        fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
@@ -186,14 +190,13 @@ class Generator(Protocol):
         num_designs
             Number of designs to generate
         entities
-            Indices of entities in system that should be designed during generation (others will be kept fixed)
+            Indices of entities in system that should be designed during generation (others will be kept fixed).
             If None, will attempt to design all entities.
         fixed_pos
-            Length of outer list should correspond to length of entities parameter. Leave inner list empty
-            if all positions in that entity should be designed (i.e. none are fixed). If this parameter is used,
-            entities parameter must be defined to match fixed_pos to corresponding entity indices.
-            Numbering of fixed positions should match to sequence numbering of system entity representation
-            (with corresponding value of first_index, by default 1; i.e. one-based indexing of positions!)
+            Mapping from entity index to positions that should be fixed during design. Any entity referenced
+            in the mapping must be also included in the entities parameter. Numbering of fixed positions must match
+            sequence numbering of system entity representation (with corresponding value of first_index,
+            by default 1; i.e. one-based indexing of positions!)
         temperature
             Sampling temperature (higher values generate more diversity)
         status_callback
