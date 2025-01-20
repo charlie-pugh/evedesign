@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, List, Self, Tuple, Sequence
 import numpy as np
+import pandas as pd
 from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
 from protdesign.types import StatusCallback
 
@@ -51,7 +52,7 @@ class Scorer(Protocol):
         entities: Sequence[int],
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+    ) -> pd.DataFrame:
         """
         Compute scores for all substitutions in a single position
         across a batch of sequences (single position can differ between instances), e.g.
@@ -90,8 +91,10 @@ class Scorer(Protocol):
 
         Returns
         -------
-        Matrix of logit scores (seq x aa); first dimension indexes along different instances,
-        second dimension indexes over different states
+        Dataframe with raw logit scores (seq x aa); rows index over entity/instance/position triplets
+        columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
+        entities and positions. Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
+        missing predictions must be encoded by np.nan.
         """
         pass
 
@@ -102,7 +105,7 @@ class Scorer(Protocol):
         entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+    ) -> pd.DataFrame:
         """
         Compute all single substitutions to one particular instance (aka "single mutation scan")
         batching across different positions. This is different to score_conditional() which
@@ -131,9 +134,10 @@ class Scorer(Protocol):
 
         Returns
         -------
-        # TODO: review and update as needed
-        Matrix of logit scores (pos x aa); first dimension indexes over positions and second
-        dimension indexes over possible substitutions.
+        Dataframe with log-odds scores (seq x aa) relative to instance; rows index over
+        entity/position/ref triplets, columns index over different symbols (amino acids etc.).
+        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
+        missing predictions must be coded by np.nan.
         """
         pass
 
@@ -156,6 +160,7 @@ class Scorer(Protocol):
          so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
          and damaging substitutions  a score < 0. This differs from score_conditional, where there is
          no notion of a "wildtype" sequence to compute relative scores to.
+
         2. Implementations of this method may either compute mutant and reference scores for substraction
          with the score() method or draw on any specialized implementations of single and higher-order mutation
          scoring that are more accurate / efficient.
@@ -221,7 +226,7 @@ class Generator(Protocol):
 
         Returns
         -------
-        Designed instances (sequences/structures) of system
+        Designed instances (sequences/structures) of system (guaranteed to contain at least num_design instances)
         """
         pass
 

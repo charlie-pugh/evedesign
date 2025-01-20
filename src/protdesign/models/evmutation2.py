@@ -11,7 +11,7 @@ from loguru import logger
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.constants import MASK
+from protdesign.constants import MASK, VALID_AA_OR_GAP_SORTED
 from protdesign.sequence import valid_protein_sequence
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
@@ -142,7 +142,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         # this should be ensured by construction of system but check again to be safe
         if not valid_protein_sequence(
-            target.rep, allow_mask=True, allow_gap=False, allow_ambiguous=True
+            target.rep, allow_mask=True, allow_gap=True, allow_ambiguous=True
         ):
             return False, "Input sequence may only contain AA symbols or mask"
 
@@ -392,15 +392,17 @@ class EVmutation2(BaseModel, Scorer, Generator):
         scores = self.score(instances)
         ref_score = scores[0]
 
+        # remove reference in first position again
         instances_with_score = [
             SystemInstance(
                 EntityInstance(rep=seq),
                 score=score - ref_score
             ) for seq, score in zip(ref_and_designs, scores)
-        ]
+        ][1:]
 
-        # return designs, remove reference in first position again
-        return instances_with_score[1:]
+        assert len(instances_with_score) >= num_designs, "Not returning minimum guaranteed number of designs"
+
+        return instances_with_score
 
     def score(
         self,
@@ -436,6 +438,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
             level="seq_idx"
         ).mean().sort_index()
 
+        assert len(scores_agg) == len(instances), "Length of scores does not length of instances"
+
         # return as numpy vector
         return scores_agg["score"].values
 
@@ -445,7 +449,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
         entity: int = 0,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+    ) -> pd.DataFrame:
+        """
+        Note: could express this function through newer score_conditionals to simplify codebase
+        and avoid redundancy (either here, or inside picasso_model package, tbd)
+        """
         self.ready_or_raise()
 
         # check instance against molecular system, requiring fixed length of sequence
@@ -490,18 +498,32 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     batch_size=self.decoder_batch_size,
                 )
 
-            # assemble multiple scores and average logits
-            effects = pd.concat(
-                effects, axis=0, names=["encoder_sample"]
-            ).groupby(
-                level=["pos", "wt_aa"]
-            ).mean()
+        # assemble multiple scores
+        effects = pd.concat(
+            effects, axis=0, names=["encoder_sample"]
+        )
 
-        # TODO: rename index level
-        # TODO: assign entity index to table
-        # TODO: remove symbols except AAs, gap and mask (also drop "wt" column)
-        # TODO: define good return type (custom dataframe?)
-        # TODO: transform results into proper format (axes annotation, position/AA ordering, right alphabet)
+        # subtract WT score, average and limit to relevant output symbols
+        effects = effects.sub(
+            effects["wt"], axis=0,
+        ).groupby(
+            level=["pos", "wt_aa"]
+        ).mean().reindex(
+            VALID_AA_OR_GAP_SORTED, axis=1
+        )
+
+        effects.index.names = ["pos", "ref"]
+
+        # add entity 0 to index
+        effects = pd.concat(
+            {entity: effects}, names=["entity"]
+        )
+
+        assert (
+            (positions is None and len(effects) == len(target.rep)) or
+            (positions is not None and len(effects) == len(positions))
+        ), "Invalid number of positions in output dataframe"
+
         return effects
 
     def score_mutants(
@@ -577,7 +599,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         entities: Sequence[int],
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+    ) -> pd.DataFrame:
         self.ready_or_raise()
 
         # validate instance sequences
@@ -590,6 +612,9 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # validate entity specification (only handle single entity for now)
         if set(entities) != {0}:
             raise ValueError("Can only specify entities with index 0")
+
+        if not len(instances) == len(entities) == len(positions):
+            raise ValueError("Sequences for instances, entities and positions must all have same length")
 
         target = self.system[0]
 
@@ -618,12 +643,19 @@ class EVmutation2(BaseModel, Scorer, Generator):
             )
 
         # average encoder and decoder samples
-        scores_agg = scores.groupby(
-            level=["seq_idx", "pos"]
-        ).mean().sort_index()
+        conditionals = scores.groupby(
+            level=["seq_idx", "pos"], sort=False
+        ).mean().reindex(
+            VALID_AA_OR_GAP_SORTED, axis=1
+        )
+        conditionals.index.names =["seq", "pos"]
 
-        # TODO: assign entity index to table
-        # TODO: remove symbols except AAs, gap and mask
-        # TODO: define good return type (custom dataframe?)
-        return scores_agg
+        # add entity 0 to index
+        conditionals = pd.concat(
+            {0: conditionals}, names=["entity"]
+        )
+
+        assert len(conditionals) == len(entities), "Length mismatch between output and input"
+
+        return conditionals
 
