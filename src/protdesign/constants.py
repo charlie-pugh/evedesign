@@ -36,3 +36,10 @@ AA_TO_INDEX = {
 INDEX_TO_AA = {
     idx: symbol for symbol, idx in AA_TO_INDEX.items() if symbol not in {"U", "B", "Z", "J", "O"}
 }
+
+VALID_AA_TO_INDEX = {
+    symbol: idx for symbol, idx in  AA_TO_INDEX.items() if symbol not in {"U", "B", "Z", "J", "O", "X"}
+}
+
+VALID_AA = set(VALID_AA_TO_INDEX)
+VALID_AA_OR_GAP = VALID_AA | {GAP}

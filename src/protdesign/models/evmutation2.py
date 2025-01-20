@@ -509,7 +509,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         instance: SystemInstance,
         mutants: Sequence[Mutant],
         status_callback: StatusCallback | None = None
-    ) -> None:
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
 
         # check instance against molecular system, requiring fixed length of sequence
@@ -518,25 +518,18 @@ class EVmutation2(BaseModel, Scorer, Generator):
             instance, fixed_length=True, validate_reps=True, raise_invalid=True,
         )
 
-        # extract single target entity from system, nd get sequence from instance
+        # verify if mutants are valid relative to system and instance
+        self.system.valid_mutants(
+            instance, mutants, allow_gap=False, raise_invalid=True
+        )
+
+        # extract single target entity from system, and get sequence from instance
         # (we safely can access this as we have verified instance against system)
         target = self.system[0]
         instance_seq = instance[0].rep
 
-        # verify positions and entities in mutants
-        all_entities = {
-            subs.entity for mutant in mutants for subs in mutant
-        }
-        if all_entities != {0}:
-            raise ValueError("Can only model mutations to entity=0")
-
-        all_positions = {
-            subs.pos for mutant in mutants for subs in mutant
-        }
-        self.valid_positions(all_positions, entity=0, raise_invalid=True)
-
         # transform mutants into format expected by EVmutation2
-        mutants_mapped = [
+        mutants_transformed = [
             [
                 (subs.pos, subs.ref, subs.to) for subs in mutant
             ] for mutant in mutants
@@ -557,7 +550,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 # note: method has @torch.inference_mode() so no_grad not necessary here
                 effects[idx_enc] = self.model.decoder.score_mutants(
                     seq=instance_seq,
-                    mutants=mutants_mapped,
+                    mutants=mutants_transformed,
                     first_index=target.first_index,
                     single=s[[idx_enc]],
                     pairwise=p[[idx_enc]],

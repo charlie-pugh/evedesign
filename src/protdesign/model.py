@@ -13,13 +13,8 @@ class Scorer(Protocol):
     (e.g. density/log likelihood) for existing designs/sequences
     (scalar value per design/sequence)
 
-    All methods of this interface are expected to return raw logits that can be compared
-    relatively within the returned array of scores (but not necessarily between different
-    calls to the function, where normalization e.g. to the target sequence
-    should be employed)
-
-    # TODO: add specialized method to score higher-order mutations (e.g. doubles)?
-    # TODO: add batch size to params? or infer in build() method?
+    Please refer to comments on each function on the excepted semantics and format
+    of the returned scores.
     """
     @abstractmethod
     def score(
@@ -30,6 +25,11 @@ class Scorer(Protocol):
         """
         Score different realizations of the modelled system (e.g. different sequences
         generated from a model)
+
+        Note:
+        1. Scores returned by this function should be raw logits comparable between all instances
+         scored in the same call. Scores between multiple calls do not have to be comparable (user
+         is responsible for including a reference instance for normalization in these cases)
 
         Parameters
         ----------
@@ -57,16 +57,18 @@ class Scorer(Protocol):
         across a batch of sequences (single position can differ between instances), e.g.
         for Gibbs sampling-based generation of multiple designs in parallel.
 
-        This function allows to exploit the fact that often single mutations for
-        one position can be computed more efficiently than arbitrary full sequences
-        (e.g. in Potts model hamiltonian). If no customized implementation is available,
-        this method should still wrap around score() for applications like Gibbs sampling.
+        Note:
+        1. This function allows to exploit the fact that often single mutations for
+         one position can be computed more efficiently than arbitrary full sequences
+         (e.g. in Potts model hamiltonian). If no customized implementation is available,
+         this method should still wrap around score() for applications like Gibbs sampling.
 
-        Note that logits are not relative to any particular sequence (e.g. "wildtype"), but
-        meant to be interpreted relative to each other (i.e. should be treated as raw logits)
-        across possible symbols *per* sampled instance/entity/position combination
+        2. Logits are not relative to any particular sequence (e.g. "wildtype"), but
+         meant to be interpreted relative to each other (i.e. should be treated as raw logits)
+         across possible symbols *per* sampled instance/entity/position combination
 
-        TODO: how handle different types of alphabets sampled at the same time?
+        TODO: how handle different types of alphabets sampled at the same time? Or require that all entities
+         must have same type/alphabet (e.g. protein)
 
         TODO: if we encounter at least one relevant case of a method that is able to
           compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
@@ -103,13 +105,18 @@ class Scorer(Protocol):
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         """
         Compute all single substitutions to one particular instance (aka "single mutation scan")
-        batching across different positions. This is markedly different to score_single_pos() which
+        batching across different positions. This is different to score_conditional() which
         batches substitutions to exactly one single position across many different instances.
 
-        Note that mutation logits should be *relative* to the given instance (like a log-odds score),
-        so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
-        and damaging substitutions  a score < 0. This differs from score_conditional, where there is
-        no notion of a "wildtype" sequence to compute relative scores to.
+        Note:
+        1. Mutation logits should be *relative* to the given instance (like a log-odds ratio),
+         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
+         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+         no notion of a "wildtype" sequence to compute relative scores to.
+
+        2. The implementation of this function can draw on score(), score_conditional(), score_mutants()
+         or any method-specific implementations as needed to provide the most efficient/accurate way
+         to single mutant effect calculation
 
         Parameters
         ----------
@@ -124,6 +131,7 @@ class Scorer(Protocol):
 
         Returns
         -------
+        # TODO: review and update as needed
         Matrix of logit scores (pos x aa); first dimension indexes over positions and second
         dimension indexes over possible substitutions.
         """
@@ -135,7 +143,7 @@ class Scorer(Protocol):
         instance: SystemInstance,
         mutants: Sequence[Mutant],
         status_callback: StatusCallback | None = None
-    ) -> None:
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
         """
         Compute logit scores for a list of mutations to a specified system instance
         (can be any single or higher-order mutants); this method is to allow specialized, more efficient
@@ -143,12 +151,14 @@ class Scorer(Protocol):
         mutant sequence. In case no such specialization is possible or needed for a method, it can simply
         call out to the score() function.
 
-        Note that mutation logits should be *relative* to the given instance (like a log-odds score),
-        so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
-        and damaging substitutions  a score < 0. This differs from score_conditional, where there is
-        no notion of a "wildtype" sequence to compute relative scores to.
-
-        # TODO: mutant format specification, how to best handle mutants across different entities?
+        Note:
+        1. Mutation logits should be *relative* to the given instance (like a log-odds score),
+         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
+         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+         no notion of a "wildtype" sequence to compute relative scores to.
+        2. Implementations of this method may either compute mutant and reference scores for substraction
+         with the score() method or draw on any specialized implementations of single and higher-order mutation
+         scoring that are more accurate / efficient.
 
         Parameters
         ----------
@@ -161,7 +171,7 @@ class Scorer(Protocol):
 
         Returns
         -------
-        # TODO: define and change above
+        Vector of scores, guaranteed to be in the same order as mutants list
         """
         pass
 

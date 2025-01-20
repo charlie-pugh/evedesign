@@ -7,7 +7,16 @@ from typing import Mapping, NamedTuple
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType  #, Metadata
+from protdesign.constants import VALID_AA, VALID_AA_OR_GAP
 from protdesign.utils import ensure_sequence, shorten
+
+# Data structures/types for providing mutation information in structured format
+Mutation = NamedTuple(
+    "Mutation", [("entity", int), ("pos", int), ("ref", str), ("to", str)]
+)
+
+# Mutant is comprised of one or more mutations
+Mutant = Sequence[Mutation]
 
 
 class Entity:
@@ -221,6 +230,67 @@ class System(UserList):
 
         return valid
 
+    def valid_mutants(
+        self,
+        instance: SystemInstance,
+        mutants: Sequence[Mutant],
+        allow_gap: bool = False,
+        raise_invalid: bool = False,
+    ) -> tuple[bool, list[tuple[int, Mutation]]]:
+        """
+        Validate mutants against a system instance
+
+        Parameters
+        ----------
+        instance
+            System instance to check against; assuming this has been previously validated with valid_instance().
+        mutants
+            Verify these mutants against system instance
+        allow_gap
+            If True, consider gap symbol a valid substitution
+        raise_invalid
+            Raise ValueError if any invalid mutants are detected
+
+        Returns
+        -------
+        invalid
+            True if all mutants are valid, False otherwise
+        invalid_subs
+            Tuple of mutant indies and invalid mutations in these mutants (empty if all mutants are valid)
+        """
+        # create mapping of valid position and reference symbol in each biopolymer entity instance with defined
+        # sequence and first_index
+        entity_to_pos = {
+            entity_idx: {
+                pos: ref_symbol for (pos, ref_symbol) in enumerate(
+                    instance[entity_idx].rep, start=entity.first_index
+                )
+            } for entity_idx, entity in enumerate(self.data)
+            if entity.type_ == "protein" and entity.first_index is not None
+            and instance[entity_idx].rep is not None
+        }
+
+        entity_to_valid_subs = {
+            entity_idx: (VALID_AA_OR_GAP if allow_gap else VALID_AA)
+            for entity_idx, entity in enumerate(self.data)
+            if entity.type_ == "protein"
+        }
+
+        invalid_subs = [
+            (i, subs) for (i, mutant) in enumerate(mutants) for subs in mutant if (
+                (subs.entity not in entity_to_pos) or  # valid entity index
+                (subs.pos not in entity_to_pos[subs.entity]) or  # valid position in entity
+                (subs.ref != entity_to_pos[subs.entity][subs.pos]) or  # invalid reference symbol
+                (subs.to not in entity_to_valid_subs[subs.entity])
+            )
+        ]
+
+        invalid = len(invalid_subs) > 0
+
+        if invalid and raise_invalid:
+            raise ValueError(f"Invalid mutants: {invalid_subs}")
+
+        return invalid, invalid_subs
 
 
 class Protein(Entity):
@@ -279,9 +349,3 @@ class Protein(Entity):
 
 # mapping from entity index to positions in entity (e.g. for fixing positions)
 EntityPosList = Mapping[int, Sequence[int]]
-
-Mutation = NamedTuple(
-    "Mutation", [("entity", int), ("pos", int), ("ref", str), ("to", str)]
-)
-
-Mutant = Sequence[Mutation]
