@@ -559,17 +559,17 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     batch_size=self.decoder_batch_size,
                 )
 
-            # assemble multiple scores and average logits
+            # assemble multiple scores and average logits; careful not to resort dataframe so
+            # we keep the original mutant order
             effects = pd.concat(
                 effects, axis=0, names=["encoder_sample"]
             ).groupby(
-                level="mutant"
+                level="mutant",
+                sort=False,
             ).mean()
-            # TODO: make sure sorting order is not messed up
 
-        # TODO: cannot assume that output list is necessarily ordered
-        # TODO: update return type, in signature and also in abstract class
-        return effects
+        # return as simple 1D numpy array
+        return effects.score.values
 
     def score_conditional(
         self,
