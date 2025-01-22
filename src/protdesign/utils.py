@@ -19,7 +19,6 @@ def model_param_context(
     delete_func: Callable[[], None],
     keep_model: bool
 ):
-    # TODO: don't reload
     try:
         load_func()
         yield
