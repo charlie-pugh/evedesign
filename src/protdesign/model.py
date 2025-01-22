@@ -374,6 +374,12 @@ class BaseModel(ABC):
     def ready(self) -> str:
         pass
 
+    @property
+    @abstractmethod
+    # must return system modelled by the current instance (after build), or None otherwise
+    def system(self) -> System | None:
+        pass
+
     def ready_or_raise(self) -> None:
         """
         Verifies if model is ready for predictions by checking ready property,

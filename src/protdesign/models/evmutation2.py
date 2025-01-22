@@ -96,7 +96,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.device = device
 
         # modelled system
-        self.system = None
+        self._system = None
 
         # lazy-load model when needed
         self.model = None
@@ -135,6 +135,10 @@ class EVmutation2(BaseModel, Scorer, Generator):
     @property
     def ready(self):
         return self.system is not None and self.encoding is not None
+
+    @property
+    def system(self) -> System | None:
+        return self._system
 
     @classmethod
     def can_model(cls, system: System) -> Tuple[bool, str]:
@@ -207,7 +211,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.can_model_or_raise(system)
 
         # store system with this instance
-        self.system = system
+        self._system = system
         target = self.system[0]
 
         # load MSA
