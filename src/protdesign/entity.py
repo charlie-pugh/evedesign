@@ -89,6 +89,21 @@ class Entity:
 
         self.first_index = first_index
 
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, Entity):
+            return False
+
+        # do not compare sequences and structures are these are auxiliary resources
+        # for modeling the entity
+        return (
+            self.type_ == other.type_ and
+            self.rep == other.rep and
+            self.id_ == other.id_ and
+            self.copies == other.copies and
+            self.first_index == other.first_index
+        )
+
 
 class EntityInstance:
     """
@@ -178,8 +193,21 @@ class System(UserList):
         super().__init__(entities)
 
     def __eq__(self, other):
-        # TODO: implement equality of molecular systems: same length, and equality of all attributes per entity
-        raise NotImplementedError()
+        # only ever accept other systems for equality
+        if not isinstance(other, System):
+            return False
+
+        # systems must have same length
+        if not len(self) == len(other):
+            return False
+
+        # two systems are equal if all contained entities are equal
+        # (in same order)
+        for ent_self, ent_other in zip(self, other):
+            if ent_self != ent_other:
+                return False
+
+        return True
 
     def valid_instance(
         self,

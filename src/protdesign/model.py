@@ -566,3 +566,12 @@ class BaseModel(ABC):
             )
 
         return valid_positions
+
+
+class BaseModelAndScorer(BaseModel, Scorer, ABC):
+    """
+    Auxiliary class for typing pa
+
+    TODO: If we find that all Scorers need to be a BaseModel, better to have Scorer inherit from BaseModel
+    """
+    pass

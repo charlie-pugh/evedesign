@@ -35,10 +35,16 @@ def status_start(
         status_callback("running", None, message)
 
 def status_done(
-        status_callback: StatusCallback | None, message: str | None = None
+    status_callback: StatusCallback | None, message: str | None = None
 ):
     if status_callback is not None:
         status_callback("done", None, message)
+
+def status_progress(
+    status_callback: StatusCallback | None, progress: float
+):
+    if status_callback is not None:
+        status_callback("running", progress, None)
 
 def shorten(text: str, max_len=50):
     return (text[:max_len] + "...") if len(text) > 50 else text
