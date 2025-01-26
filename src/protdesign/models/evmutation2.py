@@ -337,10 +337,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
+        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
         """
-        TODO: support min_p sampling and sample_gaps parameters eventually
+        TODO: support min_p sampling parameter eventually
         """
         self.ready_or_raise()
 
@@ -406,8 +407,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 batch_size=self.decoder_batch_size,
                 num_samples=num_designs_adj,
                 temperature=temperature,
+                sample_gaps=deletions,
                 # min_p=None,  # TODO: implement
-                # sample_gaps=None,  # TODO: implement
             )
 
         # score the designs relative to entity sequence (ideally, user supplied WT sequence, but user can

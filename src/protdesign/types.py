@@ -1,6 +1,6 @@
 from typing import Literal, Callable, Any, Dict
 
-BioPolymer = Literal["protein"]
+BioPolymer = Literal["protein", "dna", "rna"]
 EntityType = BioPolymer
 DeviceType = Literal["cpu", "cuda", "mps"]
 BatchSize = int | Literal["auto"] | None

@@ -197,6 +197,7 @@ class Generator(Protocol):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
+        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
         """
@@ -221,6 +222,8 @@ class Generator(Protocol):
             by default 1; i.e. one-based indexing of positions!)
         temperature
             Sampling temperature (higher values generate more diversity)
+        deletions
+            If True, allow the model to sample deletions relative to the entities representation
         status_callback
             Callback function to track computation status
 
@@ -572,6 +575,7 @@ class BaseModelAndScorer(BaseModel, Scorer, ABC):
     """
     Auxiliary class for typing pa
 
-    TODO: If we find that all Scorers need to be a BaseModel, better to have Scorer inherit from BaseModel
+    TODO: If we find that all Scorers need to be a BaseModel, better to have Scorer inherit from BaseModel;
+     we already know from the Gibbs sampler that not all Generators will be a BaseModel
     """
     pass

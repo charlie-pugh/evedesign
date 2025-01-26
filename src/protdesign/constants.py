@@ -46,3 +46,10 @@ VALID_AA_SORTED = sorted(VALID_AA)
 
 VALID_AA_OR_GAP = VALID_AA | {GAP}
 VALID_AA_OR_GAP_SORTED = sorted(VALID_AA) + [GAP]
+
+# placeholder definitions for nucleotides
+VALID_DNA = {"A", "C", "G", "T"}
+VALID_DNA_OR_GAP = VALID_DNA | {GAP}
+
+VALID_RNA = {"A", "C", "G", "U"}
+VALID_RNA_OR_GAP = VALID_RNA | {GAP}
