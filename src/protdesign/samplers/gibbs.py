@@ -274,7 +274,7 @@ class GibbsSampler(Generator):
         entities: list[int],
         alphabet: list[str],
         pos_to_design: list[Tuple[int, int]],
-    ) -> Tuple[np.ndarray, dict[int, int], dict[int, int]]:
+    ) -> Tuple[np.ndarray, dict[int, int], dict[int, int], np.ndarray, np.ndarray]:
         """
         Initialize samples based on system and random sampling
 
@@ -307,6 +307,10 @@ class GibbsSampler(Generator):
             entity_idx: len(self._system[entity_idx].rep) for entity_idx in entities
         }
 
+        # array-based maps for fancy indexing
+        entity_to_index_array = np.zeros((max(entities) + 1), dtype="int")
+        entity_to_first_index_array = np.zeros((max(entities) + 1), dtype="int")
+
         # initialize empty design matrix for number to num_designs x designed_entity x max_num_positions
         samples = np.empty(
             (num_designs, len(entities), max(entity_to_len.values())),
@@ -316,8 +320,13 @@ class GibbsSampler(Generator):
         # TODO: arrays for length and index mapping
 
         alphabet_set = set(alphabet)
-        for entity_idx in entities:
+        for array_idx, entity_idx in enumerate(entities):
             entity = self._system[entity_idx]
+
+            # initialize array-based mappings
+            entity_to_index_array[entity_idx] = array_idx
+            entity_to_first_index_array[entity_idx] = entity.first_index
+
             # randomize full sequence across all chains
             seq_len = len(entity.rep)
 
@@ -342,7 +351,7 @@ class GibbsSampler(Generator):
                 if (entity_idx, pos) not in pos_to_design:
                     samples[:, array_idx, pos - entity.first_index] = symbol
 
-        return samples, entity_to_array_idx, entity_to_len
+        return samples, entity_to_array_idx, entity_to_len, entity_to_index_array, entity_to_first_index_array
 
     @classmethod
     def _init_scan_order(
@@ -430,8 +439,9 @@ class GibbsSampler(Generator):
         # initialize samples for all designed chains, we represent these as numpy arrays
         # internally since we assume entity representations that all have the same length;
         # we will assemble these into strings for passing into individual scorers
-        # TODO: or use joint matrix, is this easier to update in loop below
-        samples, entity_to_array_idx, entity_to_len = self._init_samples(
+        (
+            samples, entity_to_array_idx, entity_to_len, entity_to_index_array, entity_to_first_index_array
+        ) = self._init_samples(
             num_designs, entities, alphabet, pos_to_design
         )
 
@@ -545,16 +555,22 @@ class GibbsSampler(Generator):
                 sampled_tokens = alphabet_array[sampled_token_idx]
 
                 # update sample matrix and instances for next step
-                print(step_ent, step_pos, sampled_tokens)  # TODO: remove
-
-                # TODO: properly index entities and positions
                 assert len(design_idx_all) == len(step_ent) == len(step_pos) == len(sampled_tokens)
-                # samples[
-                #     design_idx_all, map(step_ent), step_pos - MAP(step_pos)
-                # ] = sampled_tokens
 
-                # TODO: implement with fancy indexing
-                # TODO: also attach chain information to metadata
+                print(step_ent, step_pos, sampled_tokens)  # TODO: remove
+                # print("first index", entity_to_index_array[step_ent])  # TODO: remove
+                print("first index", step_pos - entity_to_first_index_array[step_ent])  # TODO: remove
+
+                samples[
+                    design_idx_all,
+                    entity_to_index_array[step_ent],
+                    step_pos - entity_to_first_index_array[step_ent],
+                ] = sampled_tokens
+
+                # TODO: verify index went through correctly
+                # TODO: update entities based on new samples array state
+
+                # TODO: also record and eventually attach chain information to metadata
                 break  # TODO: remove
 
             if sweep >= 0:  # TODO: remove
