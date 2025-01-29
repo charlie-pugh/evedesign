@@ -3,23 +3,39 @@ Sequence generation with Gibbs sampling.
 
 Implementation assumes fixed length of sequences (no inserts, deletions can be sampled if part of alphabet).
 """
-from random import choices, choice
+from sys import exec_prefix
 from typing import Sequence, Literal, Callable, Tuple
-from loguru import logger
 import numpy as np
-from protdesign.constants import VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED
+import pandas as pd
+import torch
+from protdesign.constants import VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED, GAP
 from protdesign.model import Generator, BaseModelAndScorer
-from protdesign.entity import SystemInstance, EntityPosList, EntityInstance, Entity
+from protdesign.entity import SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback, EntityType
 from protdesign.utils import status_progress, ensure_sequence
 
 ScanOrder = Literal[
-    "random_without_replacement", "random_with_replacement", "sequential"
+    "random", "sequential"
 ]
-InitStrategy = Literal["random", "system"]
 
-# maps from initial temperature, current step and total number of steps to current temperature for step
-TemperatureSchedule = Callable[[float, int, int], float]
+InitStrategy = Literal[
+    "random", "system"
+]
+
+# maps from initial temperature, current sweep and total number of sweeps to current temperature for sweep
+TemperatureSchedule = Callable[
+    [
+        float,  # initial temperature (via generate() parameter)
+        int,  # current sweep
+        int,  # total number of sweeps
+        int,  # current step
+        int,  # total number of steps per weep
+    ],
+    float   # current temperature
+]
+
+_ENTITY = "entity"
+_POS = "pos"
 
 
 class GibbsSampler(Generator):
@@ -52,7 +68,7 @@ class GibbsSampler(Generator):
         weights: Sequence[float] | None = None,
         num_sweeps: int = 1000,
         init_strategy: InitStrategy = "random",
-        scan_order: ScanOrder = "random_without_replacement",
+        scan_order: ScanOrder = "random",
         temperature_schedule: TemperatureSchedule | None = None,
         require_strict_pos : bool = True,
     ):
@@ -114,6 +130,12 @@ class GibbsSampler(Generator):
                     f"Scorer {i} system is not equal to first system (all systems must be identical across scorers)"
                 )
 
+        if scan_order not in ["random", "sequential"]:
+            raise ValueError("Invalid scan order")
+
+        if init_strategy not in ["random", "system"]:
+            raise ValueError("invalid initialization strategy")
+
         # make a copy of system for easier access
         self._system = scorers[0].system
 
@@ -157,7 +179,7 @@ class GibbsSampler(Generator):
         entities: Sequence[int] | None,
         fixed_pos: EntityPosList | None,
         deletions: bool,
-    ) -> Tuple[list[int], EntityType, list[str], list[Tuple[int, int]]]:
+    ) -> Tuple[list[int], EntityType, np.ndarray, list[Tuple[int, int]]]:
         """
         Helper method to verify specified entities and fixed positions, and compute
         list of positions in entities that are used for design
@@ -245,7 +267,7 @@ class GibbsSampler(Generator):
                 f"Entity type '{designed_type}' not yet supported"
             )
 
-        return entities, designed_type, alphabet, design_pos
+        return entities, designed_type, np.array(alphabet), design_pos
 
     def _init_samples(
         self,
@@ -300,13 +322,14 @@ class GibbsSampler(Generator):
 
         return samples
 
-    def _scan_order(
-        self,
+    @classmethod
+    def _init_scan_order(
+        cls,
         num_designs: int,
         pos_to_design: list[tuple[int, int]],
     ) -> np.ndarray:
         """
-        Determine/sample scan order for current sweep
+        Initialize sequential scan order
 
         Parameters
         ----------
@@ -317,38 +340,53 @@ class GibbsSampler(Generator):
 
         Returns
         -------
-        Matrix with sweep indices along columns (each chain has its own row)
+        2D array with sweep indices along columns (each chain has its own row)
         """
         # number of positions to design defines length of one sweep
         num_pos = len(pos_to_design)
-        rng = np.random.default_rng()
 
         # turn into numpy array of tuples and repeat once per chain
-        pos_array = np.array(pos_to_design, dtype="int, int")
+        pos_array = np.array(
+            pos_to_design, dtype=[(_ENTITY, "int"), (_POS, "int")]
+        )
+
         sequential_order = np.tile(
             pos_array, num_designs
         ).reshape(
             num_designs, num_pos
         )
 
-        if self.scan_order == "sequential":
-            # keep order as is
-            order = sequential_order
-        elif self.scan_order == "random_with_replacement":
-            # TODO
-            order = None
-        elif self.scan_order == "random_without_replacement":
-            # shuffle independently per chain
-            order = rng.permuted(sequential_order, axis=1)
-        else:
-            raise ValueError(f"Invalid scan order {self.scan_order}")
+        return sequential_order
 
-        # TODO: profile this
-        print(order.shape)
-        # print("ORDER", order)  # TODO: remove
-        print(order[0])
-        print(order[2])
-        return order
+    @classmethod
+    def _verify_and_update_scores(
+        cls,
+        scores: pd.DataFrame,
+        deletions: bool,
+        scorer_idx: int,
+        alphabet: Sequence[str],
+        num_designs: int,
+    ):
+        assert len(scores) == num_designs, "Invalid length of scoring dataframe"
+
+        if deletions:
+            if GAP not in scores.columns:
+                raise ValueError(
+                    f"Scorer {scorer_idx} did not provide values for gap, but deletions=True"
+                )
+        else:
+            if GAP in scores.columns:
+                scores = scores.drop([GAP], axis=1)
+
+        returned_alphabet = "".join(scores.columns)
+        expected_alphabet = "".join(alphabet)
+
+        assert (
+            returned_alphabet == expected_alphabet
+        ), f"Invalid alphabet returned by scorer {scorer_idx} ({returned_alphabet} vs {expected_alphabet}"
+
+        return scores
+
 
     def generate(
         self,
@@ -372,117 +410,119 @@ class GibbsSampler(Generator):
             num_designs, entities, alphabet, pos_to_design
         )
 
+        # initialize full instances to pass to scorers;
+        # numpy view speeds up instance creation by ~10x for large sample sets
+        # compared to iteration and string joining
+        # TODO: move to its own method to reuse below
+        # TODO: make this a build_or_update method?
+        samples_joined = {
+            entity_idx: sample_mat.view(f"<U{sample_mat.shape[1]}")
+            for entity_idx, sample_mat in samples.items()
+        }
+
+        # build molecular system instance list; will update in-place with
+        # new sequences after each Gibbs step
+        instances = [
+            SystemInstance([
+                EntityInstance(
+                    rep=(
+                        samples_joined[entity_idx][design_idx][0]
+                        if entity_idx in entities
+                        else self._system[entity_idx].rep
+                    )
+                ) for entity_idx, entity in enumerate(self._system)
+            ]) for design_idx in range(num_designs)
+        ]
+
+        # initialize sequential scan order for all positions to be designed (will be reshuffled
+        # per sweep in case random scan order is chosen)
+        order = self._init_scan_order(num_designs, pos_to_design)
+        rng = np.random.default_rng()
+
         # iterate through sweeps (sweep = one full scan of all designed positions)
         for sweep in range(self.num_sweeps):
             # update status (fraction of sweeps completed)
             status_progress(status_callback, sweep / self.num_sweeps)
 
-            # determine scan order for all of the chains for current sweep (random or sequential);
-            # only determine order for current sweep to not allocate a huge matrix that sits around unused
-            order = self._scan_order(num_designs, pos_to_design)
+            # number of steps per sweep is the number of positions we want to design
+            num_steps = len(pos_to_design)
 
-            # compute temperature for current sweep based if schedule is defined, otherwise
-            # use same temperature
-            # TODO: also include step in current sweep in callback
-            if self.temperature_schedule is not None:
-                step_temperature = self.temperature_schedule(
-                    temperature, sweep, self.num_sweeps
-                )
-            else:
-                step_temperature = temperature
+            # permute the current sweep scan order if using random order
+            # (we always sample without replacement for now for simplicity);
+            # note that rng.shuffle is not applicable here since all chains
+            # would be shuffled in same way
+            if self.scan_order == "random":
+                order = rng.permuted(order, axis=1)
 
-            print("sweep", sweep, "... T =", step_temperature)  # TODO: remove
-            break
+            assert (
+                order.shape[0] == num_designs and order.shape[1] == num_steps
+            ), "Scan order array has wrong shape"
 
-            # apply scorers to current instances
-            # TODO: need to create current instances from matrices (later on update)...
+            # iterate through all steps for current sweep
+            for step in range(num_steps):
+                # determine temperature for current sweep/step if we have a temperature schedule in place
+                if self.temperature_schedule is not None:
+                    step_temp = self.temperature_schedule(
+                        temperature, sweep, self.num_sweeps, step, num_steps
+                    )
+                else:
+                    step_temp = temperature
 
-            # TODO: how to best parallelize? Decouple GPU computation? Parallelize inside constraints?
-            # TODO: handle gap via parameter during sampling
+                # extract entity and position to sample for each chain in current step as flat arrays
+                step_ent = order[_ENTITY][:, step]
+                step_pos = order[_POS][:, step]
+                assert len(step_ent) == len(step_pos) == num_designs
 
-            # TODO: replace nan with -inf
-            # TODO: is there a np.log_softmax?
-            # TODO: sign convention for scores
+                # apply all scorers to current instances and compute weighted sum of scores;
+                # we could decouple GPU and CPU-based computations here with multiprocessing
+                # eventually to increase speed
+                agg_scores = None
+                for scorer_idx, (scorer, weight) in enumerate(zip(self.scorers, self.weights)):
+                    # compute weighted score
+                    s = scorer.score_conditional(
+                        instances, step_ent, step_pos
+                    ) * weight
 
-            # choose update and apply
-            # TODO
-            #  conditional_probs = np.exp(-U / self.T)
-            #  conditional_probs = conditional_probs / np.nansum(conditional_probs)
-            #  s[k] = np.random.choice(np.arange(1, 21), p=conditional_probs)
+                    # verify conditional score dataframe, and remove gap if present but not sampling deletions
+                    s = self._verify_and_update_scores(
+                        s, deletions=deletions, scorer_idx=scorer_idx, alphabet=alphabet, num_designs=num_designs
+                    )
 
-            # TODO: log times per scorer if verbose
+                    if agg_scores is None:
+                        agg_scores = s
+                    else:
+                        agg_scores = agg_scores.add(s, axis=0)
 
-            if sweep > 10:
+                    assert (
+                        len(agg_scores) == num_designs
+                    ), f"Invalid length of aggregated scoring matrix after scorer {scorer_idx}"
+
+                # Gibbs step
+
+                # replace any missing values to exclude from sampling, and scale by temperature for current step;
+                # Note we are using an inverted scale here (e.g. not -E/T but E/T where higher E means "better");
+                # we go through pytorch here to use the parallelized multionomial implementation which is much
+                # more suitable here
+                scores_scaled = torch.from_numpy(
+                    agg_scores.replace(np.nan, np.NINF).values
+                ) / step_temp
+
+                p = scores_scaled.softmax(dim=-1)
+
+                sampled_token_idx = torch.multinomial(
+                    p, num_samples=1
+                ).flatten().numpy()
+
+                sampled_tokens = alphabet[sampled_token_idx]
+
+                # update sample matrix and instances for next step
+                print(step_ent, step_pos, sampled_tokens)  # TODO: remove
+                # TODO: implement with fancy indexing
+                # TODO: also attach chain information to metadata
                 break  # TODO: remove
 
-        # # Calculate the conditional probabilities
-        # conditional_probs = np.exp(-U / self.T)
-        #
+            if sweep >= 0:
+                print("BREAK", sweep)
+                break  # TODO: remove
 
-        # # And normalize them
-        # conditional_probs = conditional_probs / np.nansum(conditional_probs)
-        #
-        # if type(self.pos_constraint) == type(None):
-        #
-        #     # Without a position constrant, just choose from 20 amino acids
-        #     s[k] = np.random.choice(np.arange(1, 21), p=conditional_probs)
-        #
-        # else:
-        #     # Or choose from the allowed amino acids at that position
-        #     s[k] = np.random.choice(np.arange(1, 21)[self.pos_constraint[k]], p=conditional_probs)
-
-        # TODO: think about suitable parallelization strategies... can we parallelize GPU and CPU calculation?
-        # TODO: note that GPU will typically be the bottleneck that all samples need to pass through
-        #  (except for CPU-only calculations)
-
-        # select alphabet for initialization
-        # if designed_type == "protein":
-        #     alphabet = VALID_AA_OR_GAP if deletions else VALID_AA
-        # elif designed_type == "dna":
-        #     alphabet = VALID_DNA_OR_GAP if deletions else VALID_DNA
-        # elif designed_type == "rna":
-        #     alphabet = VALID_RNA_OR_GAP if deletions else VALID_RNA
-        # else:
-        #     raise NotImplementedError(
-        #         f"Entity type '{designed_type}' not supported"
-        #     )
-        # alphabet = list(alphabet)
-
-        # def _init_rep(entity_idx: int, entity: Entity) -> str:
-        #     # create random sequence of same length as entity rep
-        #     # (may not use all of it depending on which positions are designed and which are fixed)
-        #     random_rep = choices(alphabet, k=len(entity.rep))
-        #
-        #     # TODO: conditional code if all positions are designed, none, or mixed?
-        #     # TODO: this incurs major runtime cost
-        #     # s = [
-        #     #     (random_symbol if (entity_idx, pos) in pos_to_design else system_symbol)
-        #     #     for pos, (system_symbol, random_symbol)
-        #     #     in enumerate(
-        #     #         zip(entity.rep, random_rep), start=entity.first_index
-        #     #     )
-        #     # ]
-        #
-        #     # s = [
-        #     #     (choice(alphabet) if (entity_idx, pos) in pos_to_design else system_symbol)
-        #     #     for pos, system_symbol
-        #     #     in enumerate(
-        #     #         entity.rep, start=entity.first_index
-        #     #     )
-        #     # ]
-        #     return "".join(random_rep)
-        #
-        # samples = [
-        #     SystemInstance([
-        #         EntityInstance(
-        #             _init_rep(entity_idx, entity)
-        #         ) for entity_idx, entity in enumerate(self._system)
-        #     ]) for _ in range(num_designs)
-        # ]
-        #
-        # return samples
-        # return []
-
-        # TODO: attach results to instances
-        # TODO: create final instances (with chain in metadata) and return
-        return samples
+        return instances

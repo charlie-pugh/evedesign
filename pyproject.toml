@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["numpy", "pandas", "loguru"]
+dependencies = ["numpy", "pandas", "torch", "loguru"]
 
 [project.urls]
 Documentation = "https://github.com/thomashopf/protdesign#readme"
