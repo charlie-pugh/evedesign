@@ -3,7 +3,6 @@ Sequence generation with Gibbs sampling.
 
 Implementation assumes fixed length of sequences (no inserts, deletions can be sampled if part of alphabet).
 """
-from sys import exec_prefix
 from typing import Sequence, Literal, Callable, Tuple
 import numpy as np
 import pandas as pd
@@ -179,7 +178,7 @@ class GibbsSampler(Generator):
         entities: Sequence[int] | None,
         fixed_pos: EntityPosList | None,
         deletions: bool,
-    ) -> Tuple[list[int], EntityType, np.ndarray, list[Tuple[int, int]]]:
+    ) -> Tuple[list[int], EntityType, list[str], list[Tuple[int, int]]]:
         """
         Helper method to verify specified entities and fixed positions, and compute
         list of positions in entities that are used for design
@@ -267,7 +266,7 @@ class GibbsSampler(Generator):
                 f"Entity type '{designed_type}' not yet supported"
             )
 
-        return entities, designed_type, np.array(alphabet), design_pos
+        return entities, designed_type, alphabet, design_pos
 
     def _init_samples(
         self,
@@ -401,6 +400,7 @@ class GibbsSampler(Generator):
         entities, designed_type, alphabet, pos_to_design = self._design_params(
             entities, fixed_pos, deletions
         )
+        alphabet_array = np.array(alphabet)
 
         # initialize samples for all designed chains, we represent these as numpy arrays
         # internally since we assume entity representations that all have the same length;
@@ -513,7 +513,7 @@ class GibbsSampler(Generator):
                     p, num_samples=1
                 ).flatten().numpy()
 
-                sampled_tokens = alphabet[sampled_token_idx]
+                sampled_tokens = alphabet_array[sampled_token_idx]
 
                 # update sample matrix and instances for next step
                 print(step_ent, step_pos, sampled_tokens)  # TODO: remove
