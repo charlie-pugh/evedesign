@@ -307,34 +307,31 @@ class GibbsSampler(Generator):
             entity_idx: len(self._system[entity_idx].rep) for entity_idx in entities
         }
 
-        # array-based maps for fancy indexing
-        entity_to_index_array = np.zeros((max(entities) + 1), dtype="int")
-        entity_to_first_index_array = np.zeros((max(entities) + 1), dtype="int")
+        # array-based maps for fancy indexing (populated further down)
+        entity_to_array_idx_linear = np.zeros((max(entities) + 1), dtype="int")
+        entity_to_first_index_linear = np.zeros((max(entities) + 1), dtype="int")
 
         # initialize empty design matrix for number to num_designs x designed_entity x max_num_positions
+        # (longest designed entity determines size of array in last dimension)
         samples = np.empty(
             (num_designs, len(entities), max(entity_to_len.values())),
             dtype="<U1"
         )
-
-        # TODO: arrays for length and index mapping
 
         alphabet_set = set(alphabet)
         for array_idx, entity_idx in enumerate(entities):
             entity = self._system[entity_idx]
 
             # initialize array-based mappings
-            entity_to_index_array[entity_idx] = array_idx
-            entity_to_first_index_array[entity_idx] = entity.first_index
+            entity_to_array_idx_linear[entity_idx] = array_idx
+            entity_to_first_index_linear[entity_idx] = entity.first_index
 
             # randomize full sequence across all chains
             seq_len = len(entity.rep)
 
-            array_idx = entity_to_array_idx[entity_idx]
-
             # initialize relevant slice of array for each entity across all chains/samples
             samples[
-                :, array_idx, :entity_to_len[entity_idx]
+                :, array_idx, :seq_len
             ] = rng.choice(
                 alphabet, size=(num_designs, seq_len), replace=True
             )
@@ -351,7 +348,7 @@ class GibbsSampler(Generator):
                 if (entity_idx, pos) not in pos_to_design:
                     samples[:, array_idx, pos - entity.first_index] = symbol
 
-        return samples, entity_to_array_idx, entity_to_len, entity_to_index_array, entity_to_first_index_array
+        return samples, entity_to_array_idx, entity_to_len, entity_to_array_idx_linear, entity_to_first_index_linear
 
     @classmethod
     def _init_scan_order(
@@ -440,7 +437,8 @@ class GibbsSampler(Generator):
         # internally since we assume entity representations that all have the same length;
         # we will assemble these into strings for passing into individual scorers
         (
-            samples, entity_to_array_idx, entity_to_len, entity_to_index_array, entity_to_first_index_array
+            samples, entity_to_array_idx, entity_to_len,
+            entity_to_array_idx_linear, entity_to_first_index_linear
         ) = self._init_samples(
             num_designs, entities, alphabet, pos_to_design
         )
@@ -452,11 +450,11 @@ class GibbsSampler(Generator):
         # TODO: make this a build_or_update method?
         samples_joined = {
             entity_idx: samples[
-                :, entity_to_array_idx, :entity_to_len[entity_idx]
+                :, array_idx, :entity_to_len[entity_idx]
             ].view(
                 f"<U{entity_to_len[entity_idx]}"
             )[:, 0]
-            for entity_idx, entity_to_array_idx in entity_to_array_idx.items()
+            for entity_idx, array_idx in entity_to_array_idx.items()
         }
 
         # build molecular system instance list; will update in-place with
@@ -558,14 +556,27 @@ class GibbsSampler(Generator):
                 assert len(design_idx_all) == len(step_ent) == len(step_pos) == len(sampled_tokens)
 
                 print(step_ent, step_pos, sampled_tokens)  # TODO: remove
-                # print("first index", entity_to_index_array[step_ent])  # TODO: remove
-                print("first index", step_pos - entity_to_first_index_array[step_ent])  # TODO: remove
+                # print("first index", entity_to_array_idx_linear[step_ent])  # TODO: remove
+                print("first index", step_pos - entity_to_first_index_linear[step_ent])  # TODO: remove
+
+                # TODO: remove
+                for _i, (_ent, _pos) in enumerate(zip(step_ent, step_pos)):
+                    print(_i, _ent, _pos, "->", samples[_i, _ent, _pos - self._system[0].first_index])
+                samples_before = samples.copy()
+                # TODO: remove
 
                 samples[
                     design_idx_all,
-                    entity_to_index_array[step_ent],
-                    step_pos - entity_to_first_index_array[step_ent],
+                    entity_to_array_idx_linear[step_ent],
+                    step_pos - entity_to_first_index_linear[step_ent],
                 ] = sampled_tokens
+
+                # TODO: remove
+                _diff = (samples_before != samples).sum()
+                print("DIFF COUNT", _diff)
+                for _i, (_ent, _pos) in enumerate(zip(step_ent, step_pos)):
+                    print(_i, _ent, _pos, "->", samples[_i, _ent, _pos - self._system[0].first_index])
+                # TODO: remove
 
                 # TODO: verify index went through correctly
                 # TODO: update entities based on new samples array state
