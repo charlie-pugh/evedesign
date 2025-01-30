@@ -3,7 +3,6 @@ Sequence generation with Gibbs sampling.
 
 Implementation assumes fixed length of sequences (no inserts, deletions can be sampled if part of alphabet).
 """
-from copy import deepcopy
 from typing import Sequence, Literal, Callable, Tuple
 import numpy as np
 import pandas as pd
@@ -36,6 +35,8 @@ TemperatureSchedule = Callable[
 
 _ENTITY = "entity"
 _POS = "pos"
+_FROM = "from"
+_TO = "to"
 
 
 class GibbsSampler(Generator):
@@ -72,6 +73,7 @@ class GibbsSampler(Generator):
         scan_order: ScanOrder = "random",
         temperature_schedule: TemperatureSchedule | None = None,
         require_strict_pos : bool = True,
+        record_full_chain : bool = True,
         rng: np.random.Generator | None = None,
     ):
         """
@@ -103,6 +105,9 @@ class GibbsSampler(Generator):
         require_strict_pos
             If True, verify that all scorers model the same set of positions in the system or raise
             a ValueError
+        record_full_chain
+            If True, record updates performed in each chain for each Gibbs step and attach to instance metadata.
+            If False, only final samples at end of each chain will be returned.
         rng
             Numpy random number generator for random sampling. If None, will create own generator inside
             the sampler.
@@ -179,6 +184,7 @@ class GibbsSampler(Generator):
                     "Inconsistent position lists between scorers"
                 )
 
+        self.record_full_chain = record_full_chain
         self.rng = np.random.default_rng() if rng is None else rng
 
     def _design_params(
@@ -430,7 +436,7 @@ class GibbsSampler(Generator):
         entity_to_len: dict[int, int],
         entity_to_array_idx: dict[int, int],
         updated_entities: np.ndarray[int] | None,
-    ) -> list[SystemInstance]:
+    ) -> Tuple[list[SystemInstance], dict[int, np.ndarray]]:
         """
         Helper method to initialize or update samples from
         current state of sample array
@@ -474,7 +480,7 @@ class GibbsSampler(Generator):
                 # assign updated representation
                 instances[design_idx][updated_ent_idx].rep = samples_joined[updated_ent_idx][design_idx]
 
-        return instances
+        return instances, samples_joined
 
     def generate(
         self,
@@ -505,7 +511,7 @@ class GibbsSampler(Generator):
         )
 
         # initialize full instances to pass to scorers from sample array
-        instances = self._build_or_update_instances(
+        instances, initial_samples_joined = self._build_or_update_instances(
             instances=None,
             num_designs=num_designs,
             entities=entities,
@@ -519,13 +525,22 @@ class GibbsSampler(Generator):
         # per sweep in case random scan order is chosen)
         order = self._init_scan_order(num_designs, pos_to_design)
 
+        # number of steps per sweep is the number of positions we want to design
+        num_steps = len(pos_to_design)
+
+        # accumulate updates at each Gibbs step so all chains be traced stepwise
+        if self.record_full_chain:
+            updates = np.empty(
+                (self.num_sweeps * num_steps, num_designs),
+                dtype=[(_ENTITY, int), (_POS, int), (_TO, "<U1")]
+            )
+        else:
+            updates = None
+
         # iterate through sweeps (sweep = one full scan of all designed positions)
         for sweep in range(self.num_sweeps):
             # update status (fraction of sweeps completed)
             status_progress(status_callback, sweep / self.num_sweeps)
-
-            # number of steps per sweep is the number of positions we want to design
-            num_steps = len(pos_to_design)
 
             # permute the current sweep scan order if using random order
             # (we always sample without replacement for now for simplicity);
@@ -606,7 +621,7 @@ class GibbsSampler(Generator):
                 ] = sampled_tokens
 
                 # update instances based on new design matrix
-                instances = self._build_or_update_instances(
+                instances, _ = self._build_or_update_instances(
                     instances=instances,
                     num_designs=num_designs,
                     entities=entities,
@@ -615,5 +630,23 @@ class GibbsSampler(Generator):
                     entity_to_array_idx=entity_to_array_idx,
                     updated_entities=step_ent
                 )
+
+                # record chain information
+                if updates is not None:
+                    cur_iter = sweep * num_steps + step
+                    updates[_ENTITY][cur_iter, :] = step_ent
+                    updates[_POS][cur_iter, :] = step_pos
+                    updates[_TO][cur_iter, :] = sampled_tokens
+
+        # attach metadata to instances
+        if updates is not None:
+            for design_idx in range(num_designs):
+                instances[design_idx].metadata = {
+                    "init": {
+                        entity_idx: initial_samples_joined[entity_idx][design_idx]
+                        for entity_idx in entities
+                    },
+                    "chain": updates[:, design_idx].tolist()
+                }
 
         return instances

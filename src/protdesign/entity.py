@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Mapping, NamedTuple
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
-from protdesign.types import EntityType  #, Metadata
+from protdesign.types import EntityType, Metadata
 from protdesign.constants import VALID_AA, VALID_AA_OR_GAP
 from protdesign.utils import ensure_sequence, shorten
 
@@ -149,7 +149,7 @@ class SystemInstance(UserList):
         entity_instances: EntityInstance | Sequence[EntityInstance],
         score: float | None = None,
         confidence: float | None = None,
-        # metadata: Metadata | None = None,
+        metadata: Metadata | None = None,
     ):
         """
         Create new entity system instance
@@ -172,7 +172,7 @@ class SystemInstance(UserList):
 
         self.score = score
         self.confidence = confidence
-        # self.metadata = metadata
+        self.metadata = metadata
 
     def __repr__(self):
         return f"SystemInstance({self.data} score={self.score})"
