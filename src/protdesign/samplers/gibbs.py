@@ -3,6 +3,7 @@ Sequence generation with Gibbs sampling.
 
 Implementation assumes fixed length of sequences (no inserts, deletions can be sampled if part of alphabet).
 """
+from copy import deepcopy
 from typing import Sequence, Literal, Callable, Tuple
 import numpy as np
 import pandas as pd
@@ -39,9 +40,10 @@ _POS = "pos"
 
 class GibbsSampler(Generator):
     """
-    Gibbs sampling from linear combination of Scorers
+    Gibbs sampling from linear combination of Scorers.
 
-    # TODO: energy sign convention
+    Uses inverse sign convention to usual implementations, i.e. high scores
+    correspond to high probabilities.
 
     Notes and design choices:
     1. This sampler does not parallelize individual chains, as this does not play nicely with
@@ -70,6 +72,7 @@ class GibbsSampler(Generator):
         scan_order: ScanOrder = "random",
         temperature_schedule: TemperatureSchedule | None = None,
         require_strict_pos : bool = True,
+        rng: np.random.Generator | None = None,
     ):
         """
         Create new Gibbs sampler
@@ -100,6 +103,9 @@ class GibbsSampler(Generator):
         require_strict_pos
             If True, verify that all scorers model the same set of positions in the system or raise
             a ValueError
+        rng
+            Numpy random number generator for random sampling. If None, will create own generator inside
+            the sampler.
         """
         # must have at least one scorer
         if len(scorers) == 0:
@@ -172,6 +178,8 @@ class GibbsSampler(Generator):
                 raise ValueError(
                     "Inconsistent position lists between scorers"
                 )
+
+        self.rng = np.random.default_rng() if rng is None else rng
 
     def _design_params(
         self,
@@ -293,8 +301,6 @@ class GibbsSampler(Generator):
         -------
         Mapping from entity index to samples
         """
-        rng = np.random.default_rng()
-
         # prepare auxiliary mappings around array
         # (e.g. designed entities [1,3] -> [0, 1] in design matrix)
         entity_to_array_idx = {
@@ -332,7 +338,7 @@ class GibbsSampler(Generator):
             # initialize relevant slice of array for each entity across all chains/samples
             samples[
                 :, array_idx, :seq_len
-            ] = rng.choice(
+            ] = self.rng.choice(
                 alphabet, size=(num_designs, seq_len), replace=True
             )
 
@@ -415,6 +421,61 @@ class GibbsSampler(Generator):
 
         return scores
 
+    def _build_or_update_instances(
+        self,
+        instances: list[SystemInstance] | None,
+        num_designs: int,
+        entities: Sequence[int],
+        samples: np.ndarray,
+        entity_to_len: dict[int, int],
+        entity_to_array_idx: dict[int, int],
+        updated_entities: np.ndarray[int] | None,
+    ) -> list[SystemInstance]:
+        """
+        Helper method to initialize or update samples from
+        current state of sample array
+        """
+        # numpy view speeds up instance creation by ~10x for large sample sets
+        # compared to iteration and string joining;
+        # we make a copy of the view to unlink the string representation from
+        # the underlying matrix in any case - if this ever was a real bottleneck,
+        # could try to keep the representation on each instance a view of samples
+        samples_joined = {
+            entity_idx: samples[
+                :, array_idx, :entity_to_len[entity_idx]
+            ].view(
+                f"<U{entity_to_len[entity_idx]}"
+            )[:, 0].copy()
+            for entity_idx, array_idx in entity_to_array_idx.items()
+        }
+
+        # if instances not yet initialized, do so
+        if instances is None:
+            # build molecular system instance list; will update in-place with
+            # new sequences after each Gibbs step
+            instances = [
+                SystemInstance([
+                    EntityInstance(
+                        rep=(
+                            samples_joined[entity_idx][design_idx]
+                            if entity_idx in entities
+                            else self._system[entity_idx].rep
+                        )
+                    ) for entity_idx, entity in enumerate(self._system)
+                ]) for design_idx in range(num_designs)
+            ]
+        else:
+            # otherwise update in place based on latest sample matrix;
+            # only update the changed entity instance for efficiency
+            for design_idx in range(num_designs):
+                # entity updated for the current design
+                updated_ent_idx = updated_entities[design_idx]
+
+                # assign updated representation
+                instances[design_idx][updated_ent_idx].rep = samples_joined[updated_ent_idx][design_idx]
+
+        return instances
+
     def generate(
         self,
         num_designs: int,
@@ -443,38 +504,20 @@ class GibbsSampler(Generator):
             num_designs, entities, alphabet, pos_to_design
         )
 
-        # initialize full instances to pass to scorers;
-        # numpy view speeds up instance creation by ~10x for large sample sets
-        # compared to iteration and string joining
-        # TODO: move to its own method to reuse below
-        # TODO: make this a build_or_update method?
-        samples_joined = {
-            entity_idx: samples[
-                :, array_idx, :entity_to_len[entity_idx]
-            ].view(
-                f"<U{entity_to_len[entity_idx]}"
-            )[:, 0]
-            for entity_idx, array_idx in entity_to_array_idx.items()
-        }
-
-        # build molecular system instance list; will update in-place with
-        # new sequences after each Gibbs step
-        instances = [
-            SystemInstance([
-                EntityInstance(
-                    rep=(
-                        samples_joined[entity_idx][design_idx]
-                        if entity_idx in entities
-                        else self._system[entity_idx].rep
-                    )
-                ) for entity_idx, entity in enumerate(self._system)
-            ]) for design_idx in range(num_designs)
-        ]
+        # initialize full instances to pass to scorers from sample array
+        instances = self._build_or_update_instances(
+            instances=None,
+            num_designs=num_designs,
+            entities=entities,
+            samples=samples,
+            entity_to_len=entity_to_len,
+            entity_to_array_idx=entity_to_array_idx,
+            updated_entities=None
+        )
 
         # initialize sequential scan order for all positions to be designed (will be reshuffled
         # per sweep in case random scan order is chosen)
         order = self._init_scan_order(num_designs, pos_to_design)
-        rng = np.random.default_rng()
 
         # iterate through sweeps (sweep = one full scan of all designed positions)
         for sweep in range(self.num_sweeps):
@@ -489,7 +532,7 @@ class GibbsSampler(Generator):
             # note that rng.shuffle is not applicable here since all chains
             # would be shuffled in same way
             if self.scan_order == "random":
-                order = rng.permuted(order, axis=1)
+                order = self.rng.permuted(order, axis=1)
 
             assert (
                 order.shape[0] == num_designs and order.shape[1] == num_steps
@@ -555,37 +598,22 @@ class GibbsSampler(Generator):
                 # update sample matrix and instances for next step
                 assert len(design_idx_all) == len(step_ent) == len(step_pos) == len(sampled_tokens)
 
-                print(step_ent, step_pos, sampled_tokens)  # TODO: remove
-                # print("first index", entity_to_array_idx_linear[step_ent])  # TODO: remove
-                print("first index", step_pos - entity_to_first_index_linear[step_ent])  # TODO: remove
-
-                # TODO: remove
-                for _i, (_ent, _pos) in enumerate(zip(step_ent, step_pos)):
-                    print(_i, _ent, _pos, "->", samples[_i, _ent, _pos - self._system[0].first_index])
-                samples_before = samples.copy()
-                # TODO: remove
-
+                # update design matrix
                 samples[
                     design_idx_all,
                     entity_to_array_idx_linear[step_ent],
                     step_pos - entity_to_first_index_linear[step_ent],
                 ] = sampled_tokens
 
-                # TODO: remove
-                _diff = (samples_before != samples).sum()
-                print("DIFF COUNT", _diff)
-                for _i, (_ent, _pos) in enumerate(zip(step_ent, step_pos)):
-                    print(_i, _ent, _pos, "->", samples[_i, _ent, _pos - self._system[0].first_index])
-                # TODO: remove
-
-                # TODO: verify index went through correctly
-                # TODO: update entities based on new samples array state
-
-                # TODO: also record and eventually attach chain information to metadata
-                break  # TODO: remove
-
-            if sweep >= 0:  # TODO: remove
-                print("BREAK", sweep)
-                break  # TODO: remove
+                # update instances based on new design matrix
+                instances = self._build_or_update_instances(
+                    instances=instances,
+                    num_designs=num_designs,
+                    entities=entities,
+                    samples=samples,
+                    entity_to_len=entity_to_len,
+                    entity_to_array_idx=entity_to_array_idx,
+                    updated_entities=step_ent
+                )
 
         return instances
