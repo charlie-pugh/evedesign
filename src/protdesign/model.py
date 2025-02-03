@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Collection
 from dataclasses import dataclass
-from typing import Protocol, List, Self, Tuple, Sequence
+from typing import Protocol, List, Self, Tuple, Sequence, Any
 import numpy as np
 import pandas as pd
 from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
@@ -217,7 +217,7 @@ class Generator(Protocol):
             If None, will attempt to design all entities.
         fixed_pos
             Mapping from entity index to positions that should be fixed during design. Any entity referenced
-            in the mapping must be also included in the entities parameter. Numbering of fixed positions must match
+            in the mapping must be also included in the entities' parameter. Numbering of fixed positions must match
             sequence numbering of system entity representation (with corresponding value of first_index,
             by default 1; i.e. one-based indexing of positions!)
         temperature
@@ -396,6 +396,7 @@ class BaseModel(ABC):
     def can_model(
         cls,
         system: System,
+        data: Any,
     ) -> Tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
@@ -405,6 +406,9 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (cf. documentation for build() method)
 
         Returns
         -------
@@ -419,6 +423,7 @@ class BaseModel(ABC):
     def can_model_or_raise(
         cls,
         system: System,
+        data: Any,
     ) -> None:
         """
         Check if the model is able to perform computations on the specified
@@ -428,6 +433,9 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (cf. documentation for build() method)
 
         Returns
         -------
@@ -436,7 +444,7 @@ class BaseModel(ABC):
         str
             Message specifying why model is not able to handle the system
         """
-        can_model, can_model_msg = cls.can_model(system)
+        can_model, can_model_msg = cls.can_model(system, data)
         if not can_model:
             raise ValueError(can_model_msg)
 
@@ -445,6 +453,7 @@ class BaseModel(ABC):
     def required_resources(
         cls,
         system: System,
+        data: Any,
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
@@ -455,6 +464,9 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (cf. documentation for build() method)
         use_gpu
             Set to True if you want to estimate resources making use of GPU
             (only for models supporting GPU-based computations)
@@ -473,6 +485,7 @@ class BaseModel(ABC):
     def build(
         self,
         system: System,
+        data: Any,
         status_callback: StatusCallback | None = None,
     ) -> Self:
         """
@@ -487,7 +500,7 @@ class BaseModel(ABC):
         1) Should always verify if the system can
         be modelled using self.can_model() or raise a ValueError instead
 
-        2) Sould always assign system to self.system
+        2) Should always assign system to self.system
 
         3) Should always return self to allow method chaining
 
@@ -496,13 +509,13 @@ class BaseModel(ABC):
         memory usage if instances of the class are serialized; use the available context managers
         to handle this behavior reliably
 
-        # TODO: add parameter for labelled examples for supervised setting or keep this base class zero shot-only?
-        # TODO: add parameter "limit" to restrict system scoring to a certain region?
-
         Parameters
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (could be labelled data points, external sequences to compare to, etc.)
         status_callback
             Callback function to receive progress updates
 
@@ -534,7 +547,7 @@ class BaseModel(ABC):
 
     def valid_positions(
         self,
-        positions: Iterable[int],
+        positions: Collection[int],
         entity: int = 0,
         raise_invalid: bool = False,
     ) -> List[int]:

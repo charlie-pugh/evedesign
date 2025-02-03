@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 from loguru import logger
+import torch
 
 from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
@@ -18,7 +19,6 @@ from protdesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
     from picasso_model import model, features, parsers
-    import torch
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -141,7 +141,10 @@ class EVmutation2(BaseModel, Scorer, Generator):
         return self._system
 
     @classmethod
-    def can_model(cls, system: System) -> Tuple[bool, str]:
+    def can_model(cls, system: System, data: None=None) -> Tuple[bool, str]:
+        if data is not None:
+            return False, "Model does not support data parameter (must be None)"
+
         if len(system) != 1 or system[0].type_ != "protein":
             return False, "Can only handle single-component protein system"
 
@@ -167,6 +170,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def required_resources(
         cls,
         system: System,
+        data: None = None,
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
@@ -205,10 +209,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def build(
         self,
         system: System,
+        data: None = None,
         status_callback: StatusCallback | None = None
     ) -> Self:
         # verify if we can model the system
-        self.can_model_or_raise(system)
+        self.can_model_or_raise(system, data)
 
         # store system with this instance
         self._system = system
@@ -287,7 +292,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # we can simply enumerate starting from first_index
         target = self.system[0]
         return [
-            (0, idx) for idx, _ in enumerate(target.rep, start=target.first_index)
+            (0, pos) for pos, _ in enumerate(target.rep, start=target.first_index)
         ]
 
     @contextmanager

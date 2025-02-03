@@ -104,6 +104,17 @@ class Entity:
             self.first_index == other.first_index
         )
 
+    def defined_sequence(self) -> bool:
+        """
+        Check if entity corresponds to a biopolymer (protein, ...)
+        and has a defined representative with non-zero length
+
+        Returns
+        -------
+        True if protein/nucleotide sequence with some defined length
+        """
+        return self.type_ == "protein" and self.rep is not None and len(self.rep) > 0
+
 
 class EntityInstance:
     """

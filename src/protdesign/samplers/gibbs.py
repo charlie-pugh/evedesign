@@ -238,7 +238,7 @@ class GibbsSampler(Generator):
 
         # verify all designed entities have an existing representation (so we can assume length)
         for entity in entities:
-            if self._system[entity].rep is None or len(self._system[entity].rep) == 0:
+            if not self._system[entity].defined_sequence():
                 raise ValueError(
                     "All designed entities must have a specified representation with nonzero length"
                 )
