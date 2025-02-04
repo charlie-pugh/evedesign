@@ -8,6 +8,8 @@ import pandas as pd
 from protdesign.model import BaseModel, Scorer, RequiredResources
 from protdesign.entity import System, SystemInstance, Mutant
 from protdesign.types import StatusCallback
+from protdesign.utils import str_to_np_char_view
+from pygments.lexer import include
 
 EntityToReferenceSeqs = dict[int, list[str]]
 
@@ -17,6 +19,9 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
     Linear distance restraint between generated sequences and a set of reference sequences.
     For simplicity, assumes all compared sequences (i.e. on a per-entity basis) have the same
     length and are aligned.
+
+    # TODO: not yet optimized for performance (when using large sequence sets, bring in numba)
+    # TODO: constructor param for number of CPUs to use (when parallelizing)?
 
     Note on sign convention:
     Scoring methods return distance (or delta of distance) to reference sequences; i.e. a positive
@@ -75,10 +80,10 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         system: System,
         data: EntityToReferenceSeqs,
     ) -> Tuple[bool, str]:
-        # core requirements: we need at least one constrained biopolymer sequence,
+        # core requirements: we need at least one restrained biopolymer sequence,
         # and length of all sequences per entity must agree with reference sequence
 
-        # determine valid seq entities
+        # determine valid sequence entities that could be restrained
         valid_entities_to_len = {
             entity_idx: len(entity.rep) for entity_idx, entity in enumerate(system) if entity.defined_sequence()
         }
@@ -97,9 +102,9 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
             cur_entity_length = valid_entities_to_len[entity_idx]
             invalid = [seq for seq in ref_seqs if len(seq) != cur_entity_length]
             if len(invalid) > 0:
-                return False, f"Reference sequence do not have correct length of {cur_entity_length}"
+                return False, f"Reference sequence(s) do not have correct length of {cur_entity_length}: {invalid}"
 
-        # TODO: check if all are valid biopolymer sequences
+        # TODO: check if all given sequences are valid or simply match on character level for more flexibility?
 
         return True, ""
 
@@ -127,11 +132,13 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         # store system with this instance
         self._system = system
 
-        # store reference sequences for comparison
-        self._ref_seqs = data
-        # TODO: map the data
+        # store reference sequences for comparison (already checked validity via can_model() above)
+        self._ref_seqs = {
+            entity_idx: str_to_np_char_view(
+                entity_ref_seqs
+            ) for entity_idx, entity_ref_seqs in data.items()
+        }
 
-        print("building", data)  # TODO: remove
         return self
 
     def positions(
@@ -148,13 +155,52 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
             for pos, _ in enumerate(entity.rep, start=entity.first_index)
         ]
 
+    def _validate_instances(
+        self,
+        instances: Sequence[SystemInstance],
+    ) -> None:
+        # validate instance sequences; must all have the same length
+        [
+            self.system.valid_instance(
+                instance, fixed_length=True, validate_reps=True, raise_invalid=True
+            ) for instance in instances
+        ]
+
     def score(
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        # TODO: verify all instances have the same length
-        raise NotImplementedError()
+        self.ready_or_raise()
+
+        # validate instance sequences with specific requirements for this class
+        self._validate_instances(instances)
+
+        # for accumulating distances across all entities and instances
+        dists = np.zeros(len(instances), dtype="int")
+
+        # loop through target entities
+        for entity_idx, cur_ref_seqs in self._ref_seqs.items():
+            # extract sequences for current entity from instances as numpy array
+            # (do not use np.array(list) as this is way slower)
+            x = str_to_np_char_view(
+                [inst[entity_idx].rep for inst in instances]
+            )
+
+            # iterate through references one by one;
+            # TODO: optimize with numba or scipy cdist if large reference sequence sets
+            #  (e.g. comparing to MSA) become relevant
+            for ref in cur_ref_seqs[:]:
+                # silence type warnings by wrapping in array()
+                diff = np.array(ref != x)
+
+                if self.exclude_gaps_from_distance:
+                    diff = diff & (ref != "-") & (x != "-")
+
+                dists += diff.sum(axis=1)
+
+        assert len(dists) == len(instances)
+        return dists
 
     def score_conditional(
         self,
@@ -163,11 +209,51 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         positions: Sequence[int],
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
-        # TODO: verify all instances have the same length
+        self.ready_or_raise()
+
+        if not len(instances) == len(entities) == len(positions):
+            raise ValueError("Sequences for instances, entities and positions must all have same length")
+
+        # validate instance sequences with specific requirements for this class
+        self._validate_instances(instances)
+
+        # validate entities / positions
+        self.valid_positions(
+            positions=positions, entities=entities, raise_invalid=True
+        )
+
+        # only allow entities of same type to be scored at same time for now
+        unique_entities = sorted(set(entities))
+        entity_types = {
+            self._system[entity_idx].type_ for entity_idx in unique_entities
+        }
+        if len(entity_types) != 1:
+            raise ValueError("For now, can only score entities of one type")
+
+        # get alphabet for this one entity type
+        alphabet = self._system[unique_entities[0]].alphabet(include_gap=True)
+
+        # compute distances entity by entity for simplicity
+        res = pd.DataFrame({
+            "instance": np.arange(len(instances)),
+            "entity": entities,
+            "pos": positions,
+        })
+
+        # accumulate current symbol at each position and whether it is affected by restraint
+        # TODO: need to loop through different reference sequences
+        # TODO: compare to all possible other symbols
+
+        print(alphabet)  # TODO: Remove
+
         # TODO: sufficient to compute delta here for all mutants to each site (reference symbol = 0,
         #  do other symbols make sequence more similar or dissimilar to reference?)
+
         # TODO: need to return zero scores for non-restrained positions
-        raise NotImplementedError()
+        # TODO: assert length of dataframe
+
+        assert len(res) == len(instances)
+        return res
 
     def single_mutation_scan(
         self,
@@ -176,7 +262,6 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
-        # TODO: wrap around score_conditional
         raise NotImplementedError()
 
     def score_mutants(
