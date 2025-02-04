@@ -91,10 +91,11 @@ class Scorer(Protocol):
 
         Returns
         -------
-        Dataframe with raw logit scores (seq x aa); rows index over entity/instance/position triplets
+        Dataframe with raw logit scores (seq x aa); row index is over instance index/entity index/position triplets;
         columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
-        entities and positions. Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
-        missing predictions must be encoded by np.nan.
+        entities and positions. Rows must be in the same order as input instance/entity/position triplets.
+        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED, missing predictions must be
+        encoded by np.nan
         """
         pass
 
@@ -547,10 +548,10 @@ class BaseModel(ABC):
 
     def valid_positions(
         self,
-        positions: Collection[int],
-        entity: int = 0,
+        positions: Sequence[int],
+        entities: int | Sequence[int] = 0,
         raise_invalid: bool = False,
-    ) -> List[int]:
+    ) -> List[tuple[int, int]]:
         """
         Helper method to verify if a list of positions for a given entity in system is valid (via positions())
 
@@ -558,30 +559,45 @@ class BaseModel(ABC):
         ----------
         positions
             List of unique positions to check
-        entity
-            Index of entity in system to check positions in
+        entities
+            List of entities corresponding to each position (if sequence);
+            or can be fixed to one entity which will be applied to all positions (if int)
         raise_invalid
             If invalid position contained in input list, raise a ValueError
 
         Returns
         -------
-        List of valid positions
+        List of valid position tuples
         """
-        available_positions = set(
-            pos for (entity_idx, pos) in self.positions() if entity_idx == entity
-        )
+        # available_positions = set(
+        #     pos for (entity_idx, pos) in self.positions() if entity_idx == entity
+        # )
 
-        valid_positions = [
-            pos for pos in positions if pos in available_positions
+        if isinstance(entities, int):
+            given_pos = [
+                (entities, pos) for pos in positions
+            ]
+        else:
+            if len(positions) != len(entities):
+                raise ValueError("Length of entities and positions must agree")
+
+            given_pos = [
+                (entity, pos) for entity, pos in zip(entities, positions)
+            ]
+
+        available_pos = set(self.positions())
+
+        valid_pos = [
+            entity_pos for entity_pos in given_pos if entity_pos in available_pos
         ]
 
-        if raise_invalid and len(valid_positions) != len(positions):
+        if raise_invalid and len(valid_pos) != len(positions):
             raise ValueError(
-                f"Invalid positions for entity {entity}, valid options are {', '.join(map(str, available_positions))}"
-                f" but given are {', '.join(map(str, positions))}"
+                f"Invalid positions given, valid options are {available_pos}"
+                f" but given are {given_pos}"
             )
 
-        return valid_positions
+        return valid_pos
 
 
 class BaseModelAndScorer(BaseModel, Scorer, ABC):

@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from typing import Callable, Sequence, TypeVar
-
+import numpy as np
 from protdesign.types import StatusCallback
 
 T = TypeVar("T")
@@ -48,3 +48,28 @@ def status_progress(
 
 def shorten(text: str, max_len=50):
     return (text[:max_len] + "...") if len(text) > 50 else text
+
+def str_to_np_char_view(x: Sequence[str]):
+    """
+    Quickly transform a list of strings into a numpy character
+    array (much faster than np.array([list(s) for s in x])
+    and return a view
+
+    Parameters
+    ----------
+    x
+        List of equal length strings (not checked here)
+
+    Returns
+    -------
+    2D character array
+    """
+    x_np = np.array(
+        x, dtype=np.unicode_
+    )
+
+    return x_np.view(
+        "U1"
+    ).reshape(
+        (x_np.size, -1)
+    )

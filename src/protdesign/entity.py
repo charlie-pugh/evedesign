@@ -7,7 +7,7 @@ from typing import Mapping, NamedTuple
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType, Metadata
-from protdesign.constants import VALID_AA, VALID_AA_OR_GAP
+from protdesign.constants import VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED
 from protdesign.utils import ensure_sequence, shorten
 
 # Data structures/types for providing mutation information in structured format
@@ -113,7 +113,33 @@ class Entity:
         -------
         True if protein/nucleotide sequence with some defined length
         """
-        return self.type_ == "protein" and self.rep is not None and len(self.rep) > 0
+        return (
+            self.type_ == "protein" and
+            self.rep is not None and
+            len(self.rep) > 0 and
+            self.first_index is not None
+        )
+
+    def alphabet(self, include_gap: bool=True) -> list[str]:
+        """
+        Return sequence alphabet for biopolymer entities
+
+        Parameters
+        ----------
+        include_gap
+            If true, add gap symbol to alphabet
+
+        Returns
+        -------
+        Alphabet for representing primary sequence of entity
+        """
+        if self.type_ == "protein":
+            if include_gap:
+                return VALID_AA_OR_GAP_SORTED
+            else:
+                return VALID_AA_SORTED
+        else:
+            raise NotImplementedError("Non-protein alphabets not yet implemented")
 
 
 class EntityInstance:
@@ -254,7 +280,7 @@ class System(UserList):
             # TODO: also implement comparison for nucleotides eventually
             if entity.type_ == "protein":
                 if fixed_length:
-                    valid = valid and len(entity.rep) == len(entity_instance.rep)
+                    valid = valid and (entity.rep is None or len(entity.rep) == len(entity_instance.rep))
 
                 if validate_reps:
                     # allow gaps for deletion modeling, and mask for leaving parts of representation unspecified
@@ -305,14 +331,12 @@ class System(UserList):
                     instance[entity_idx].rep, start=entity.first_index
                 )
             } for entity_idx, entity in enumerate(self.data)
-            if entity.type_ == "protein" and entity.first_index is not None
-            and instance[entity_idx].rep is not None
+            if entity.defined_sequence()
         }
 
         entity_to_valid_subs = {
-            entity_idx: (VALID_AA_OR_GAP if allow_gap else VALID_AA)
+            entity_idx: set(entity.alphabet(include_gap=allow_gap))
             for entity_idx, entity in enumerate(self.data)
-            if entity.type_ == "protein"
         }
 
         invalid_subs = [

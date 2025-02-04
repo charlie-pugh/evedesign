@@ -7,7 +7,7 @@ from typing import Sequence, Literal, Callable, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from protdesign.constants import VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED, GAP
+from protdesign.constants import GAP
 from protdesign.model import Generator, BaseModelAndScorer
 from protdesign.entity import SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback, EntityType
@@ -272,13 +272,10 @@ class GibbsSampler(Generator):
         if len(design_pos) == 0:
             raise ValueError("No positions left to design after removing fixed positions")
 
-        # set up alphabet based on designed_type
-        if designed_type == "protein":
-            alphabet = VALID_AA_OR_GAP_SORTED if deletions else VALID_AA_SORTED
-        else:
-            raise NotImplementedError(
-                f"Entity type '{designed_type}' not yet supported"
-            )
+        # set up alphabet, retrieve from first designed entity for now;
+        # eventually could compare/merge alphabets for different designed_types to allow
+        # co-design of different types
+        alphabet = self._system[entities[0]].alphabet(include_gap=deletions)
 
         return entities, designed_type, alphabet, design_pos
 
@@ -572,7 +569,9 @@ class GibbsSampler(Generator):
                 # we could decouple GPU and CPU-based computations here with multiprocessing
                 # eventually to increase speed
                 agg_scores = None
-                for scorer_idx, (scorer, weight) in enumerate(zip(self.scorers, self.weights)):
+                for scorer_idx, (scorer, weight) in enumerate(
+                    zip(self.scorers, self.weights)
+                ):
                     # compute weighted score
                     s = scorer.score_conditional(
                         instances, step_ent, step_pos
@@ -580,8 +579,13 @@ class GibbsSampler(Generator):
 
                     # verify conditional score dataframe, and remove gap if present but not sampling deletions
                     s = self._verify_and_update_scores(
-                        s, deletions=deletions, scorer_idx=scorer_idx, alphabet=alphabet, num_designs=num_designs
+                        s, deletions=deletions, scorer_idx=scorer_idx, alphabet=alphabet, num_designs=num_designs,
                     )
+
+                    # ensure nothing bad happened to row index
+                    assert (s.index.get_level_values(0) == design_idx_all).all()  # noqa
+                    assert (s.index.get_level_values(1) == step_ent).all()  # noqa
+                    assert (s.index.get_level_values(2) == step_pos).all()  # noqa
 
                     if agg_scores is None:
                         agg_scores = s
