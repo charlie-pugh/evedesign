@@ -8,23 +8,23 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 from loguru import logger
+import torch
 
-from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
+from protdesign.model import Scorer, Generator, RequiredResources
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.constants import MASK, VALID_AA_OR_GAP_SORTED
+from protdesign.constants import MASK
 from protdesign.sequence import valid_protein_sequence
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
     from picasso_model import model, features, parsers
-    import torch
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVmutation2(BaseModel, Scorer, Generator):
+class EVmutation2(Scorer, Generator):
     """
     Wrapper class around EVmutation2/picasso model
     """
@@ -96,7 +96,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.device = device
 
         # modelled system
-        self.system = None
+        self._system = None
 
         # lazy-load model when needed
         self.model = None
@@ -136,8 +136,15 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def ready(self):
         return self.system is not None and self.encoding is not None
 
+    @property
+    def system(self) -> System | None:
+        return self._system
+
     @classmethod
-    def can_model(cls, system: System) -> Tuple[bool, str]:
+    def can_model(cls, system: System, data: None=None) -> Tuple[bool, str]:
+        if data is not None:
+            return False, "Model does not support data parameter (must be None)"
+
         if len(system) != 1 or system[0].type_ != "protein":
             return False, "Can only handle single-component protein system"
 
@@ -163,6 +170,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def required_resources(
         cls,
         system: System,
+        data: None = None,
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
@@ -201,13 +209,14 @@ class EVmutation2(BaseModel, Scorer, Generator):
     def build(
         self,
         system: System,
+        data: None = None,
         status_callback: StatusCallback | None = None
     ) -> Self:
         # verify if we can model the system
-        self.can_model_or_raise(system)
+        self.can_model_or_raise(system, data)
 
         # store system with this instance
-        self.system = system
+        self._system = system
         target = self.system[0]
 
         # load MSA
@@ -283,7 +292,18 @@ class EVmutation2(BaseModel, Scorer, Generator):
         # we can simply enumerate starting from first_index
         target = self.system[0]
         return [
-            (0, idx) for idx, _ in enumerate(target.rep, start=target.first_index)
+            (0, pos) for pos, _ in enumerate(target.rep, start=target.first_index)
+        ]
+
+    def _validate_instances(
+        self,
+        instances: Sequence[SystemInstance],
+    ) -> None:
+        # validate instance sequences; must all have the same length
+        [
+            self.system.valid_instance(
+                instance, fixed_length=True, validate_reps=True, raise_invalid=True
+            ) for instance in instances
         ]
 
     @contextmanager
@@ -333,10 +353,11 @@ class EVmutation2(BaseModel, Scorer, Generator):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
+        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
         """
-        TODO: support min_p sampling and sample_gaps parameters eventually
+        TODO: support min_p sampling parameter eventually
         """
         self.ready_or_raise()
 
@@ -359,9 +380,9 @@ class EVmutation2(BaseModel, Scorer, Generator):
                     "Only accepting position mapping for entity 0"
                 )
 
-            fixed_pos = set(fixed_pos[0])
             # verify if all positions are valid
-            self.valid_positions(fixed_pos, entity=0, raise_invalid=True)
+            self.valid_positions(fixed_pos[0], entities=0, raise_invalid=True)
+            fixed_pos = set(fixed_pos[0])
         else:
             fixed_pos = set()
 
@@ -402,8 +423,8 @@ class EVmutation2(BaseModel, Scorer, Generator):
                 batch_size=self.decoder_batch_size,
                 num_samples=num_designs_adj,
                 temperature=temperature,
+                sample_gaps=deletions,
                 # min_p=None,  # TODO: implement
-                # sample_gaps=None,  # TODO: implement
             )
 
         # score the designs relative to entity sequence (ideally, user supplied WT sequence, but user can
@@ -441,11 +462,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.ready_or_raise()
 
         # validate sequences
-        _ = (
-            self.system.valid_instance(
-                instance, fixed_length=True, validate_reps=True, raise_invalid=True
-            ) for instance in instances
-        )
+        self._validate_instances(instances)
 
         with (
             model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred),
@@ -487,9 +504,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         # check instance against molecular system, requiring fixed length of sequence
         # as was used for entity specification as we have a fixed-length model
-        self.system.valid_instance(
-            instance, fixed_length=True, validate_reps=True, raise_invalid=True,
-        )
+        self._validate_instances([instance])
 
         if entity != 0:
             raise ValueError("Model can only handle one single entity")
@@ -501,7 +516,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         # validate positions
         if positions is not None:
-            positions = self.valid_positions(positions, raise_invalid=True)
+            self.valid_positions(positions, entities=0, raise_invalid=True)
 
         with (
             model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred),
@@ -538,7 +553,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         ).groupby(
             level=["pos", "wt_aa"]
         ).mean().reindex(
-            VALID_AA_OR_GAP_SORTED, axis=1
+            target.alphabet(include_gap=True), axis=1
         )
 
         effects.index.names = ["pos", "ref"]
@@ -565,9 +580,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
 
         # check instance against molecular system, requiring fixed length of sequence
         # as was used for entity specification as we have a fixed-length model
-        self.system.valid_instance(
-            instance, fixed_length=True, validate_reps=True, raise_invalid=True,
-        )
+        self._validate_instances([instance])
 
         # verify if mutants are valid relative to system and instance
         self.system.valid_mutants(
@@ -632,11 +645,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         self.ready_or_raise()
 
         # validate instance sequences
-        [
-            self.system.valid_instance(
-                instance, fixed_length=True, validate_reps=True, raise_invalid=True
-            ) for instance in instances
-        ]
+        self._validate_instances(instances)
 
         # validate entity specification (only handle single entity for now)
         if set(entities) != {0}:
@@ -648,7 +657,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         target = self.system[0]
 
         # validate positions
-        self.valid_positions(positions, entity=0, raise_invalid=True)
+        self.valid_positions(positions, entities=0, raise_invalid=True)
 
         # extract sequences
         seqs = [
@@ -675,13 +684,15 @@ class EVmutation2(BaseModel, Scorer, Generator):
         conditionals = scores.groupby(
             level=["seq_idx", "pos"], sort=False
         ).mean().reindex(
-            VALID_AA_OR_GAP_SORTED, axis=1
+            target.alphabet(include_gap=True), axis=1
         )
-        conditionals.index.names =["seq", "pos"]
+        conditionals.index.names =["instance", "pos"]
 
-        # add entity 0 to index
+        # add entity 0 to index, then move instance index to outermost level
         conditionals = pd.concat(
             {0: conditionals}, names=["entity"]
+        ).swaplevel(
+            i=0, j=1, axis=0
         )
 
         assert len(conditionals) == len(entities), "Length mismatch between output and input"

@@ -1,184 +1,10 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol, List, Self, Tuple, Sequence
+from typing import Protocol, List, Self, Tuple, Sequence, Any
 import numpy as np
 import pandas as pd
 from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
 from protdesign.types import StatusCallback
-
-
-class Scorer(Protocol):
-    """
-    Interface implemented by classes that can score
-    (e.g. density/log likelihood) for existing designs/sequences
-    (scalar value per design/sequence)
-
-    Please refer to comments on each function on the excepted semantics and format
-    of the returned scores.
-    """
-    @abstractmethod
-    def score(
-        self,
-        instances: Sequence[SystemInstance],
-        status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        """
-        Score different realizations of the modelled system (e.g. different sequences
-        generated from a model)
-
-        Note:
-        1. Scores returned by this function should be raw logits comparable between all instances
-         scored in the same call. Scores between multiple calls do not have to be comparable (user
-         is responsible for including a reference instance for normalization in these cases)
-
-        Parameters
-        ----------
-        instances
-            Designs to score with model
-        status_callback
-            Callback function to track computation status
-
-        Returns
-        -------
-        Vector of scores (one per instance, in same order as instances input parameter)
-        """
-        pass
-
-    @abstractmethod
-    def score_conditional(
-        self,
-        instances: Sequence[SystemInstance],
-        entities: Sequence[int],
-        positions: Sequence[int],
-        status_callback: StatusCallback | None = None
-    ) -> pd.DataFrame:
-        """
-        Compute scores for all substitutions in a single position
-        across a batch of sequences (single position can differ between instances), e.g.
-        for Gibbs sampling-based generation of multiple designs in parallel.
-
-        Note:
-        1. This function allows to exploit the fact that often single mutations for
-         one position can be computed more efficiently than arbitrary full sequences
-         (e.g. in Potts model hamiltonian). If no customized implementation is available,
-         this method should still wrap around score() for applications like Gibbs sampling.
-
-        2. Logits are not relative to any particular sequence (e.g. "wildtype"), but
-         meant to be interpreted relative to each other (i.e. should be treated as raw logits)
-         across possible symbols *per* sampled instance/entity/position combination
-
-        TODO: how handle different types of alphabets sampled at the same time? Or require that all entities
-         must have same type/alphabet (e.g. protein)
-
-        TODO: if we encounter at least one relevant case of a method that is able to
-          compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
-          separate interface "ConditionalScorer" for use with the Gibbs sampler
-
-        Parameters
-        ----------
-        instances
-            Target instances/sequences for which scores should be calculated. Must
-            have same length as entities and positions.
-        entities
-            List of entity indexes which selects exactly one entity per instance for scoring.
-            Must have same length as instances and positions.
-        positions
-            List of positions which selects exactly one position per instance/entity pair.
-            Must have same length as instances and entities.
-        status_callback
-            Callback function to track computation status
-
-        Returns
-        -------
-        Dataframe with raw logit scores (seq x aa); rows index over entity/instance/position triplets
-        columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
-        entities and positions. Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
-        missing predictions must be encoded by np.nan.
-        """
-        pass
-
-    @abstractmethod
-    def single_mutation_scan(
-        self,
-        instance: SystemInstance,
-        entity: int = 0,
-        positions: Sequence[int] | None = None,
-        status_callback: StatusCallback | None = None
-    ) -> pd.DataFrame:
-        """
-        Compute all single substitutions to one particular instance (aka "single mutation scan")
-        batching across different positions. This is different to score_conditional() which
-        batches substitutions to exactly one single position across many different instances.
-
-        Note:
-        1. Mutation logits should be *relative* to the given instance (like a log-odds ratio),
-         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
-         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
-         no notion of a "wildtype" sequence to compute relative scores to.
-
-        2. The implementation of this function can draw on score(), score_conditional(), score_mutants()
-         or any method-specific implementations as needed to provide the most efficient/accurate way
-         to single mutant effect calculation
-
-        Parameters
-        ----------
-        instance
-            Target system instance specification to mutate
-        entity
-            Index of entity for which mutation scan should be computed. Defaults to first entity.
-        positions
-            Subset of positions to score. If None, scores for all positions will be computed.
-        status_callback
-            Callback function to track computation status
-
-        Returns
-        -------
-        Dataframe with log-odds scores (seq x aa) relative to instance; rows index over
-        entity/position/ref triplets, columns index over different symbols (amino acids etc.).
-        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
-        missing predictions must be coded by np.nan.
-        """
-        pass
-
-    @abstractmethod
-    def score_mutants(
-        self,
-        instance: SystemInstance,
-        mutants: Sequence[Mutant],
-        status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        """
-        Compute logit scores for a list of mutations to a specified system instance
-        (can be any single or higher-order mutants); this method is to allow specialized, more efficient
-        or accurate implementations of mutant calculations than computing the full score of the WT and
-        mutant sequence. In case no such specialization is possible or needed for a method, it can simply
-        call out to the score() function.
-
-        Note:
-        1. Mutation logits should be *relative* to the given instance (like a log-odds score),
-         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
-         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
-         no notion of a "wildtype" sequence to compute relative scores to.
-
-        2. Implementations of this method may either compute mutant and reference scores for substraction
-         with the score() method or draw on any specialized implementations of single and higher-order mutation
-         scoring that are more accurate / efficient.
-
-        Parameters
-        ----------
-        instance
-            Target system instance specification to mutate
-        mutants
-            List of mutations of any order to compute
-        status_callback
-            Callback function to track computation status
-
-        Returns
-        -------
-        Vector of scores, guaranteed to be in the same order as mutants list
-        """
-        pass
 
 
 class Generator(Protocol):
@@ -197,6 +23,7 @@ class Generator(Protocol):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
+        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
         """
@@ -216,11 +43,13 @@ class Generator(Protocol):
             If None, will attempt to design all entities.
         fixed_pos
             Mapping from entity index to positions that should be fixed during design. Any entity referenced
-            in the mapping must be also included in the entities parameter. Numbering of fixed positions must match
+            in the mapping must be also included in the entities' parameter. Numbering of fixed positions must match
             sequence numbering of system entity representation (with corresponding value of first_index,
             by default 1; i.e. one-based indexing of positions!)
         temperature
             Sampling temperature (higher values generate more diversity)
+        deletions
+            If True, allow the model to sample deletions relative to the entities representation
         status_callback
             Callback function to track computation status
 
@@ -374,6 +203,12 @@ class BaseModel(ABC):
     def ready(self) -> str:
         pass
 
+    @property
+    @abstractmethod
+    # must return system modelled by the current instance (after build), or None otherwise
+    def system(self) -> System | None:
+        pass
+
     def ready_or_raise(self) -> None:
         """
         Verifies if model is ready for predictions by checking ready property,
@@ -387,6 +222,7 @@ class BaseModel(ABC):
     def can_model(
         cls,
         system: System,
+        data: Any,
     ) -> Tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
@@ -396,6 +232,9 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (cf. documentation for build() method)
 
         Returns
         -------
@@ -410,6 +249,7 @@ class BaseModel(ABC):
     def can_model_or_raise(
         cls,
         system: System,
+        data: Any,
     ) -> None:
         """
         Check if the model is able to perform computations on the specified
@@ -419,6 +259,9 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (cf. documentation for build() method)
 
         Returns
         -------
@@ -427,7 +270,7 @@ class BaseModel(ABC):
         str
             Message specifying why model is not able to handle the system
         """
-        can_model, can_model_msg = cls.can_model(system)
+        can_model, can_model_msg = cls.can_model(system, data)
         if not can_model:
             raise ValueError(can_model_msg)
 
@@ -436,6 +279,7 @@ class BaseModel(ABC):
     def required_resources(
         cls,
         system: System,
+        data: Any,
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
@@ -446,6 +290,9 @@ class BaseModel(ABC):
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (cf. documentation for build() method)
         use_gpu
             Set to True if you want to estimate resources making use of GPU
             (only for models supporting GPU-based computations)
@@ -464,6 +311,7 @@ class BaseModel(ABC):
     def build(
         self,
         system: System,
+        data: Any,
         status_callback: StatusCallback | None = None,
     ) -> Self:
         """
@@ -478,7 +326,7 @@ class BaseModel(ABC):
         1) Should always verify if the system can
         be modelled using self.can_model() or raise a ValueError instead
 
-        2) Sould always assign system to self.system
+        2) Should always assign system to self.system
 
         3) Should always return self to allow method chaining
 
@@ -487,13 +335,13 @@ class BaseModel(ABC):
         memory usage if instances of the class are serialized; use the available context managers
         to handle this behavior reliably
 
-        # TODO: add parameter for labelled examples for supervised setting or keep this base class zero shot-only?
-        # TODO: add parameter "limit" to restrict system scoring to a certain region?
-
         Parameters
         ----------
         system
             Molecular system to be modelled
+        data
+            Arbitrary additional data specific to model that is not a descriptive property of system itself
+            (could be labelled data points, external sequences to compare to, etc.)
         status_callback
             Callback function to receive progress updates
 
@@ -525,10 +373,10 @@ class BaseModel(ABC):
 
     def valid_positions(
         self,
-        positions: Iterable[int],
-        entity: int = 0,
+        positions: Sequence[int],
+        entities: int | Sequence[int] = 0,
         raise_invalid: bool = False,
-    ) -> List[int]:
+    ) -> List[tuple[int, int]]:
         """
         Helper method to verify if a list of positions for a given entity in system is valid (via positions())
 
@@ -536,27 +384,216 @@ class BaseModel(ABC):
         ----------
         positions
             List of unique positions to check
-        entity
-            Index of entity in system to check positions in
+        entities
+            List of entities corresponding to each position (if sequence);
+            or can be fixed to one entity which will be applied to all positions (if int)
         raise_invalid
             If invalid position contained in input list, raise a ValueError
 
         Returns
         -------
-        List of valid positions
+        List of valid position tuples
         """
-        available_positions = set(
-            pos for (entity_idx, pos) in self.positions() if entity_idx == entity
-        )
+        # available_positions = set(
+        #     pos for (entity_idx, pos) in self.positions() if entity_idx == entity
+        # )
 
-        valid_positions = [
-            pos for pos in positions if pos in available_positions
+        if isinstance(entities, int):
+            given_pos = [
+                (entities, pos) for pos in positions
+            ]
+        else:
+            if len(positions) != len(entities):
+                raise ValueError("Length of entities and positions must agree")
+
+            given_pos = [
+                (entity, pos) for entity, pos in zip(entities, positions)
+            ]
+
+        available_pos = set(self.positions())
+
+        valid_pos = [
+            entity_pos for entity_pos in given_pos if entity_pos in available_pos
         ]
 
-        if raise_invalid and len(valid_positions) != len(positions):
+        if raise_invalid and len(valid_pos) != len(positions):
             raise ValueError(
-                f"Invalid positions for entity {entity}, valid options are {', '.join(map(str, available_positions))}"
-                f" but given are {', '.join(map(str, positions))}"
+                f"Invalid positions given, valid options are {sorted(available_pos)}"
+                f" but given are {sorted(given_pos)}"
             )
 
-        return valid_positions
+        return valid_pos
+
+
+class Scorer(BaseModel):
+    """
+    Interface implemented by classes that can score
+    (e.g. density/log likelihood) for existing designs/sequences
+    (scalar value per design/sequence)
+
+    Please refer to comments on each function on the excepted semantics and format
+    of the returned scores.
+    """
+    @abstractmethod
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        """
+        Score different realizations of the modelled system (e.g. different sequences
+        generated from a model)
+
+        Note:
+        1. Scores returned by this function should be raw logits comparable between all instances
+         scored in the same call. Scores between multiple calls do not have to be comparable (user
+         is responsible for including a reference instance for normalization in these cases)
+
+        Parameters
+        ----------
+        instances
+            Designs to score with model
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Vector of scores (one per instance, in same order as instances input parameter)
+        """
+        pass
+
+    @abstractmethod
+    def score_conditional(
+        self,
+        instances: Sequence[SystemInstance],
+        entities: Sequence[int],
+        positions: Sequence[int],
+        status_callback: StatusCallback | None = None
+    ) -> pd.DataFrame:
+        """
+        Compute scores for all substitutions in a single position
+        across a batch of sequences (single position can differ between instances), e.g.
+        for Gibbs sampling-based generation of multiple designs in parallel.
+
+        Note:
+        1. This function allows to exploit the fact that often single mutations for
+         one position can be computed more efficiently than arbitrary full sequences
+         (e.g. in Potts model hamiltonian). If no customized implementation is available,
+         this method should still wrap around score() for applications like Gibbs sampling.
+
+        2. Logits are not relative to any particular sequence (e.g. "wildtype"), but
+         meant to be interpreted relative to each other (i.e. should be treated as raw logits)
+         across possible symbols *per* sampled instance/entity/position combination
+
+        TODO: how handle different types of alphabets sampled at the same time? Or require that all entities
+         must have same type/alphabet (e.g. protein)
+
+        TODO: if we encounter at least one relevant case of a method that is able to
+          compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
+          separate interface "ConditionalScorer" for use with the Gibbs sampler
+
+        Parameters
+        ----------
+        instances
+            Target instances/sequences for which scores should be calculated. Must
+            have same length as entities and positions.
+        entities
+            List of entity indexes which selects exactly one entity per instance for scoring.
+            Must have same length as instances and positions.
+        positions
+            List of positions which selects exactly one position per instance/entity pair.
+            Must have same length as instances and entities.
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Dataframe with raw logit scores (seq x aa); row index is over instance index/entity index/position triplets;
+        columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
+        entities and positions. Rows must be in the same order as input instance/entity/position triplets.
+        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED, missing predictions must be
+        encoded by np.nan
+        """
+        pass
+
+    @abstractmethod
+    def single_mutation_scan(
+        self,
+        instance: SystemInstance,
+        entity: int = 0,
+        positions: Sequence[int] | None = None,
+        status_callback: StatusCallback | None = None
+    ) -> pd.DataFrame:
+        """
+        Compute all single substitutions to one particular instance (aka "single mutation scan")
+        batching across different positions. This is different to score_conditional() which
+        batches substitutions to exactly one single position across many different instances.
+
+        Note:
+        1. Mutation logits should be *relative* to the given instance (like a log-odds ratio),
+         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
+         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+         no notion of a "wildtype" sequence to compute relative scores to.
+
+        2. The implementation of this function can draw on score(), score_conditional(), score_mutants()
+         or any method-specific implementations as needed to provide the most efficient/accurate way
+         to single mutant effect calculation
+
+        Parameters
+        ----------
+        instance
+            Target system instance specification to mutate
+        entity
+            Index of entity for which mutation scan should be computed. Defaults to first entity.
+        positions
+            Subset of positions to score. If None, scores for all positions will be computed.
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Dataframe with log-odds scores (seq x aa) relative to instance; rows index over
+        entity/position/ref triplets, columns index over different symbols (amino acids etc.).
+        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
+        missing predictions must be coded by np.nan.
+        """
+        pass
+
+    @abstractmethod
+    def score_mutants(
+        self,
+        instance: SystemInstance,
+        mutants: Sequence[Mutant],
+        status_callback: StatusCallback | None = None
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        """
+        Compute logit scores for a list of mutations to a specified system instance
+        (can be any single or higher-order mutants); this method is to allow specialized, more efficient
+        or accurate implementations of mutant calculations than computing the full score of the WT and
+        mutant sequence. In case no such specialization is possible or needed for a method, it can simply
+        call out to the score() function.
+
+        Note:
+        1. Mutation logits should be *relative* to the given instance (like a log-odds score),
+         so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
+         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+         no notion of a "wildtype" sequence to compute relative scores to.
+
+        2. Implementations of this method may either compute mutant and reference scores for substraction
+         with the score() method or draw on any specialized implementations of single and higher-order mutation
+         scoring that are more accurate / efficient.
+
+        Parameters
+        ----------
+        instance
+            Target system instance specification to mutate
+        mutants
+            List of mutations of any order to compute
+        status_callback
+            Callback function to track computation status
+
+        Returns
+        -------
+        Vector of scores, guaranteed to be in the same order as mutants list
+        """
+        pass
