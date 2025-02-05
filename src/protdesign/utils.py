@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from typing import Callable, Sequence, TypeVar
+from typing import Callable, Sequence, TypeVar, Mapping
 import numpy as np
 from protdesign.types import StatusCallback
 
@@ -65,7 +65,7 @@ def str_to_np_char_view(x: Sequence[str]):
     2D character array
     """
     x_np = np.array(
-        x, dtype=np.unicode_
+        x, dtype=np.str_
     )
 
     return x_np.view(
@@ -73,3 +73,23 @@ def str_to_np_char_view(x: Sequence[str]):
     ).reshape(
         (x_np.size, -1)
     )
+
+def map_array(x: np.ndarray, map_: Mapping) -> np.ndarray:
+    """
+    Efficiently map elements of a numpy array
+
+    Parameters
+    ----------
+    x
+        Array to be mapped
+    map_
+        Mapping to be applied to individual elements
+        (to cover potentially missing values, use a defaultdict)
+
+    Returns
+    -------
+
+    """
+    return np.vectorize(
+        map_.__getitem__
+    )(x)
