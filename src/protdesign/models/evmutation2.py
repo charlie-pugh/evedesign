@@ -24,7 +24,7 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVmutation2(BaseModel, Scorer, Generator):
+class EVmutation2(Scorer, Generator):
     """
     Wrapper class around EVmutation2/picasso model
     """
