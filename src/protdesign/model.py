@@ -593,8 +593,8 @@ class BaseModel(ABC):
 
         if raise_invalid and len(valid_pos) != len(positions):
             raise ValueError(
-                f"Invalid positions given, valid options are {available_pos}"
-                f" but given are {given_pos}"
+                f"Invalid positions given, valid options are {sorted(available_pos)}"
+                f" but given are {sorted(given_pos)}"
             )
 
         return valid_pos
