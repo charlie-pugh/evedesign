@@ -5,16 +5,17 @@ from typing import Tuple, Self, List, Sequence
 
 import numpy as np
 import pandas as pd
-from protdesign.model import BaseModel, Scorer, RequiredResources
+
+from protdesign.model import Scorer, RequiredResources
 from protdesign.entity import System, SystemInstance, Mutant
 from protdesign.types import StatusCallback
-from protdesign.utils import str_to_np_char_view
-from pygments.lexer import include
+from protdesign.utils import str_to_np_char_view, map_array
+from protdesign.constants import GAP
 
 EntityToReferenceSeqs = dict[int, list[str]]
 
 
-class LinearSeqDistRestraint(BaseModel, Scorer):
+class LinearSeqDistRestraint(Scorer):
     """
     Linear distance restraint between generated sequences and a set of reference sequences.
     For simplicity, assumes all compared sequences (i.e. on a per-entity basis) have the same
@@ -63,12 +64,21 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
 
         # will hold mapped and verified reference sequences for comparison
         self._ref_seqs = None
+        self._alphabets = None
+        self._alphabet_mappings = None
+        self._ref_seqs_mapped = None
 
         self.exclude_gaps_from_distance = exclude_gaps_from_distance
 
     @property
     def ready(self):
-        return self.system is not None and self._ref_seqs is not None
+        return (
+            self.system is not None and
+            self._ref_seqs is not None and
+            self._alphabets is not None and
+            self._alphabet_mappings is not None and
+            self._ref_seqs_mapped is not None
+        )
 
     @property
     def system(self) -> System | None:
@@ -104,8 +114,6 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
             if len(invalid) > 0:
                 return False, f"Reference sequence(s) do not have correct length of {cur_entity_length}: {invalid}"
 
-        # TODO: check if all given sequences are valid or simply match on character level for more flexibility?
-
         return True, ""
 
     @classmethod
@@ -138,6 +146,30 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
                 entity_ref_seqs
             ) for entity_idx, entity_ref_seqs in data.items()
         }
+
+        # store alphabets for each entity
+        self._alphabets = {
+            entity_idx: entity.alphabet(include_gap=True)
+            for entity_idx, entity in enumerate(self._system)
+            if entity.defined_sequence()
+        }
+
+        self._alphabet_mappings = {
+            entity_idx: {symbol: idx for idx, symbol in enumerate(alphabet)}
+            for entity_idx, alphabet in self._alphabets.items()
+        }
+
+        # map to numerical indices
+        try:
+            self._ref_seqs_mapped = {
+                entity_idx: map_array(
+                    entity_ref_seqs,
+                    {symbol: idx for idx, symbol in enumerate(self._alphabets[entity_idx])}
+                )
+                for entity_idx, entity_ref_seqs in self._ref_seqs.items()
+            }
+        except KeyError as e:
+            raise ValueError("Invalid symbol in reference sequences") from e
 
         return self
 
@@ -223,6 +255,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         )
 
         # only allow entities of same type to be scored at same time for now
+        # TODO: refactor this to a reusable method, and also in Gibbs sampler
         unique_entities = sorted(set(entities))
         entity_types = {
             self._system[entity_idx].type_ for entity_idx in unique_entities
@@ -231,26 +264,73 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
             raise ValueError("For now, can only score entities of one type")
 
         # get alphabet for this one entity type
-        alphabet = self._system[unique_entities[0]].alphabet(include_gap=True)
+        alphabet = self._alphabets[unique_entities[0]]
 
-        # compute distances entity by entity for simplicity
+        # initialize table of instance/entity/pos triplets and add current
+        # instance symbol for later comparison to restraint sequences
+        entity_to_first_index = {
+            entity_idx: entity.first_index for entity_idx, entity in enumerate(self._system)
+        }
+
+        # prepare empty scoring matrix
         res = pd.DataFrame({
             "instance": np.arange(len(instances)),
             "entity": entities,
             "pos": positions,
-        })
+        }).set_index(
+            ["instance", "entity", "pos"]
+        ).reindex(
+            alphabet, axis=1, fill_value=0.0
+        )
 
-        # accumulate current symbol at each position and whether it is affected by restraint
-        # TODO: need to loop through different reference sequences
-        # TODO: compare to all possible other symbols
+        # determine instance symbol for each row, this allows to reuse the scores for single_mutation_scan()
+        inst_symbol = np.array([
+            instance[entity_idx].rep[
+                pos - entity_to_first_index[entity_idx]
+                ]
+            for (instance, entity_idx, pos) in zip(instances, entities, positions)
+        ])
+        inst_symbol_idx = map_array(
+            inst_symbol, self._alphabet_mappings[unique_entities[0]]
+        )
 
-        print(alphabet)  # TODO: Remove
+        # compare sequences entity by entity and accumulate updated subgroup dataframes
+        groups = res.groupby("entity", sort=False)
 
-        # TODO: sufficient to compute delta here for all mutants to each site (reference symbol = 0,
-        #  do other symbols make sequence more similar or dissimilar to reference?)
+        for entity_idx, all_row_idx in groups.indices.items():
+            entity_idx = int(entity_idx)  # noqa
 
-        # TODO: need to return zero scores for non-restrained positions
-        # TODO: assert length of dataframe
+            # keep neutral scores to positions in entities that are restrained
+            if entity_idx not in self._ref_seqs:
+                continue
+
+            # map requested position for each instance
+            cur_positions = (
+                res.iloc[all_row_idx].index.get_level_values("pos").values - entity_to_first_index[entity_idx]
+            )
+
+            # compare to all reference sequences for current entity
+            # (use version mapped to indices for direct fancy indexing into numpy array)
+            cur_ref_seqs = self._ref_seqs_mapped[entity_idx]
+
+            # iterate through individual reference sequences
+            # TODO: may need to make this more efficient for larger sets of restraint sequences
+            #  (e.g. comparing against entire MSA)
+            for i in range(len(cur_ref_seqs)):
+                # extract symbols at different positions in this reference sequence
+                ref_symbols = cur_ref_seqs[i, cur_positions]
+
+                # update in place
+                res.values[all_row_idx, ref_symbols] += 1
+
+                # treat gap special case
+                if self.exclude_gaps_from_distance:
+                    # TODO: implement
+                    pass
+
+        # retrieve value for instance symbol across all rows, then subtract from full matrix to normalize
+        inst_symbol_val = res.values[np.arange(len(res)), inst_symbol_idx]
+        res.values[:, :] -= inst_symbol_val[:, None]
 
         assert len(res) == len(instances)
         return res

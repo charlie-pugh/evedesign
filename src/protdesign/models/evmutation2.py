@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
+from protdesign.model import Scorer, Generator, RequiredResources
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
 from protdesign.sequence import valid_protein_sequence
