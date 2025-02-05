@@ -266,7 +266,8 @@ class GibbsSampler(Generator):
 
         # remove fixed positions from all available positions, we need at least one to design
         design_pos = sorted(
-            entity_pos for entity_pos in self.shared_pos if entity_pos not in fixed_pos
+            (entity, pos) for  (entity, pos) in self.shared_pos
+            if (entity, pos) not in fixed_pos and entity in entities
         )
 
         if len(design_pos) == 0:
