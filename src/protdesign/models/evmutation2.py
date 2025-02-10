@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import Scorer, Generator, RequiredResources
+from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
 from protdesign.sequence import valid_protein_sequence
@@ -24,25 +24,28 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVmutation2(Scorer, Generator):
+class EVmutation2(BaseModel, Scorer, Generator):
     """
     Wrapper class around EVmutation2/picasso model
     """
     available = IMPORT_AVAILABLE
     name: str = "EVmutation2"
 
-    requires_heavy_build: bool = False
+    # core properties
+    requires_target: bool = True
+    requires_fixed_length: bool = True
+    handles_deletions: bool = True
+    handles_insertions: bool = False
     requires_gpu: bool = False
     supports_gpu: bool = True
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    requires_target: bool = True
+    # molecular model properties
+    requires_heavy_build: bool = False
     requires_seqs: bool = True
     requires_msa: bool = True
     requires_3d: bool = False
-    requires_fixed_length: bool = True
-    handles_deletions: bool = True
 
     def __init__(
         self,
@@ -87,7 +90,6 @@ class EVmutation2(Scorer, Generator):
         device
             Device to use for computations
         """
-        super().__init__()
         self.model_file_path = model_file_path
         self.keep_model_after_build = keep_model_after_build
 
@@ -283,13 +285,14 @@ class EVmutation2(Scorer, Generator):
         return self
 
     def positions(
-        self
+        self,
+        instance: SystemInstance | None = None,
     ) -> List[Tuple[int, int]]:
         self.ready_or_raise()
 
         # implementation here is very simple: we model all positions of exactly one target
-        # protein sequence; none of the positions along the sequence are excluded so
-        # we can simply enumerate starting from first_index
+        # protein sequence of fixed length (i.e. can ignore the passed instance);
+        # none of the positions along the sequence are excluded so we can simply enumerate starting from first_index
         target = self.system[0]
         return [
             (0, pos) for pos, _ in enumerate(target.rep, start=target.first_index)
@@ -369,7 +372,7 @@ class EVmutation2(Scorer, Generator):
                 raise ValueError("Can only design single entity (entities = [0] | None)")
         else:
             # not used for now
-            entities = [0]
+            entities = [0]  # noqa
 
         target = self.system[0]
 

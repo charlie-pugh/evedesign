@@ -6,16 +6,15 @@ from typing import Tuple, Self, List, Sequence
 import numpy as np
 import pandas as pd
 
-from protdesign.model import Scorer, RequiredResources
+from protdesign.model import BaseModel, Scorer, RequiredResources
 from protdesign.entity import System, SystemInstance, Mutant
 from protdesign.types import StatusCallback
 from protdesign.utils import str_to_np_char_view, map_array
-from protdesign.constants import GAP
 
 EntityToReferenceSeqs = dict[int, list[str]]
 
 
-class LinearSeqDistRestraint(Scorer):
+class LinearSeqDistRestraint(BaseModel, Scorer):
     """
     Linear distance restraint between generated sequences and a set of reference sequences.
     For simplicity, assumes all compared sequences (i.e. on a per-entity basis) have the same
@@ -41,6 +40,7 @@ class LinearSeqDistRestraint(Scorer):
     requires_target: bool = True
     requires_fixed_length: bool = True
     handles_deletions: bool = True
+    handles_insertions: bool = False
 
     requires_seqs: bool = False
     requires_msa: bool = False
@@ -59,7 +59,6 @@ class LinearSeqDistRestraint(Scorer):
             If True, do not count positions where either of two compared sequences
             has a gap symbol
         """
-        super().__init__()
         self._system = None
 
         # will hold mapped and verified reference sequences for comparison
@@ -174,7 +173,8 @@ class LinearSeqDistRestraint(Scorer):
         return self
 
     def positions(
-        self
+        self,
+        instance: SystemInstance | None = None,
     ) -> List[Tuple[int, int]]:
         self.ready_or_raise()
 
