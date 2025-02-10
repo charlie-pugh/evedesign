@@ -218,12 +218,8 @@ class Generator(_Core):
 
 class Scorer(_Core):
     """
-    Interface implemented by classes that can score
-    (e.g. density/log likelihood) for existing designs/sequences
-    (scalar value per design/sequence)
-
-    Please refer to comments on each function on the excepted semantics and format
-    of the returned scores.
+    Interface implemented by classes that can score (e.g. density/log likelihood/arbitrary unit score) for
+    entire designs (scalar value per system instance).
     """
     @abstractmethod
     def score(
@@ -253,6 +249,13 @@ class Scorer(_Core):
         """
         pass
 
+
+class ConditionalMutationScorer(_Core):
+    """
+    Interface implemented by classes that can compute conditional probabilities
+    P(x_i | x_\i) to be used e.g. for Gibbs sampling even if not
+    able to compute full P(x_1, ..., x_n)
+    """
     @abstractmethod
     def score_conditional(
         self,
@@ -276,12 +279,11 @@ class Scorer(_Core):
          meant to be interpreted relative to each other (i.e. should be treated as raw logits)
          across possible symbols *per* sampled instance/entity/position combination
 
-        TODO: how handle different types of alphabets sampled at the same time? Or require that all entities
-         must have same type/alphabet (e.g. protein)
-
-        TODO: if we encounter at least one relevant case of a method that is able to
-          compute P(x_i | x_\i) but not P(x_1, ..., x_n), break this method out into a
-          separate interface "ConditionalScorer" for use with the Gibbs sampler
+        3. Return dataframe row index is over instance index/entity index/position triplets;
+         columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
+         entities and positions. Rows must be in the same order as input instance/entity/position triplets.
+         Columns must be in same order as returned by Entity.alphabet() (or union thereof if multiple types
+         of entities), missing predictions must be encoded by np.nan
 
         Parameters
         ----------
@@ -299,14 +301,15 @@ class Scorer(_Core):
 
         Returns
         -------
-        Dataframe with raw logit scores (seq x aa); row index is over instance index/entity index/position triplets;
-        columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
-        entities and positions. Rows must be in the same order as input instance/entity/position triplets.
-        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED, missing predictions must be
-        encoded by np.nan
+        Dataframe with raw logit scores (seq x symbols);
         """
         pass
 
+
+class MutationScorer(_Core):
+    """
+    Interface for methods that allow to score mutations to an instance
+    """
     @abstractmethod
     def single_mutation_scan(
         self,
@@ -323,7 +326,7 @@ class Scorer(_Core):
         Note:
         1. Mutation logits should be *relative* to the given instance (like a log-odds ratio),
          so that self-substitutions are assigned are score of 0, beneficial substitutions are score > 0,
-         and damaging substitutions  a score < 0. This differs from score_conditional, where there is
+         and damaging substitutions a score < 0. This differs from score_conditional, where there is
          no notion of a "wildtype" sequence to compute relative scores to.
 
         2. The implementation of this function can draw on score(), score_conditional(), score_mutants()
@@ -343,10 +346,10 @@ class Scorer(_Core):
 
         Returns
         -------
-        Dataframe with log-odds scores (seq x aa) relative to instance; rows index over
+        Dataframe with log-odds scores (seq x symbol) relative to instance; rows index over
         entity/position/ref triplets, columns index over different symbols (amino acids etc.).
-        Columns must be in same order as constants.VALID_AA_OR_GAP_SORTED,
-        missing predictions must be coded by np.nan.
+        Columns must be in same order as returned by Entity.alphabet(); missing predictions must
+        be coded by np.nan.
         """
         pass
 
@@ -385,7 +388,7 @@ class Scorer(_Core):
 
         Returns
         -------
-        Vector of scores, guaranteed to be in the same order as mutants list
+        1D array of scores, guaranteed to be in the same order as mutants list
         """
         pass
 

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 from protdesign.constants import GAP
-from protdesign.model import Generator, Scorer
+from protdesign.model import Generator, ConditionalMutationScorer
 from protdesign.entity import System, SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback, EntityType
 from protdesign.utils import status_progress, ensure_sequence
@@ -76,7 +76,7 @@ class GibbsSampler(Generator):
 
     def __init__(
         self,
-        scorers: Sequence[Scorer],
+        scorers: Sequence[ConditionalMutationScorer],
         weights: Sequence[float] | None = None,
         num_sweeps: int = 1000,
         init_strategy: InitStrategy = "random",

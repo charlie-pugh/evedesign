@@ -10,7 +10,9 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import BaseModel, Scorer, Generator, RequiredResources
+from protdesign.model import (
+    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
+)
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
 from protdesign.sequence import valid_protein_sequence
@@ -18,13 +20,13 @@ from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
-    from picasso_model import model, features, parsers
+    from picasso_model import model, features, parsers  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVmutation2(BaseModel, Scorer, Generator):
+class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
     """
     Wrapper class around EVmutation2/picasso model
     """
@@ -63,7 +65,7 @@ class EVmutation2(BaseModel, Scorer, Generator):
         """
         Instantiate new EVcouplings2 model
 
-        TODO: support min_p sampling and sample_gaps
+        TODO: support min_p sampling and with extra parameters on generate() method
 
         Parameters
         ----------

@@ -6,15 +6,15 @@ from typing import Tuple, Self, List, Sequence
 import numpy as np
 import pandas as pd
 
-from protdesign.model import BaseModel, Scorer, RequiredResources
-from protdesign.entity import System, SystemInstance, Mutant
+from protdesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer
+from protdesign.entity import System, SystemInstance
 from protdesign.types import StatusCallback
 from protdesign.utils import str_to_np_char_view, map_array
 
 EntityToReferenceSeqs = dict[int, list[str]]
 
 
-class LinearSeqDistRestraint(BaseModel, Scorer):
+class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
     """
     Linear distance restraint between generated sequences and a set of reference sequences.
     For simplicity, assumes all compared sequences (i.e. on a per-entity basis) have the same
@@ -335,6 +335,8 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         assert len(res) == len(instances)
         return res
 
+    """
+    # TODO: implement MutationScorer interface if it would be useful in practice 
     def single_mutation_scan(
         self,
         instance: SystemInstance,
@@ -351,3 +353,4 @@ class LinearSeqDistRestraint(BaseModel, Scorer):
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         raise NotImplementedError()
+    """
