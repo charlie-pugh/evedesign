@@ -165,11 +165,22 @@ class EntityInstance:
         """
         Create new instantiation of an entity in a sequence
 
+        Notes:
+        1. Under fixed-length models, length of representation in EntityInstance should always match
+         length of the corresponding representation in the defining Entity
+
+        2. Deletions relative to the Entity representation should be encoded with the GAP symbol,
+         insertions with the lowercase version of the alphabet symbol (cf. Entity.alphabet()).
+         This directly corresponds to how the alignment between the two representations would be encoded
+         in the A3M alignment format. This encoding will allow implementations to map positions back to the
+         system instance numbering (e.g. to evaluate constraints on fixed positions)
+
         Parameters
         ----------
         rep
             Uniquely defining representation (e.g. primary sequence) of entity. Set to None if no
-            representation is yet available (e.g. just structural backbone but no sequence)
+            representation is yet available (e.g. just structural backbone but no sequence).
+            See notes above regarding encoding of insertions and deletions.
         embedding
             Transformation of entity instance into per-residue embedding (2D array) or
             per-entity embedding (1D array) space
