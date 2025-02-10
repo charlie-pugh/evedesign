@@ -7,16 +7,34 @@ from typing import Mapping, NamedTuple
 import numpy as np
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
-from protdesign.types import EntityType, Metadata
-from protdesign.constants import VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED
+from protdesign.types import EntityType, Metadata, BioPolymers
+from protdesign.constants import (
+    VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
+    VALID_DNA_OR_GAP_SORTED, VALID_DNA_SORTED,
+    VALID_RNA_OR_GAP_SORTED, VALID_RNA_SORTED,
+    GAP
+)
 from protdesign.utils import ensure_sequence, shorten
 
-# Data structures/types for providing mutation information in structured format
+
+"""
+Data structures/types for providing mutation information in structured format
+
+Deletions are coded by to = GAP
+
+Insertions are coded by 
+  1. ref = "",
+  2. to = lowercase insert symbols as returned by Entity.alphabet()
+  3. occur directly *after* the referenced position (for insertion at beginning of sequence, use first_index - 1).
+"""
 Mutation = NamedTuple(
     "Mutation", [("entity", int), ("pos", int), ("ref", str), ("to", str)]
 )
 
-# Mutant is comprised of one or more mutations
+"""
+Mutant is comprised of one or more mutations; note that all individual mutations are relative to the
+sequence *before* applying any of the mutations (e.g. before any numbering shifts due to insertions)
+"""
 Mutant = Sequence[Mutation]
 
 
@@ -70,8 +88,7 @@ class Entity:
         self.id_ = id
         self.copies = copies
 
-        # TODO: also allow for nucleotide entities once implemented
-        if self.type_ != "protein" and sequences is not None:
+        if self.type_ not in BioPolymers and sequences is not None:
             raise ValueError(
                 "Sequence record only supported for biopolymer entities"
             )
@@ -79,7 +96,7 @@ class Entity:
         self.sequences = sequences
         self.structures = structures
 
-        if self.type_== "protein" and first_index is None:
+        if self.type_ in BioPolymers and first_index is None:
             raise ValueError(
                 f"first_index must be specified for type {self.type_}"
             )
@@ -106,12 +123,16 @@ class Entity:
         Check if entity corresponds to a biopolymer (protein, ...)
         and has a defined representative with non-zero length
 
+        Does *not* validate sequence symbols against alphabet as rep
+        in its most basic form is only meant to be a generic sequence
+        placeholder
+
         Returns
         -------
         True if protein/nucleotide sequence with some defined length
         """
         return (
-            self.type_ == "protein" and
+            self.type_ in BioPolymers and
             self.rep is not None and
             len(self.rep) > 0 and
             self.first_index is not None
@@ -130,27 +151,36 @@ class Entity:
         include_gap
             If true, add gap symbol to alphabet
         include_inserts
-            If ture, add insert symbols to alphabet (lowercase version of all symbols)
+            If true, add insert symbols to alphabet (lowercase version of all symbols)
 
         Returns
         -------
         Alphabet for representing primary sequence of entity
         """
         if self.type_ == "protein":
-            if include_gap:
-                a = VALID_AA_OR_GAP_SORTED
-            else:
-                a = VALID_AA_SORTED
-
+            a = VALID_AA_OR_GAP_SORTED if include_gap else VALID_AA_SORTED
             if include_inserts:
-                # do not include gap again
                 a = a + [symbol.lower() for symbol in VALID_AA_SORTED]
-
-            return a
+        elif self.type_ == "dna":
+            a = VALID_DNA_OR_GAP_SORTED if include_gap else VALID_DNA_SORTED
+            if include_inserts:
+                a = a + [symbol.lower() for symbol in VALID_DNA_SORTED]
+        elif self.type_ == "rna":
+            a = VALID_RNA_OR_GAP_SORTED if include_gap else VALID_RNA_SORTED
+            if include_inserts:
+                a = a + [symbol.lower() for symbol in VALID_RNA_SORTED]
         else:
-            raise NotImplementedError("Non-protein alphabets not yet implemented")
+            raise NotImplementedError(
+                f"Alphabet for type {self.type_} not implemented"
+            )
 
-Embedding = np.ndarray[tuple[int, int], np.dtype[float]] | np.ndarray[tuple[int], np.dtype[float]]
+        return a
+
+Embedding = np.ndarray[
+    tuple[int, int], np.dtype[float]
+] | np.ndarray[
+    tuple[int], np.dtype[float]
+]
 
 class EntityInstance:
     """
@@ -216,8 +246,6 @@ class SystemInstance(UserList):
     ):
         """
         Create new entity system instance
-
-        # TODO: activate metadata attribute once needed
 
         Parameters
         ----------
@@ -325,7 +353,8 @@ class System(UserList):
         self,
         instance: SystemInstance,
         mutants: Sequence[Mutant],
-        allow_gap: bool = False,
+        deletions: bool = False,
+        insertions: bool = False,
         raise_invalid: bool = False,
     ) -> tuple[bool, list[tuple[int, Mutation]]]:
         """
@@ -337,14 +366,16 @@ class System(UserList):
             System instance to check against; assuming this has been previously validated with valid_instance().
         mutants
             Verify these mutants against system instance
-        allow_gap
-            If True, consider gap symbol a valid substitution
+        deletions
+            If True, consider gap symbol a valid substitution coding for a deletion at the given position
+        insertions
+            If True, allow insertions (coded as lowercase symbol returned by Entity.alphabet())
         raise_invalid
             Raise ValueError if any invalid mutants are detected
 
         Returns
         -------
-        invalid
+        valid
             True if all mutants are valid, False otherwise
         invalid_subs
             Tuple of mutant indies and invalid mutations in these mutants (empty if all mutants are valid)
@@ -357,29 +388,52 @@ class System(UserList):
                     instance[entity_idx].rep, start=entity.first_index
                 )
             } for entity_idx, entity in enumerate(self.data)
-            if entity.defined_sequence()
+            # note: defined_sequence() is too strict of a check here as it required rep to be defined
+            if entity.type_ in BioPolymers and entity.first_index is not None
         }
 
+        # also record possible positions for insertion including N-terminal of first_index
+        if insertions:
+            entity_to_ins_pos = {
+                entity_idx: (set(pos) | {min(pos) - 1}) for entity_idx, pos in entity_to_pos.items()
+            }
+        else:
+            entity_to_ins_pos = {
+                entity_idx: {} for entity_idx, pos in entity_to_pos.items()
+            }
+
         entity_to_valid_subs = {
-            entity_idx: set(entity.alphabet(include_gap=allow_gap))
+            entity_idx: set(entity.alphabet(include_gap=deletions, include_inserts=insertions))
             for entity_idx, entity in enumerate(self.data)
         }
 
         invalid_subs = [
             (i, subs) for (i, mutant) in enumerate(mutants) for subs in mutant if (
                 (subs.entity not in entity_to_pos) or  # valid entity index
-                (subs.pos not in entity_to_pos[subs.entity]) or  # valid position in entity
-                (subs.ref != entity_to_pos[subs.entity][subs.pos]) or  # invalid reference symbol
-                (subs.to not in entity_to_valid_subs[subs.entity])
+                 # generally invalid specification if "to" not in target alphabet
+                subs.to not in entity_to_valid_subs[subs.entity] or
+                # check insertions
+                subs.ref == "" and (
+                    (subs.pos not in entity_to_ins_pos[subs.entity]) or
+                    subs.to == GAP or
+                    subs.to.lower() != subs.to
+                ) or
+
+                # validate mutations/deletions
+                subs.ref != "" and (
+                    (subs.pos not in entity_to_pos[subs.entity]) or
+                    (subs.ref != entity_to_pos[subs.entity][subs.pos]) or
+                    (subs.to.lower() == subs.to)
+                )
             )
         ]
 
-        invalid = len(invalid_subs) > 0
+        valid = len(invalid_subs) == 0
 
-        if invalid and raise_invalid:
+        if not valid and raise_invalid:
             raise ValueError(f"Invalid mutants: {invalid_subs}")
 
-        return invalid, invalid_subs
+        return valid, invalid_subs
 
 
 class Protein(Entity):

@@ -592,7 +592,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
         # verify if mutants are valid relative to system and instance
         self.system.valid_mutants(
-            instance, mutants, allow_gap=False, raise_invalid=True
+            instance, mutants, deletions=True, insertions=False, raise_invalid=True
         )
 
         # extract single target entity from system, and get sequence from instance
