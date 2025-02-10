@@ -458,7 +458,8 @@ class RequiredResources:
 
 class BaseModel(_Core):
     """
-    Core abstract definition of a protein design model
+    Core definition of models operating directly on molecular systems with sequences, structures, data, ...
+    (not to be used for higher-level implementations like samplers etc.)
     """
     @property
     @abstractmethod
