@@ -390,45 +390,49 @@ class Scorer(_Core):
         pass
 
 
-class Embedder(_Core):
+class Transformer(_Core):
     """
-    Interface implemented by methods than can compute per-position embeddings
-    (designs/sequences, vector per token)
+    Interface implemented by models that transform instances from one representation to another
+    (e.g. from sequence to embeddings or structures, or vice versa).
 
-    TODO: add interface for combined scoring and embedding (don't compute twice, as embeddings will be
-        computed whenever density is computed
+    Note: Implementations may transform to any representation attribute present on SystemInstance
+     (rep, embedding, structure)
 
-    TODO: add separate interface for protein-level embedding (rather than positional embeddings, which can be pooled)
+    Note: Implementations must verify that all relevant input attributes on instances are specified
 
-    TODO: check if beneficial to add specialized methods for single-mutant embeddings?
+    Note: implementations may also set the "score" attribute on the SystemInstance to simultaneously
+     score and transform instances for increased computational efficiency (e.g. compute likelihood
+     score and embed).
 
-    TODO: all instances must have same length
+    Note: Implementation must not mutate the provided instance list (references to embeddings and structures
+     can be reused for efficiency when copying, i.e. a shallow copy of SystemInstance and EntityInstance objects
+     is sufficient)
 
-    TODO: make method more flexible so can we compute embeddings across all entities?
+    TODO: eventually revisit if beneficial to add specialized methods for single-mutant embeddings
+     (like for scoring)
     """
     @abstractmethod
-    def embed(
+    def transform(
         self,
         instances: Sequence[SystemInstance],
-        entity: int,
+        entity: int | None = None,
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int, int, int], np.dtype[float]]:
+    ) -> List[SystemInstance]:
         """
-        Transform system instances to embeddings
+        Transform system instances from one representation to another
 
         Parameters
         ----------
         instances
             List of system instances to be transformed
         entity:
-            The index of the entity to embed
+            The index of the entity to transform. If None, transform all entities in system.
         status_callback
             Callback function to track computation status
 
         Returns
         -------
-        Embeddings for given instances (instance x positions x feature dimension);
-        actual embedding features are in last dimension of tensor
+        Transformed instances (copy, not modified in place), with updated attributes and/or score
         """
         pass
 

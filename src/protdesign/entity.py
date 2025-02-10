@@ -4,6 +4,7 @@ Specification of components of molecular design system (proteins, nucleic acids,
 from collections import UserList
 from collections.abc import Sequence
 from typing import Mapping, NamedTuple
+import numpy as np
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType, Metadata
@@ -22,9 +23,9 @@ Mutant = Sequence[Mutation]
 class Entity:
     def __init__(
         self,
-        type: EntityType,
+        type: EntityType,  # noqa
         rep: str | None = None,
-        id: str | None = None,
+        id: str | None = None,  # noqa
         copies: int | None = None,
         first_index: int | None = None,
         sequences: Sequences | None = None,
@@ -141,6 +142,7 @@ class Entity:
         else:
             raise NotImplementedError("Non-protein alphabets not yet implemented")
 
+Embedding = np.ndarray[tuple[int, int], np.dtype[float]] | np.ndarray[tuple[int], np.dtype[float]]
 
 class EntityInstance:
     """
@@ -149,7 +151,8 @@ class EntityInstance:
     def __init__(
         self,
         rep: str | None = None,
-        structure_models: StructureChainMap | None = None,
+        embedding:  Embedding | None = None,
+        models: StructureChainMap | None = None,
     ):
         """
         Create new instantiation of an entity in a sequence
@@ -157,20 +160,24 @@ class EntityInstance:
         Parameters
         ----------
         rep
-            Representation (e.g. sequence) of entity. Set to None if no
+            Uniquely defining representation (e.g. primary sequence) of entity. Set to None if no
             representation is yet available (e.g. just structural backbone but no sequence)
-        structure_models
+        embedding
+            Transformation of entity instance into per-residue embedding (2D array) or
+            per-entity embedding (1D array) space
+        models
             Structural models associated with each of the entities in the system.
             Set to None if no structural models are available.
         """
         self.rep = rep
-        self.structure_models = structure_models
+        self.embedding = embedding
+        self.models = models
 
     def __repr__(self):
-        if self.structure_models is not None:
-            structure_info = len(self.structure_models)
+        if self.models is not None:
+            structure_info = len(self.models)
         else:
-            structure_info = self.structure_models
+            structure_info = self.models
 
         return f"EntityInstance(rep={shorten( self.rep)}, structure_models={structure_info})"
 
@@ -362,7 +369,7 @@ class Protein(Entity):
     """
     def __init__(
         self,
-        id: str | None,
+        id: str | None,  # noqa
         rep: str | None = None,
         first_index: int = 1,
         copies: int | None = None,
