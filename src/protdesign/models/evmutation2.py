@@ -92,6 +92,9 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         device
             Device to use for computations
         """
+        if not self.available:
+            raise ValueError("EVmutation2 package could not be imported. Is it installed already?")
+
         self.model_file_path = model_file_path
         self.keep_model_after_build = keep_model_after_build
 
