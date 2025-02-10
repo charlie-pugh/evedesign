@@ -37,14 +37,10 @@ class Entity:
         Note: For clarity, preferentially use subclasses for specific types
         of entities (e.g. Protein class)
 
-        # TODO: additional attributes to be added right away
-            * mapping to sequences/structures - implement right away
-
-        # TODO: parameters to be added at later point
-            * modifications
-            * different states / conformations
-            * designable or not?
-            * hotspots, pair restraints / constraints
+        TODO: parameters to be added at later point
+         * modifications
+         * different states / conformations
+         * hotspots, pair restraints / constraints
 
         Parameters
         ----------
@@ -121,7 +117,11 @@ class Entity:
             self.first_index is not None
         )
 
-    def alphabet(self, include_gap: bool=True) -> list[str]:
+    def alphabet(
+        self,
+        include_gap: bool=True,
+        include_inserts: bool=False
+    ) -> list[str]:
         """
         Return sequence alphabet for biopolymer entities
 
@@ -129,6 +129,8 @@ class Entity:
         ----------
         include_gap
             If true, add gap symbol to alphabet
+        include_inserts
+            If ture, add insert symbols to alphabet (lowercase version of all symbols)
 
         Returns
         -------
@@ -136,9 +138,15 @@ class Entity:
         """
         if self.type_ == "protein":
             if include_gap:
-                return VALID_AA_OR_GAP_SORTED
+                a = VALID_AA_OR_GAP_SORTED
             else:
-                return VALID_AA_SORTED
+                a = VALID_AA_SORTED
+
+            if include_inserts:
+                # do not include gap again
+                a = a + [symbol.lower() for symbol in VALID_AA_SORTED]
+
+            return a
         else:
             raise NotImplementedError("Non-protein alphabets not yet implemented")
 
