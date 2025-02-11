@@ -96,9 +96,9 @@ class Entity:
         self.sequences = sequences
         self.structures = structures
 
-        if self.type_ in BioPolymers and first_index is None:
+        if self.type_ in BioPolymers and first_index is None and first_index < 1:
             raise ValueError(
-                f"first_index must be specified for type {self.type_}"
+                f"first_index must be specified for type {self.type_} and must be >= 1"
             )
 
         self.first_index = first_index
@@ -175,6 +175,34 @@ class Entity:
             )
 
         return a
+
+    @classmethod
+    def merge_alphabet_symbols(
+        cls,
+        alphabets: list[list[str]]
+    ) -> list[str]:
+        """
+        Merge symbols from different alphabets into one joint
+        list of symbols. Note this does not imply a new alphabet, rather this
+        method should only be used as a helper to jointly represent results for
+        multiple alphabets in parallel (e.g. in ConditionalMutationScorer score_conditional()
+        result dataframe)
+
+        Parameters
+        ----------
+        alphabets
+            List of one or more alphabets
+
+        Returns
+        -------
+        Merged alphabet with each symbol occurring exactly once.
+        """
+        # deduplicate symbols and sort again:
+        # upper-case symbols first, gap next, lowercase symbols/inserts last
+        return sorted(
+            {symbol for alphabet in alphabets for symbol in alphabet},
+            key=lambda symbol: (symbol == symbol.lower(), symbol != GAP, symbol)
+        )
 
 Embedding = np.ndarray[
     tuple[int, int], np.dtype[float]

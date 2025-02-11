@@ -236,6 +236,10 @@ class Scorer(_Core):
          scored in the same call. Scores between multiple calls do not have to be comparable (user
          is responsible for including a reference instance for normalization in these cases)
 
+        2. Implementation is responsible for verifying if the provided instances can be modelled,
+         and to extract all information needed (e.g. deletions marked by GAP for models handling deletions,
+         insertions marked with lowercase symbols for models handling insertions, etc.)
+
         Parameters
         ----------
         instances
@@ -285,6 +289,17 @@ class ConditionalMutationScorer(_Core):
          Columns must be in same order as returned by Entity.alphabet() (or union thereof if multiple types
          of entities), missing predictions must be encoded by np.nan
 
+        4. Optional insertion handling: Models able to provide scores for insertions should include these
+         by requesting an alphabet including insertion symbols: Entity.alphabet(..., include_inserts=True).
+         Insertions are implied to occur immediately after the position in the dataframe index, an insertion
+         before the first sequence position should be coded by pos=entity.first_index - 1
+         (with all uppercase symbols), with all uppercase/non-insert symbol values set to NaN.
+
+        5. Methods returning predictions across entities with more than one alphabet should use
+         Entity.merge_alphabet_symbols() to determine the mixed alphabet/column order. The alphabet of each dataframe row
+         is implied by the type of the respective entity, all symbols from other alphabets not relevant
+         for current row should be set to NaN)
+
         Parameters
         ----------
         instances
@@ -332,6 +347,17 @@ class MutationScorer(_Core):
         2. The implementation of this function can draw on score(), score_conditional(), score_mutants()
          or any method-specific implementations as needed to provide the most efficient/accurate way
          to single mutant effect calculation
+
+        3. Optional insertion handling: Models able to provide scores for insertions should include these
+         by requesting an alphabet including insertion symbols: Entity.alphabet(..., include_inserts=True).
+         Insertions are implied to occur immediately after the position in the dataframe index, an insertion
+         before the first sequence position should be coded by pos=entity.first_index - 1 *and* ref = "" in the
+         dataframe index, with all uppercase/non-insert symbol values set to NaN.
+
+        4. Methods returning predictions across entities with more than one alphabet should use
+         Entity.merge_alphabet_symbols() to determine the mixed alphabet/column order. The alphabet of
+         each dataframe row is implied by the type of the respective entity, all symbols from other
+         alphabets not relevant for current row should be set to NaN)
 
         Parameters
         ----------
