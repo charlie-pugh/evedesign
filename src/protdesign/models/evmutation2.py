@@ -503,7 +503,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     def single_mutation_scan(
         self,
         instance: SystemInstance,
-        entity: int = 0,
+        entity: int | None = None,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
@@ -516,6 +516,9 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # check instance against molecular system, requiring fixed length of sequence
         # as was used for entity specification as we have a fixed-length model
         self._validate_instances([instance])
+
+        if entity is None:
+            entity = 0
 
         if entity != 0:
             raise ValueError("Model can only handle one single entity")

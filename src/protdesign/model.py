@@ -329,7 +329,7 @@ class MutationScorer(_Core):
     def single_mutation_scan(
         self,
         instance: SystemInstance,
-        entity: int = 0,
+        entity: int | None = None,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
@@ -364,7 +364,7 @@ class MutationScorer(_Core):
         instance
             Target system instance specification to mutate
         entity
-            Index of entity for which mutation scan should be computed. Defaults to first entity.
+            Index of entity for which mutation scan should be computed. If None, score all entities in system.
         positions
             Subset of positions to score. If None, scores for all positions will be computed.
         status_callback
