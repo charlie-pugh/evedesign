@@ -194,7 +194,11 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         # validate instance sequences; must all have the same length
         [
             self.system.valid_instance(
-                instance, fixed_length=True, validate_reps=True, raise_invalid=True
+                instance,
+                validate_reps=True,
+                fixed_length=True,
+                allow_deletions=True,
+                raise_invalid=True
             ) for instance in instances
         ]
 

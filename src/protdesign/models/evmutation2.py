@@ -15,7 +15,6 @@ from protdesign.model import (
 )
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
-from protdesign.sequence import valid_protein_sequence
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 
@@ -163,10 +162,10 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
             return False, "Provided sequences must be aligned"
 
         # this should be ensured by construction of system but check again to be safe
-        if not valid_protein_sequence(
-            target.rep, allow_mask=True, allow_gap=True, allow_ambiguous=True
-        ):
-            return False, "Input sequence may only contain AA symbols or mask"
+        # if not valid_protein_sequence(
+        #     target.rep, allow_mask=True, allow_gap=True, allow_ambiguous=True
+        # ):
+        #     return False, "Input sequence may only contain AA symbols or mask"
 
         # TODO: more checks on alignment: does length match target rep;
         #  and is alignment compatible with a3m format
@@ -310,7 +309,11 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # validate instance sequences; must all have the same length
         [
             self.system.valid_instance(
-                instance, fixed_length=True, validate_reps=True, raise_invalid=True
+                instance,
+                validate_reps=True,
+                fixed_length=True,
+                allow_deletions=True,
+                raise_invalid=True,
             ) for instance in instances
         ]
 

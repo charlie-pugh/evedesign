@@ -5,7 +5,7 @@ from collections import UserList
 from collections.abc import Sequence
 from typing import Mapping, NamedTuple, Self
 import numpy as np
-from protdesign.sequence import valid_protein_sequence, Sequences
+from protdesign.sequence import valid_sequence, Sequences
 from protdesign.structure import StructureChainMap
 from protdesign.types import EntityType, Metadata, BioPolymers
 from protdesign.constants import (
@@ -314,8 +314,9 @@ class System(UserList):
     def valid_instance(
         self,
         instance: SystemInstance,
-        fixed_length: bool=False,
-        validate_reps: bool=False,
+        validate_reps: bool = True,
+        fixed_length: bool=True,
+        allow_deletions: bool=False,
         raise_invalid: bool=False,
     ) -> bool:
         """
@@ -330,6 +331,8 @@ class System(UserList):
             (only sensible for fixed-length models and biopolymers)
         validate_reps
             If True, verify if sequence representations are comprised of valid amino acids/nucleotides
+        allow_deletions
+            If True, allow deletions (coded by gap symbols) to be present in representation
         raise_invalid
             If True, raise ValueError if instance is invalid w.r.t. system
 
@@ -342,15 +345,22 @@ class System(UserList):
         valid = len(self.data) == len(instance)
 
         for entity, entity_instance in zip(self.data, instance):
-            # TODO: also implement comparison for nucleotides eventually
-            if entity.type_ == "protein":
+            if entity.type_ in BioPolymers:
                 if fixed_length:
-                    valid = valid and (entity.rep is None or len(entity.rep) == len(entity_instance.rep))
+                    valid = valid and (
+                        entity.rep is None or (
+                            entity_instance.rep is not None and len(entity.rep) == len(entity_instance.rep)
+                         )
+                    )
 
-                if validate_reps:
-                    # allow gaps for deletion modeling, and mask for leaving parts of representation unspecified
-                    is_valid_seq = valid_protein_sequence(
-                        entity_instance.rep, allow_mask=True, allow_gap=True, allow_ambiguous=False
+                if validate_reps and entity.rep is not None:
+                    is_valid_seq, _ = entity_instance.rep is not None and valid_sequence(
+                        entity_instance.rep,
+                        entity.alphabet(
+                            include_gap=allow_deletions,
+                            include_inserts=not fixed_length
+                        ),
+                        allow_mask=False,
                     )
 
                     valid = valid and is_valid_seq
@@ -472,7 +482,7 @@ class System(UserList):
         """
         assert len(instance) == len(self.data)
 
-        return System([
+        return type(self)([
             Entity(
                 type=entity.type_,
                 rep=entity_instance.normalized_rep(),
@@ -548,8 +558,9 @@ class Protein(Entity):
         """
         # verify that protein sequence is valid if specified (including mask)
         if rep is not None:
-            valid_seq, invalid_aa = valid_protein_sequence(
-                rep, allow_mask=True, allow_gap=False, allow_ambiguous=True
+            # allow representative to contain gaps, may want to mutate this to AA
+            valid_seq, invalid_aa = valid_sequence(
+                rep, VALID_AA_OR_GAP_SORTED, allow_mask=True
             )
 
             if not valid_seq:
