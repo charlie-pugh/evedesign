@@ -3,7 +3,7 @@ Specification of components of molecular design system (proteins, nucleic acids,
 """
 from collections import UserList
 from collections.abc import Sequence
-from typing import Mapping, NamedTuple
+from typing import Mapping, NamedTuple, Self
 import numpy as np
 from protdesign.sequence import valid_protein_sequence, Sequences
 from protdesign.structure import StructureChainMap
@@ -230,6 +230,17 @@ class EntityInstance:
 
         return f"EntityInstance(rep={shorten( self.rep)}, structure_models={structure_info})"
 
+    def normalized_rep(self) -> str:
+        """
+        Return representation without insert and deletion coding
+        (all uppercase symbols, no gaps)
+
+        Returns
+        -------
+        Normalized entity representation
+        """
+        return self.rep.upper().replace(GAP, "")
+
 
 class SystemInstance(UserList):
     """
@@ -434,6 +445,70 @@ class System(UserList):
             raise ValueError(f"Invalid mutants: {invalid_subs}")
 
         return valid, invalid_subs
+
+    def apply_instance(
+        self,
+        instance: SystemInstance
+    ) -> Self:
+        """
+        Create new system with updated representations from given instance
+        (as shallow copy). The representation of each entity instance
+        will be normalized, i.e. deletions are removed and insertions
+        are converted into regular uppercase symbols.
+
+        Sequences attached to system will not be attached to new system,
+        structural models will be added.
+
+        Assumes instance has been previously validated with valid_instance()
+
+        Parameters
+        ----------
+        instance
+            Apply representations of this instance
+
+        Returns
+        -------
+        Updated molecular system
+        """
+        assert len(instance) == len(self.data)
+
+        return System([
+            Entity(
+                type=entity.type_,
+                rep=entity_instance.normalized_rep(),
+                id=entity.id_,
+                copies=entity.copies,
+                first_index=entity.first_index,
+                sequences=None,  # do not copy sequences as we would need to realign them
+                structures=entity_instance.models
+            ) for entity, entity_instance in zip(self.data, instance)
+        ])
+
+    def mutate(
+        self,
+        instance: SystemInstance,
+        mutants: Sequence[Mutant]
+    ) -> list[SystemInstance]:
+        """
+        Create different mutant versions of a given instance.
+        Assumes mutants have been previously validated with valid_mutants()
+
+        Parameters
+        ----------
+        instance
+            Starting instance to be mutated
+        mutants
+            Different mutants to create from the instance (each supplied
+            mutant, potentially comprised of multiple mutations, will
+            lead to the creation of a new instance in output)
+
+        Returns
+        -------
+        Mutated versions of instance (one per mutant). Will have same
+        length as mutants parameter
+        """
+        # TODO: implement this
+        raise NotImplementedError()
 
 
 class Protein(Entity):
