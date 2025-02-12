@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from protdesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer
-from protdesign.entity import System, SystemInstance
+from protdesign.entity import Entity, System, SystemInstance
 from protdesign.types import StatusCallback
 from protdesign.utils import str_to_np_char_view, map_array
 from protdesign.constants import GAP
@@ -65,7 +65,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         # will hold mapped and verified reference sequences for comparison
         self._ref_seqs = None
         self._alphabets = None
-        self._alphabet_mappings = None
+        self._alphabet_mapping = None
         self._ref_seqs_mapped = None
 
         self.exclude_gaps_from_distance = exclude_gaps_from_distance
@@ -76,7 +76,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
             self.system is not None and
             self._ref_seqs is not None and
             self._alphabets is not None and
-            self._alphabet_mappings is not None and
+            self._alphabet_mapping is not None and
             self._ref_seqs_mapped is not None
         )
 
@@ -154,17 +154,20 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
             if entity.defined_sequence()
         }
 
-        self._alphabet_mappings = {
-            entity_idx: {symbol: idx for idx, symbol in enumerate(alphabet)}
-            for entity_idx, alphabet in self._alphabets.items()
+        # merge alphabet symbols across all constrained entities and create mapping to numerical indices
+        merged_symbols = Entity.merge_alphabet_symbols([
+            alphabet for entity_idx, alphabet in self._alphabets.items() if entity_idx in self._ref_seqs
+        ])
+
+        self._alphabet_mapping = {
+            symbol: idx for idx, symbol in enumerate(merged_symbols)
         }
 
         # map to numerical indices
         try:
             self._ref_seqs_mapped = {
                 entity_idx: map_array(
-                    entity_ref_seqs,
-                    {symbol: idx for idx, symbol in enumerate(self._alphabets[entity_idx])}
+                    entity_ref_seqs, self._alphabet_mapping
                 )
                 for entity_idx, entity_ref_seqs in self._ref_seqs.items()
             }
@@ -261,19 +264,6 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
             positions=positions, entities=entities, raise_invalid=True
         )
 
-        # only allow entities of same type to be scored at same time for now
-        # TODO: refactor this to a reusable method, and also in Gibbs sampler
-        unique_entities = sorted(set(entities))
-        entity_types = {
-            self._system[entity_idx].type_ for entity_idx in unique_entities
-        }
-        if len(entity_types) != 1:
-            raise ValueError("For now, can only score entities of one type")
-
-        # get alphabet for this one entity type
-        alphabet = self._alphabets[unique_entities[0]]
-        # TODO: lines up to here need to be reworked if handling mixed alphabets
-
         # initialize table of instance/entity/pos triplets and add current
         # instance symbol for later comparison to restraint sequences
         entity_to_first_index = {
@@ -288,7 +278,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         }).set_index(
             ["instance", "entity", "pos"]
         ).reindex(
-            alphabet, axis=1, fill_value=0.0
+            self._alphabet_mapping, axis=1, fill_value=np.nan
         )
 
         # determine instance symbol for each row, this allows to reuse the scores for single_mutation_scan()
@@ -298,17 +288,22 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
             ]
             for (instance, entity_idx, pos) in zip(instances, entities, positions)
         ])
-        # TODO: following lines needs to be reworked if handling mixed alphabets
-        inst_symbol_idx = map_array(
-            inst_symbol, self._alphabet_mappings[unique_entities[0]]
-        )
-        gap_idx = self._alphabet_mappings[unique_entities[0]][GAP]
+
+        inst_symbol_idx = map_array(inst_symbol, self._alphabet_mapping)
+        gap_idx = self._alphabet_mapping[GAP]
 
         # compare sequences entity by entity and accumulate updated subgroup dataframes
         groups = res.groupby("entity", sort=False)
 
         for entity_idx, all_row_idx in groups.indices.items():
             entity_idx = int(entity_idx)  # noqa
+
+            # get current alphabet for initializing relevant entries in array to 0, keep all others as nan
+            alphabet = self._alphabets[entity_idx]
+            for symbol in alphabet:
+                res.values[
+                    all_row_idx, self._alphabet_mapping[symbol]
+                ] = 0
 
             # keep neutral scores to positions in entities that are restrained
             if entity_idx not in self._ref_seqs:
