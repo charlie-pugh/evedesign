@@ -10,6 +10,7 @@ from protdesign.model import BaseModel, Scorer, RequiredResources, ConditionalMu
 from protdesign.entity import System, SystemInstance
 from protdesign.types import StatusCallback
 from protdesign.utils import str_to_np_char_view, map_array
+from protdesign.constants import GAP
 
 EntityToReferenceSeqs = dict[int, list[str]]
 
@@ -248,7 +249,9 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         self.ready_or_raise()
 
         if not len(instances) == len(entities) == len(positions):
-            raise ValueError("Sequences for instances, entities and positions must all have same length")
+            raise ValueError(
+                "Sequences for instances, entities and positions must all have same length"
+            )
 
         # validate instance sequences with specific requirements for this class
         self._validate_instances(instances)
@@ -269,6 +272,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
 
         # get alphabet for this one entity type
         alphabet = self._alphabets[unique_entities[0]]
+        # TODO: lines up to here need to be reworked if handling mixed alphabets
 
         # initialize table of instance/entity/pos triplets and add current
         # instance symbol for later comparison to restraint sequences
@@ -291,12 +295,14 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         inst_symbol = np.array([
             instance[entity_idx].rep[
                 pos - entity_to_first_index[entity_idx]
-                ]
+            ]
             for (instance, entity_idx, pos) in zip(instances, entities, positions)
         ])
+        # TODO: following lines needs to be reworked if handling mixed alphabets
         inst_symbol_idx = map_array(
             inst_symbol, self._alphabet_mappings[unique_entities[0]]
         )
+        gap_idx = self._alphabet_mappings[unique_entities[0]][GAP]
 
         # compare sequences entity by entity and accumulate updated subgroup dataframes
         groups = res.groupby("entity", sort=False)
@@ -324,13 +330,20 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
                 # extract symbols at different positions in this reference sequence
                 ref_symbols = cur_ref_seqs[i, cur_positions]
 
-                # update in place
-                res.values[all_row_idx, ref_symbols] += 1
-
                 # treat gap special case
                 if self.exclude_gaps_from_distance:
-                    # TODO: implement
-                    pass
+                    # determine if reference has a gap at specified positions
+                    ref_not_gap = ref_symbols != gap_idx
+
+                    # only update positions where reference is not a gap, as we can change
+                    # symbols in reference gap positions arbitrarily without changing restraint;
+                    # if instance is gap and reference is not, handle just like regular symbol exchanges
+                    res.values[
+                        all_row_idx[ref_not_gap], ref_symbols[ref_not_gap]
+                    ] += 1
+                else:
+                    # otherwise treat all symbols equally
+                    res.values[all_row_idx, ref_symbols] += 1
 
         # retrieve value for instance symbol across all rows, then subtract from full matrix to normalize
         inst_symbol_val = res.values[np.arange(len(res)), inst_symbol_idx]
