@@ -79,19 +79,23 @@ class _Core(ABC):
         Return list of all available modelled positions per entity *instance* that are explicitly
         captured by the model
 
-        Note: positions that are not modelled (e.g. excluded positions for EVmutation) should not
+        Notes:
+        1. Positions that are not modelled (e.g. excluded positions for EVmutation) should not
          be returned by this method
 
-        Note: for fixed-length models, entity instance positions will by definition be the same
+        2. For fixed-length models, entity instance positions will by definition be the same
          as entity representation positions. These models can opt to set the instance argument to
          a default value of None.
 
-        Note: returned positions should be ordered in ascending order
+        3. Models able to handle insertions should also return first_index - 1 coding for
+         an N-terminal insertion (but must not model substitution effects for this position)
+
+        4. Returned positions should be ordered in ascending order
          by i) entity index, ii) position index in entity
 
         Returns
         -------
-        List of position lists (outer list indexes over entities, inner list contains all positions)
+        List of position tuples (entity_idx, position)
         """
         pass
 

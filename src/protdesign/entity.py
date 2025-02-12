@@ -270,7 +270,7 @@ class EntityInstance:
         return self.rep.upper().replace(GAP, "")
 
 
-class SystemInstance(UserList):
+class SystemInstance(UserList[EntityInstance]):
     """
     Result designing the representations of the entity/entities
     in a system, comprised of individual EntityInstances (one per entity),
@@ -308,7 +308,7 @@ class SystemInstance(UserList):
         return f"SystemInstance({self.data} score={self.score})"
 
 
-class System(UserList):
+class System(UserList[Entity]):
     def __init__(self, entities: Entity | Sequence[Entity]):
         """
         Create new biomolecular system for modeling/design

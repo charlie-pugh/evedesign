@@ -155,6 +155,9 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
             return False, "Can only handle single-component protein system"
 
         target = system[0]
+        if not target.defined_sequence():
+            return False, "Entity must have defined rep sequence"
+
         if target.sequences is None or len(target.sequences.seqs) == 0:
             return False, "Must provide sequences for model inference"
 

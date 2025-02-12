@@ -3,7 +3,7 @@ Biopolymer sequence functionality (protein sequences etc.)
 """
 from typing import List, Literal, Self, TextIO, Tuple
 from collections import abc
-from protdesign.constants import AA_TO_INDEX, MASK, GAP, INDEX_TO_AA
+from protdesign.constants import MASK
 from protdesign.types import BioPolymer
 from protdesign.utils import shorten
 
@@ -18,9 +18,9 @@ class Sequence:
     def __init__(
         self,
         seq: str,
-        id: str | None = None,
+        id: str | None = None,  # noqa
         key: str | None = None,
-        type: BioPolymer = "protein",
+        type: BioPolymer = "protein",  # noqa
     ):
         """
         Create new sequence object
@@ -59,9 +59,9 @@ class Sequences:
         self,
         seqs: abc.Sequence[Sequence],
         aligned: bool = False,
-        type: BioPolymer = "protein",
+        type: BioPolymer = "protein",  # noqa
         weights: List[float] | None = None,
-        format: Literal["a3m", "a2m", "fasta"] | None = None,
+        format: Literal["a3m", "a2m", "fasta"] | None = None,  # noqa
     ):
 
         self.seqs = seqs
