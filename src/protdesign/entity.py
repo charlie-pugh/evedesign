@@ -3,28 +3,47 @@ Specification of components of molecular design system (proteins, nucleic acids,
 """
 from collections import UserList
 from collections.abc import Sequence
-from typing import Mapping, NamedTuple
-from protdesign.sequence import valid_protein_sequence, Sequences
+from typing import Mapping, NamedTuple, Self
+import numpy as np
+from protdesign.sequence import valid_sequence, Sequences
 from protdesign.structure import StructureChainMap
-from protdesign.types import EntityType, Metadata
-from protdesign.constants import VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED
+from protdesign.types import EntityType, Metadata, BioPolymers
+from protdesign.constants import (
+    VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
+    VALID_DNA_OR_GAP_SORTED, VALID_DNA_SORTED,
+    VALID_RNA_OR_GAP_SORTED, VALID_RNA_SORTED,
+    GAP
+)
 from protdesign.utils import ensure_sequence, shorten
 
-# Data structures/types for providing mutation information in structured format
+
+"""
+Data structures/types for providing mutation information in structured format
+
+Deletions are coded by to = GAP
+
+Insertions are coded by 
+  1. ref = "",
+  2. to = lowercase insert symbols as returned by Entity.alphabet()
+  3. occur directly *after* the referenced position (for insertion at beginning of sequence, use first_index - 1).
+"""
 Mutation = NamedTuple(
     "Mutation", [("entity", int), ("pos", int), ("ref", str), ("to", str)]
 )
 
-# Mutant is comprised of one or more mutations
+"""
+Mutant is comprised of one or more mutations; note that all individual mutations are relative to the
+sequence *before* applying any of the mutations (e.g. before any numbering shifts due to insertions)
+"""
 Mutant = Sequence[Mutation]
 
 
 class Entity:
     def __init__(
         self,
-        type: EntityType,
+        type: EntityType,  # noqa
         rep: str | None = None,
-        id: str | None = None,
+        id: str | None = None,  # noqa
         copies: int | None = None,
         first_index: int | None = None,
         sequences: Sequences | None = None,
@@ -36,14 +55,10 @@ class Entity:
         Note: For clarity, preferentially use subclasses for specific types
         of entities (e.g. Protein class)
 
-        # TODO: additional attributes to be added right away
-            * mapping to sequences/structures - implement right away
-
-        # TODO: parameters to be added at later point
-            * modifications
-            * different states / conformations
-            * designable or not?
-            * hotspots, pair restraints / constraints
+        TODO: parameters to be added at later point
+         * modifications
+         * different states / conformations
+         * hotspots, pair restraints / constraints
 
         Parameters
         ----------
@@ -73,8 +88,7 @@ class Entity:
         self.id_ = id
         self.copies = copies
 
-        # TODO: also allow for nucleotide entities once implemented
-        if self.type_ != "protein" and sequences is not None:
+        if self.type_ not in BioPolymers and sequences is not None:
             raise ValueError(
                 "Sequence record only supported for biopolymer entities"
             )
@@ -82,9 +96,9 @@ class Entity:
         self.sequences = sequences
         self.structures = structures
 
-        if self.type_== "protein" and first_index is None:
+        if self.type_ in BioPolymers and first_index is None and first_index < 1:
             raise ValueError(
-                f"first_index must be specified for type {self.type_}"
+                f"first_index must be specified for type {self.type_} and must be >= 1"
             )
 
         self.first_index = first_index
@@ -109,18 +123,26 @@ class Entity:
         Check if entity corresponds to a biopolymer (protein, ...)
         and has a defined representative with non-zero length
 
+        Does *not* validate sequence symbols against alphabet as rep
+        in its most basic form is only meant to be a generic sequence
+        placeholder
+
         Returns
         -------
         True if protein/nucleotide sequence with some defined length
         """
         return (
-            self.type_ == "protein" and
+            self.type_ in BioPolymers and
             self.rep is not None and
             len(self.rep) > 0 and
             self.first_index is not None
         )
 
-    def alphabet(self, include_gap: bool=True) -> list[str]:
+    def alphabet(
+        self,
+        include_gap: bool=True,
+        include_inserts: bool=False
+    ) -> list[str]:
         """
         Return sequence alphabet for biopolymer entities
 
@@ -128,19 +150,65 @@ class Entity:
         ----------
         include_gap
             If true, add gap symbol to alphabet
+        include_inserts
+            If true, add insert symbols to alphabet (lowercase version of all symbols)
 
         Returns
         -------
         Alphabet for representing primary sequence of entity
         """
         if self.type_ == "protein":
-            if include_gap:
-                return VALID_AA_OR_GAP_SORTED
-            else:
-                return VALID_AA_SORTED
+            a = VALID_AA_OR_GAP_SORTED if include_gap else VALID_AA_SORTED
+            if include_inserts:
+                a = a + [symbol.lower() for symbol in VALID_AA_SORTED]
+        elif self.type_ == "dna":
+            a = VALID_DNA_OR_GAP_SORTED if include_gap else VALID_DNA_SORTED
+            if include_inserts:
+                a = a + [symbol.lower() for symbol in VALID_DNA_SORTED]
+        elif self.type_ == "rna":
+            a = VALID_RNA_OR_GAP_SORTED if include_gap else VALID_RNA_SORTED
+            if include_inserts:
+                a = a + [symbol.lower() for symbol in VALID_RNA_SORTED]
         else:
-            raise NotImplementedError("Non-protein alphabets not yet implemented")
+            raise NotImplementedError(
+                f"Alphabet for type {self.type_} not implemented"
+            )
 
+        return a
+
+    @classmethod
+    def merge_alphabet_symbols(
+        cls,
+        alphabets: list[list[str]]
+    ) -> list[str]:
+        """
+        Merge symbols from different alphabets into one joint
+        list of symbols. Note this does not imply a new alphabet, rather this
+        method should only be used as a helper to jointly represent results for
+        multiple alphabets in parallel (e.g. in ConditionalMutationScorer score_conditional()
+        result dataframe)
+
+        Parameters
+        ----------
+        alphabets
+            List of one or more alphabets
+
+        Returns
+        -------
+        Merged alphabet with each symbol occurring exactly once.
+        """
+        # deduplicate symbols and sort again:
+        # upper-case symbols first, gap next, lowercase symbols/inserts last
+        return sorted(
+            {symbol for alphabet in alphabets for symbol in alphabet},
+            key=lambda symbol: (symbol == symbol.lower(), symbol != GAP, symbol)
+        )
+
+Embedding = np.ndarray[
+    tuple[int, int], np.dtype[float]
+] | np.ndarray[
+    tuple[int], np.dtype[float]
+]
 
 class EntityInstance:
     """
@@ -149,33 +217,60 @@ class EntityInstance:
     def __init__(
         self,
         rep: str | None = None,
-        structure_models: StructureChainMap | None = None,
+        embedding:  Embedding | None = None,
+        models: StructureChainMap | None = None,
     ):
         """
         Create new instantiation of an entity in a sequence
 
+        Notes:
+        1. Under fixed-length models, length of representation in EntityInstance should always match
+         length of the corresponding representation in the defining Entity
+
+        2. Deletions relative to the Entity representation should be encoded with the GAP symbol,
+         insertions with the lowercase version of the alphabet symbol (cf. Entity.alphabet()).
+         This directly corresponds to how the alignment between the two representations would be encoded
+         in the A3M alignment format. This encoding will allow implementations to map positions back to the
+         system instance numbering (e.g. to evaluate constraints on fixed positions)
+
         Parameters
         ----------
         rep
-            Representation (e.g. sequence) of entity. Set to None if no
-            representation is yet available (e.g. just structural backbone but no sequence)
-        structure_models
+            Uniquely defining representation (e.g. primary sequence) of entity. Set to None if no
+            representation is yet available (e.g. just structural backbone but no sequence).
+            See notes above regarding encoding of insertions and deletions.
+        embedding
+            Transformation of entity instance into per-residue embedding (2D array) or
+            per-entity embedding (1D array) space
+        models
             Structural models associated with each of the entities in the system.
             Set to None if no structural models are available.
         """
         self.rep = rep
-        self.structure_models = structure_models
+        self.embedding = embedding
+        self.models = models
 
     def __repr__(self):
-        if self.structure_models is not None:
-            structure_info = len(self.structure_models)
+        if self.models is not None:
+            structure_info = len(self.models)
         else:
-            structure_info = self.structure_models
+            structure_info = self.models
 
         return f"EntityInstance(rep={shorten( self.rep)}, structure_models={structure_info})"
 
+    def normalized_rep(self) -> str:
+        """
+        Return representation without insert and deletion coding
+        (all uppercase symbols, no gaps)
 
-class SystemInstance(UserList):
+        Returns
+        -------
+        Normalized entity representation
+        """
+        return self.rep.upper().replace(GAP, "")
+
+
+class SystemInstance(UserList[EntityInstance]):
     """
     Result designing the representations of the entity/entities
     in a system, comprised of individual EntityInstances (one per entity),
@@ -190,8 +285,6 @@ class SystemInstance(UserList):
     ):
         """
         Create new entity system instance
-
-        # TODO: activate metadata attribute once needed
 
         Parameters
         ----------
@@ -215,7 +308,7 @@ class SystemInstance(UserList):
         return f"SystemInstance({self.data} score={self.score})"
 
 
-class System(UserList):
+class System(UserList[Entity]):
     def __init__(self, entities: Entity | Sequence[Entity]):
         """
         Create new biomolecular system for modeling/design
@@ -249,8 +342,9 @@ class System(UserList):
     def valid_instance(
         self,
         instance: SystemInstance,
-        fixed_length: bool=False,
-        validate_reps: bool=False,
+        validate_reps: bool = True,
+        fixed_length: bool=True,
+        allow_deletions: bool=False,
         raise_invalid: bool=False,
     ) -> bool:
         """
@@ -265,6 +359,8 @@ class System(UserList):
             (only sensible for fixed-length models and biopolymers)
         validate_reps
             If True, verify if sequence representations are comprised of valid amino acids/nucleotides
+        allow_deletions
+            If True, allow deletions (coded by gap symbols) to be present in representation
         raise_invalid
             If True, raise ValueError if instance is invalid w.r.t. system
 
@@ -277,15 +373,22 @@ class System(UserList):
         valid = len(self.data) == len(instance)
 
         for entity, entity_instance in zip(self.data, instance):
-            # TODO: also implement comparison for nucleotides eventually
-            if entity.type_ == "protein":
+            if entity.type_ in BioPolymers:
                 if fixed_length:
-                    valid = valid and (entity.rep is None or len(entity.rep) == len(entity_instance.rep))
+                    valid = valid and (
+                        entity.rep is None or (
+                            entity_instance.rep is not None and len(entity.rep) == len(entity_instance.rep)
+                         )
+                    )
 
-                if validate_reps:
-                    # allow gaps for deletion modeling, and mask for leaving parts of representation unspecified
-                    is_valid_seq = valid_protein_sequence(
-                        entity_instance.rep, allow_mask=True, allow_gap=True, allow_ambiguous=False
+                if validate_reps and entity.rep is not None:
+                    is_valid_seq, _ = entity_instance.rep is not None and valid_sequence(
+                        entity_instance.rep,
+                        entity.alphabet(
+                            include_gap=allow_deletions,
+                            include_inserts=not fixed_length
+                        ),
+                        allow_mask=False,
                     )
 
                     valid = valid and is_valid_seq
@@ -299,7 +402,8 @@ class System(UserList):
         self,
         instance: SystemInstance,
         mutants: Sequence[Mutant],
-        allow_gap: bool = False,
+        deletions: bool = False,
+        insertions: bool = False,
         raise_invalid: bool = False,
     ) -> tuple[bool, list[tuple[int, Mutation]]]:
         """
@@ -311,14 +415,16 @@ class System(UserList):
             System instance to check against; assuming this has been previously validated with valid_instance().
         mutants
             Verify these mutants against system instance
-        allow_gap
-            If True, consider gap symbol a valid substitution
+        deletions
+            If True, consider gap symbol a valid substitution coding for a deletion at the given position
+        insertions
+            If True, allow insertions (coded as lowercase symbol returned by Entity.alphabet())
         raise_invalid
             Raise ValueError if any invalid mutants are detected
 
         Returns
         -------
-        invalid
+        valid
             True if all mutants are valid, False otherwise
         invalid_subs
             Tuple of mutant indies and invalid mutations in these mutants (empty if all mutants are valid)
@@ -331,29 +437,116 @@ class System(UserList):
                     instance[entity_idx].rep, start=entity.first_index
                 )
             } for entity_idx, entity in enumerate(self.data)
-            if entity.defined_sequence()
+            # note: defined_sequence() is too strict of a check here as it required rep to be defined
+            if entity.type_ in BioPolymers and entity.first_index is not None
         }
 
+        # also record possible positions for insertion including N-terminal of first_index
+        if insertions:
+            entity_to_ins_pos = {
+                entity_idx: (set(pos) | {min(pos) - 1}) for entity_idx, pos in entity_to_pos.items()
+            }
+        else:
+            entity_to_ins_pos = {
+                entity_idx: {} for entity_idx, pos in entity_to_pos.items()
+            }
+
         entity_to_valid_subs = {
-            entity_idx: set(entity.alphabet(include_gap=allow_gap))
+            entity_idx: set(entity.alphabet(include_gap=deletions, include_inserts=insertions))
             for entity_idx, entity in enumerate(self.data)
         }
 
         invalid_subs = [
             (i, subs) for (i, mutant) in enumerate(mutants) for subs in mutant if (
                 (subs.entity not in entity_to_pos) or  # valid entity index
-                (subs.pos not in entity_to_pos[subs.entity]) or  # valid position in entity
-                (subs.ref != entity_to_pos[subs.entity][subs.pos]) or  # invalid reference symbol
-                (subs.to not in entity_to_valid_subs[subs.entity])
+                 # generally invalid specification if "to" not in target alphabet
+                subs.to not in entity_to_valid_subs[subs.entity] or
+                # check insertions
+                subs.ref == "" and (
+                    (subs.pos not in entity_to_ins_pos[subs.entity]) or
+                    subs.to == GAP or
+                    subs.to.lower() != subs.to
+                ) or
+
+                # validate mutations/deletions
+                subs.ref != "" and (
+                    (subs.pos not in entity_to_pos[subs.entity]) or
+                    (subs.ref != entity_to_pos[subs.entity][subs.pos]) or
+                    (subs.to.lower() == subs.to)
+                )
             )
         ]
 
-        invalid = len(invalid_subs) > 0
+        valid = len(invalid_subs) == 0
 
-        if invalid and raise_invalid:
+        if not valid and raise_invalid:
             raise ValueError(f"Invalid mutants: {invalid_subs}")
 
-        return invalid, invalid_subs
+        return valid, invalid_subs
+
+    def apply_instance(
+        self,
+        instance: SystemInstance
+    ) -> Self:
+        """
+        Create new system with updated representations from given instance
+        (as shallow copy). The representation of each entity instance
+        will be normalized, i.e. deletions are removed and insertions
+        are converted into regular uppercase symbols.
+
+        Sequences attached to system will not be attached to new system,
+        structural models will be added.
+
+        Assumes instance has been previously validated with valid_instance()
+
+        Parameters
+        ----------
+        instance
+            Apply representations of this instance
+
+        Returns
+        -------
+        Updated molecular system
+        """
+        assert len(instance) == len(self.data)
+
+        return type(self)([
+            Entity(
+                type=entity.type_,
+                rep=entity_instance.normalized_rep(),
+                id=entity.id_,
+                copies=entity.copies,
+                first_index=entity.first_index,
+                sequences=None,  # do not copy sequences as we would need to realign them
+                structures=entity_instance.models
+            ) for entity, entity_instance in zip(self.data, instance)
+        ])
+
+    def mutate(
+        self,
+        instance: SystemInstance,
+        mutants: Sequence[Mutant]
+    ) -> list[SystemInstance]:
+        """
+        Create different mutant versions of a given instance.
+        Assumes mutants have been previously validated with valid_mutants()
+
+        Parameters
+        ----------
+        instance
+            Starting instance to be mutated
+        mutants
+            Different mutants to create from the instance (each supplied
+            mutant, potentially comprised of multiple mutations, will
+            lead to the creation of a new instance in output)
+
+        Returns
+        -------
+        Mutated versions of instance (one per mutant). Will have same
+        length as mutants parameter
+        """
+        # TODO: implement this
+        raise NotImplementedError()
 
 
 class Protein(Entity):
@@ -362,7 +555,7 @@ class Protein(Entity):
     """
     def __init__(
         self,
-        id: str | None,
+        id: str | None,  # noqa
         rep: str | None = None,
         first_index: int = 1,
         copies: int | None = None,
@@ -393,8 +586,9 @@ class Protein(Entity):
         """
         # verify that protein sequence is valid if specified (including mask)
         if rep is not None:
-            valid_seq, invalid_aa = valid_protein_sequence(
-                rep, allow_mask=True, allow_gap=False, allow_ambiguous=True
+            # allow representative to contain gaps, may want to mutate this to AA
+            valid_seq, invalid_aa = valid_sequence(
+                rep, VALID_AA_OR_GAP_SORTED, allow_mask=True
             )
 
             if not valid_seq:

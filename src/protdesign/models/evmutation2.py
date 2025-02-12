@@ -10,39 +10,43 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import Scorer, Generator, RequiredResources
+from protdesign.model import (
+    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
+)
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
-from protdesign.sequence import valid_protein_sequence
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
-    from picasso_model import model, features, parsers
+    from picasso_model import model, features, parsers  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVmutation2(Scorer, Generator):
+class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
     """
     Wrapper class around EVmutation2/picasso model
     """
     available = IMPORT_AVAILABLE
     name: str = "EVmutation2"
 
-    requires_heavy_build: bool = False
+    # core properties
+    requires_target: bool = True
+    requires_fixed_length: bool = True
+    handles_deletions: bool = True
+    handles_insertions: bool = False
     requires_gpu: bool = False
     supports_gpu: bool = True
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    requires_target: bool = True
+    # molecular model properties
+    requires_heavy_build: bool = False
     requires_seqs: bool = True
     requires_msa: bool = True
     requires_3d: bool = False
-    requires_fixed_length: bool = True
-    handles_deletions: bool = True
 
     def __init__(
         self,
@@ -60,7 +64,7 @@ class EVmutation2(Scorer, Generator):
         """
         Instantiate new EVcouplings2 model
 
-        TODO: support min_p sampling and sample_gaps
+        TODO: support min_p sampling and with extra parameters on generate() method
 
         Parameters
         ----------
@@ -87,7 +91,9 @@ class EVmutation2(Scorer, Generator):
         device
             Device to use for computations
         """
-        super().__init__()
+        if not self.available:
+            raise ValueError("EVmutation2 package could not be imported. Is it installed already?")
+
         self.model_file_path = model_file_path
         self.keep_model_after_build = keep_model_after_build
 
@@ -149,6 +155,9 @@ class EVmutation2(Scorer, Generator):
             return False, "Can only handle single-component protein system"
 
         target = system[0]
+        if not target.defined_sequence():
+            return False, "Entity must have defined rep sequence"
+
         if target.sequences is None or len(target.sequences.seqs) == 0:
             return False, "Must provide sequences for model inference"
 
@@ -156,10 +165,10 @@ class EVmutation2(Scorer, Generator):
             return False, "Provided sequences must be aligned"
 
         # this should be ensured by construction of system but check again to be safe
-        if not valid_protein_sequence(
-            target.rep, allow_mask=True, allow_gap=True, allow_ambiguous=True
-        ):
-            return False, "Input sequence may only contain AA symbols or mask"
+        # if not valid_protein_sequence(
+        #     target.rep, allow_mask=True, allow_gap=True, allow_ambiguous=True
+        # ):
+        #     return False, "Input sequence may only contain AA symbols or mask"
 
         # TODO: more checks on alignment: does length match target rep;
         #  and is alignment compatible with a3m format
@@ -283,13 +292,14 @@ class EVmutation2(Scorer, Generator):
         return self
 
     def positions(
-        self
+        self,
+        instance: SystemInstance | None = None,
     ) -> List[Tuple[int, int]]:
         self.ready_or_raise()
 
         # implementation here is very simple: we model all positions of exactly one target
-        # protein sequence; none of the positions along the sequence are excluded so
-        # we can simply enumerate starting from first_index
+        # protein sequence of fixed length (i.e. can ignore the passed instance);
+        # none of the positions along the sequence are excluded so we can simply enumerate starting from first_index
         target = self.system[0]
         return [
             (0, pos) for pos, _ in enumerate(target.rep, start=target.first_index)
@@ -302,7 +312,11 @@ class EVmutation2(Scorer, Generator):
         # validate instance sequences; must all have the same length
         [
             self.system.valid_instance(
-                instance, fixed_length=True, validate_reps=True, raise_invalid=True
+                instance,
+                validate_reps=True,
+                fixed_length=True,
+                allow_deletions=True,
+                raise_invalid=True,
             ) for instance in instances
         ]
 
@@ -369,7 +383,7 @@ class EVmutation2(Scorer, Generator):
                 raise ValueError("Can only design single entity (entities = [0] | None)")
         else:
             # not used for now
-            entities = [0]
+            entities = [0]  # noqa
 
         target = self.system[0]
 
@@ -492,7 +506,7 @@ class EVmutation2(Scorer, Generator):
     def single_mutation_scan(
         self,
         instance: SystemInstance,
-        entity: int = 0,
+        entity: int | None = None,
         positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
@@ -505,6 +519,9 @@ class EVmutation2(Scorer, Generator):
         # check instance against molecular system, requiring fixed length of sequence
         # as was used for entity specification as we have a fixed-length model
         self._validate_instances([instance])
+
+        if entity is None:
+            entity = 0
 
         if entity != 0:
             raise ValueError("Model can only handle one single entity")
@@ -584,7 +601,7 @@ class EVmutation2(Scorer, Generator):
 
         # verify if mutants are valid relative to system and instance
         self.system.valid_mutants(
-            instance, mutants, allow_gap=False, raise_invalid=True
+            instance, mutants, deletions=True, insertions=False, raise_invalid=True
         )
 
         # extract single target entity from system, and get sequence from instance

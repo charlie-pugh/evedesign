@@ -3,13 +3,13 @@ Sequence generation with Gibbs sampling.
 
 Implementation assumes fixed length of sequences (no inserts, deletions can be sampled if part of alphabet).
 """
-from typing import Sequence, Literal, Callable, Tuple
+from typing import Sequence, Literal, Callable, Tuple, List
 import numpy as np
 import pandas as pd
 import torch
 from protdesign.constants import GAP
-from protdesign.model import Generator, Scorer
-from protdesign.entity import SystemInstance, EntityPosList, EntityInstance
+from protdesign.model import Generator, ConditionalMutationScorer
+from protdesign.entity import System, SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback, EntityType
 from protdesign.utils import status_progress, ensure_sequence
 
@@ -28,7 +28,7 @@ TemperatureSchedule = Callable[
         int,  # current sweep
         int,  # total number of sweeps
         int,  # current step
-        int,  # total number of steps per weep
+        int,  # total number of steps per sweep
     ],
     float   # current temperature
 ]
@@ -64,9 +64,19 @@ class GibbsSampler(Generator):
     3. Current implementation can only sample entities of same type (protein or nucleotide entities only,
      but not combinations of types, e.g. design protein and nucleotide entities simultaneously)
     """
+    # core properties
+    requires_target: bool = True
+    requires_fixed_length: bool = True
+    handles_deletions: bool = True
+    handles_insertions: bool = False
+    requires_gpu: bool = False
+    supports_gpu: bool = False
+    supports_gpu_parallel: bool = False
+    supports_cpu_parallel: bool = False
+
     def __init__(
         self,
-        scorers: Sequence[Scorer],
+        scorers: Sequence[ConditionalMutationScorer],
         weights: Sequence[float] | None = None,
         num_sweeps: int = 1000,
         init_strategy: InitStrategy = "random",
@@ -125,11 +135,6 @@ class GibbsSampler(Generator):
 
         # verify all scorers and store available positions
         for i, scorer in enumerate(scorers):
-            if not scorer.ready:
-                raise ValueError(
-                    f"Scorer {i} is not yet ready, call build() first before passing into sampler"
-                )
-
             if scorer.system is None:
                 raise ValueError(
                     f"Scorer {i} does not have an associated system"
@@ -156,9 +161,15 @@ class GibbsSampler(Generator):
         self.scan_order = scan_order
         self.init_strategy = init_strategy
 
-        # store available positions for each scorer
+        # store available positions for each scorer based on constructing a temporary
+        # instance (to also retrieve position list from variable-length models,
+        # which we will drive in fixed length mode here)
+        _mock_instance = SystemInstance([
+            EntityInstance(rep=ent.rep) for ent in self._system
+        ])
         self.scorer_to_pos = {
-            idx: scorer.positions() for idx, scorer in enumerate(self.scorers)
+            idx: scorer.positions(instance=_mock_instance)
+            for idx, scorer in enumerate(self.scorers)
         }
 
         # determine shared positions by intersection, will only be able to design those
@@ -186,6 +197,18 @@ class GibbsSampler(Generator):
 
         self.record_full_chain = record_full_chain
         self.rng = np.random.default_rng() if rng is None else rng
+
+    @property
+    def system(self) -> System | None:
+        return self._system
+
+    def positions(
+        self,
+        instance: SystemInstance | None = None,
+    ) -> List[Tuple[int, int]]:
+        # ignore instance specification due to restriction to fixed-length design
+        # in the implementation provided by this class
+        return sorted(self.shared_pos)
 
     def _design_params(
         self,

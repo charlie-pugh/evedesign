@@ -3,7 +3,7 @@ Biopolymer sequence functionality (protein sequences etc.)
 """
 from typing import List, Literal, Self, TextIO, Tuple
 from collections import abc
-from protdesign.constants import AA_TO_INDEX, MASK, GAP, INDEX_TO_AA
+from protdesign.constants import MASK
 from protdesign.types import BioPolymer
 from protdesign.utils import shorten
 
@@ -18,9 +18,9 @@ class Sequence:
     def __init__(
         self,
         seq: str,
-        id: str | None = None,
+        id: str | None = None,  # noqa
         key: str | None = None,
-        type: BioPolymer = "protein",
+        type: BioPolymer = "protein",  # noqa
     ):
         """
         Create new sequence object
@@ -59,9 +59,9 @@ class Sequences:
         self,
         seqs: abc.Sequence[Sequence],
         aligned: bool = False,
-        type: BioPolymer = "protein",
+        type: BioPolymer = "protein",  # noqa
         weights: List[float] | None = None,
-        format: Literal["a3m", "a2m", "fasta"] | None = None,
+        format: Literal["a3m", "a2m", "fasta"] | None = None,  # noqa
     ):
 
         self.seqs = seqs
@@ -113,44 +113,81 @@ class Sequences:
                 "Conversion into fasta format not yet implemented"
             )
 
-def valid_protein_sequence(
+def valid_sequence(
     seq: str,
+    alphabet: list[str],
     allow_mask: bool = False,
-    allow_gap: bool = False,
-    allow_ambiguous: bool = False,
 ) -> Tuple[bool, List[Tuple[int, str]]]:
     """
-    Check if a given sequence is a valid protein sequence
+    Check if a given sequence is valid according to some alphabet
 
     Parameters
     ----------
     seq
-        Protein seqeunce
+        Sequence to validate
+    alphabet
+        Valid symbols (may contain GAP and insert symbols)
     allow_mask
-        Consider mask character as valid symbol (default: False)
-    allow_gap
-        Consider gap character as valid symbol (default: False)
-    allow_ambiguous
-        Consider ambiguous amino acids as valid symbol (default: False)
+        If true, allow masked positions in the sequence
 
     Returns
     -------
     bool
         True if valid sequence, False otherwise
-    str
-        Invalid characters and their indices in sequence
+    list[tuple[int, str]]
+        Invalid characters and their zero-based indices in sequence
     """
+    alphabet = set(alphabet)
+
     invalid = [
-        (i, aa) for i, aa in enumerate(seq) if not (
-            aa in AA_TO_INDEX or
-            (allow_mask and aa == MASK) or
-            (allow_gap and aa == GAP)
-        ) or (
-            not allow_ambiguous and aa in AA_TO_INDEX and INDEX_TO_AA[AA_TO_INDEX[aa]] != aa
+        (i, symbol) for i, symbol in enumerate(seq) if not (
+            symbol in alphabet or
+            (allow_mask and symbol == MASK)
         )
     ]
 
     return len(invalid) == 0, invalid
+
+
+# TODO: following is legacy function superseded by valid_sequence(), remove eventually
+# def valid_protein_sequence(
+#     seq: str,
+#     allow_mask: bool = False,
+#     allow_gap: bool = False,
+#     allow_ambiguous: bool = False,
+# ) -> Tuple[bool, List[Tuple[int, str]]]:
+#     """
+#     Check if a given sequence is a valid protein sequence
+#
+#     Parameters
+#     ----------
+#     seq
+#         Protein seqeunce
+#     allow_mask
+#         Consider mask character as valid symbol (default: False)
+#     allow_gap
+#         Consider gap character as valid symbol (default: False)
+#     allow_ambiguous
+#         Consider ambiguous amino acids as valid symbol (default: False)
+#
+#     Returns
+#     -------
+#     bool
+#         True if valid sequence, False otherwise
+#     str
+#         Invalid characters and their indices in sequence
+#     """
+#     invalid = [
+#         (i, aa) for i, aa in enumerate(seq) if not (
+#             aa in AA_TO_INDEX or
+#             (allow_mask and aa == MASK) or
+#             (allow_gap and aa == GAP)
+#         ) or (
+#             not allow_ambiguous and aa in AA_TO_INDEX and INDEX_TO_AA[AA_TO_INDEX[aa]] != aa
+#         )
+#     ]
+#
+#     return len(invalid) == 0, invalid
 
 
 def read_fasta(f: TextIO):
