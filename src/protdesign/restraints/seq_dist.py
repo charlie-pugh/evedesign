@@ -340,10 +340,10 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
                     # if instance is gap and reference is not, handle just like regular symbol exchanges
                     res.values[
                         all_row_idx[ref_not_gap], ref_symbols[ref_not_gap]
-                    ] += 1
+                    ] -= 1
                 else:
                     # otherwise treat all symbols equally
-                    res.values[all_row_idx, ref_symbols] += 1
+                    res.values[all_row_idx, ref_symbols] -= 1
 
         # retrieve value for instance symbol across all rows, then subtract from full matrix to normalize
         inst_symbol_val = res.values[np.arange(len(res)), inst_symbol_idx]
@@ -352,22 +352,3 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         assert len(res) == len(instances)
         return res
 
-    """
-    # TODO: implement MutationScorer interface if it would be useful in practice 
-    def single_mutation_scan(
-        self,
-        instance: SystemInstance,
-        entity: int = 0,
-        positions: Sequence[int] | None = None,
-        status_callback: StatusCallback | None = None
-    ) -> pd.DataFrame:
-        raise NotImplementedError()
-
-    def score_mutants(
-        self,
-        instance: SystemInstance,
-        mutants: Sequence[Mutant],
-        status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        raise NotImplementedError()
-    """

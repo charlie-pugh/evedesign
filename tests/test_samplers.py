@@ -26,8 +26,9 @@ def test_seq_dist_restraint_and_gibbs_sampler():
         }
     )
 
+    # minimize distance, so use negative weight
     g = GibbsSampler(
-        [c], weights=[1], num_sweeps=1,
+        [c], weights=[-1], num_sweeps=1,
     )
 
     designs = g.generate(
