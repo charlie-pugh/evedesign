@@ -354,9 +354,9 @@ class System(UserList[Entity]):
         self,
         instance: SystemInstance,
         validate_reps: bool = True,
-        fixed_length: bool=True,
-        allow_deletions: bool=False,
-        raise_invalid: bool=False,
+        fixed_length: bool = True,
+        allow_deletions: bool = False,
+        raise_invalid: bool = False,
     ) -> bool:
         """
         Verify if instance is valid representation of this biomolecular system
@@ -403,6 +403,27 @@ class System(UserList[Entity]):
                     )
 
                     valid = valid and is_valid_seq
+
+                    # if we have 3D structure models, verify these against primary rep too
+                    # (but only if valid sequence)
+                    if is_valid_seq and entity_instance.models is not None:
+                        # enumerate positions for current sequence
+                        positions = np.arange(
+                            entity.first_index, entity.first_index + len(entity_instance.rep)
+                        )
+
+                        # validate all models attached to current EntityInstance
+                        for models in entity_instance.models.values():
+                            models = ensure_sequence(models)
+                            for model in models:
+                                valid = valid and model.represents(
+                                    positions, list(entity_instance.rep), allow_missing=True
+                                )
+
+                                # do not continue with comparison if we have at least one invalid structure
+                                if not valid:
+                                    break
+
 
         if not valid and raise_invalid:
             raise ValueError("Provided instance is not valid for biomolecular system")

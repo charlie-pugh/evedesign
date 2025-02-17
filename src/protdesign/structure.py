@@ -5,7 +5,7 @@ Thin wrapper around biotite structures for more convenient, unified access to PD
 decouples internal codebase from biotite API through abstractions that we know work well from EVcouplings
 package development.
 """
-from typing import Literal, TextIO, BinaryIO, Self
+from typing import Literal, TextIO, BinaryIO, Self, Sequence
 import numpy as np
 import pandas as pd
 import biotite.structure as struc
@@ -14,7 +14,7 @@ import biotite.structure.io.pdbx as pdbx
 import biotite.database.rcsb as rcsb
 from biotite.structure import AtomArray
 
-from protdesign.constants import RESIDUE_MAX_SASA
+from protdesign.constants import RESIDUE_MAX_SASA, AA3_to_AA1
 from protdesign.utils import map_array
 
 # allow to receive single chain, or map from identifier to single chain or list of chains
@@ -33,7 +33,7 @@ class Model:
     def atom_df(
         self,
         sasa: bool = False,
-    ):
+    ) -> pd.DataFrame:
         """
         Return dataframe representation of model on *atom* level
 
@@ -106,6 +106,8 @@ class Model:
                 "": pd.NA,
             })
 
+            self._res_df.loc[:, "res_name_oneletter"] = self._res_df.res_name.map(AA3_to_AA1)
+
         # add solvent accessibility
         if sasa and "sasa" not in self._atom_df.columns:
             # compute on per-atom level first
@@ -134,7 +136,7 @@ class Model:
     def res_df(
         self,
         sasa: bool = False,
-    ):
+    ) -> pd.DataFrame:
         """
         Return dataframe representation of model on *residue* level
 
@@ -231,7 +233,7 @@ class Model:
             )
 
         # determine which positions will be mapped, discard others
-        mapped_pos = np.in1d(self.atom_array.res_id, list(mapping))
+        mapped_pos = np.isin(self.atom_array.res_id, list(mapping))
 
         # make a copy and update residue identifiers
         new_chain: AtomArray = self.atom_array[mapped_pos].copy()  # noqa
@@ -243,11 +245,79 @@ class Model:
 
         return type(self)(new_chain)
 
+    def represents(
+        self,
+        positions: Sequence[int],
+        sequence: Sequence[str] | None = None,
+        allow_missing: bool = True,
+        raise_invalid: bool = False,
+    ) -> bool:
+        """
+        Verify if 3D model is a valid representative of a sequence
+
+        Parameters
+        ----------
+        positions
+            Sequence positions that need to match with structure (not checking symbols/residues themselves)
+        sequence:
+            If specified, structure residues needs to match this sequence
+        allow_missing
+            If true allow sequence positions to be undefined in structure model
+            (but in no case may structure define positions that are not present in the sequence)
+        raise_invalid
+            If true and structure is not a valid representative of sequence, raise a ValueError
+
+        Returns
+        -------
+        True if structure is a valid representation of sequence, false otherwise
+        """
+        if sequence is not None and len(positions) != len(sequence):
+            raise ValueError(
+                "Parameters positions and sequence must have same length"
+            )
+
+        df = self.res_df()
+
+        # first ensure that model only contains a single chain or comparison is meaningless
+        valid = df.chain_id.nunique() == 1
+
+        # ensure there are no insertion codes
+        unique_ins_code = df.ins_code.unique()
+        valid = valid and len(unique_ins_code) == 1 and unique_ins_code[0] == ""
+
+        # check that all positions in structure are part of reference sequence to check against
+        valid = valid and df.res_id.isin(positions).all()
+
+        # also check reverse unless we allow missing positions in structure
+        valid = valid and (
+            allow_missing or np.isin(np.array(positions), df.res_id.values).all()
+        )
+
+        # check sequence if specified
+        if sequence is not None:
+            mismatch = pd.DataFrame({
+                "res_id": positions,
+                "res_name_compare": sequence
+            }).merge(
+                df, on="res_id"
+            ).query(
+                "res_name_compare != res_name_oneletter"
+            )
+
+            valid = valid and len(mismatch) == 0
+
+        if not valid and raise_invalid:
+            raise ValueError(
+                "Model is not a valid structure representative of sequence"
+            )
+
+        return valid
+
     @classmethod
     def concat(
         cls,
         models: list[Self]
-    ):
+    ) -> Self:
         """
         Create new model by concatenating given models
 

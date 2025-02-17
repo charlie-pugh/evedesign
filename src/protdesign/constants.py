@@ -81,3 +81,37 @@ RESIDUE_MAX_SASA = {
     "TYR": 263.0,
     "VAL": 174.0,
 }
+
+AA1_TO_AA3 = {
+    "A": "ALA",
+    "C": "CYS",
+    "D": "ASP",
+    "E": "GLU",
+    "F": "PHE",
+    "G": "GLY",
+    "H": "HIS",
+    "I": "ILE",
+    "K": "LYS",
+    "L": "LEU",
+    "M": "MET",
+    "N": "ASN",
+    "P": "PRO",
+    "Q": "GLN",
+    "R": "ARG",
+    "S": "SER",
+    "T": "THR",
+    "V": "VAL",
+    "W": "TRP",
+    "Y": "TYR",
+    "B": "ASX",
+    "Z": "GLX",
+    "X": "UNK",
+}
+
+AA3_to_AA1 = {
+    **{
+        v: k for k, v in AA1_TO_AA3.items()
+    },
+    "MSE": "M",
+    "SEC": "C",
+}
