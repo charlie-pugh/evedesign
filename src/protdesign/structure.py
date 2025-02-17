@@ -6,14 +6,16 @@ decouples internal codebase from biotite API through abstractions that we know w
 package development.
 """
 from typing import Literal, TextIO, BinaryIO, Self
-
+import numpy as np
+import pandas as pd
 import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import biotite.structure.io.pdbx as pdbx
 import biotite.database.rcsb as rcsb
-import pandas as pd
+from biotite.structure import AtomArray
 
 from protdesign.constants import RESIDUE_MAX_SASA
+from protdesign.utils import map_array
 
 # allow to receive single chain, or map from identifier to single chain or list of chains
 StructureFormat = Literal["bcif", "cif", "pdb"]
@@ -202,12 +204,51 @@ class Model:
             self.atom_array[self.atom_array.chain_id == chain_id]
         )
 
-    # def map_indices(self):
-    #     # TODO: implement; how to handle multiple chains or only do single chain?
-    #     # TODO: remove anything not mapped?
-    #
-    #     # TODO: raise ValueError if insertion codes are present
-    #     raise NotImplementedError("Structure mapping not yet implemented")
+    def remap(
+        self,
+        mapping: dict[int, int],
+        chain_id: str | None = None
+    ) -> Self:
+        """
+        Remap numbering of a single-chain model. Will raise a ValueError if more than one chain
+        or insertion codes are present to avoid ambiguity in mapping.
+
+        Parameters
+        ----------
+        mapping
+            Map from current numbering to new numbering. Any residues not contained in the
+            mapping will be removed from the model
+        chain_id
+            If not None, update chain identifier to this value (otherwise will keep as is)
+
+        Returns
+        -------
+        Single-chain model with updated numbering
+        """
+        unique_ins_codes = np.unique(self.atom_array.ins_code)
+        if len(unique_ins_codes) != 1 or unique_ins_codes[0] != "":
+            raise ValueError(
+                "Model contains insertion codes, cannot remap numbering"
+            )
+
+        unique_chains = np.unique(self.atom_array.chain_id)
+        if len(unique_chains) != 1:
+            raise ValueError(
+                "Can only map a unique chain identifier"
+            )
+
+        # determine which positions will be mapped, discard others
+        mapped_pos = np.in1d(self.atom_array.res_id, list(mapping))
+
+        # make a copy and update residue identifiers
+        new_chain: AtomArray = self.atom_array[mapped_pos].copy()  # noqa
+        new_chain.res_id[:] = map_array(new_chain.res_id, mapping)
+
+        # update chain if given
+        if chain_id is not None:
+            new_chain.chain_id[:] = chain_id
+
+        return type(self)(new_chain)
 
     @classmethod
     def concat(
