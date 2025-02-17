@@ -56,3 +56,28 @@ VALID_RNA = {"A", "C", "G", "U"}
 VALID_RNA_SORTED = sorted(VALID_RNA)
 VALID_RNA_OR_GAP = VALID_RNA | {GAP}
 VALID_RNA_OR_GAP_SORTED = sorted(VALID_RNA) + [GAP]
+
+# extracted from https://github.com/biopython/biopython/blob/186d3825c4b6b289c347c6ea95a89ffb2717e848/Bio/Data/PDBData.py#L295
+# Wilke: Tien et al. 2013 https://doi.org/10.1371/journal.pone.0080635
+RESIDUE_MAX_SASA = {
+    "ALA": 129.0,
+    "ARG": 274.0,
+    "ASN": 195.0,
+    "ASP": 193.0,
+    "CYS": 167.0,
+    "GLN": 225.0,
+    "GLU": 223.0,
+    "GLY": 104.0,
+    "HIS": 224.0,
+    "ILE": 197.0,
+    "LEU": 201.0,
+    "LYS": 236.0,
+    "MET": 224.0,
+    "PHE": 240.0,
+    "PRO": 159.0,
+    "SER": 155.0,
+    "THR": 172.0,
+    "TRP": 285.0,
+    "TYR": 263.0,
+    "VAL": 174.0,
+}

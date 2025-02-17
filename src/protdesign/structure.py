@@ -13,6 +13,8 @@ import biotite.structure.io.pdbx as pdbx
 import biotite.database.rcsb as rcsb
 import pandas as pd
 
+from protdesign.constants import RESIDUE_MAX_SASA
+
 # allow to receive single chain, or map from identifier to single chain or list of chains
 StructureFormat = Literal["bcif", "cif", "pdb"]
 _INVALID_FORMAT_MSG = "Invalid PDB file type, options are: 'bcif', 'cif', 'pdb'"
@@ -22,34 +24,31 @@ class Model:
     def __init__(self, atom_array: struc.AtomArray):
         self.atom_array = atom_array
 
-        # dataframe representation
-        self._df = None
+        # dataframe representation (atom- and residue-level)
+        self._atom_df = None
+        self._res_df = None
 
-    def df(
+    def atom_df(
         self,
-        sse: bool = True,
         sasa: bool = False,
     ):
         """
-        Return dataframe representation of model
+        Return dataframe representation of model on *atom* level
 
-        Note: do not mutate returned dataframe without creating a copy
+        Note: do not mutate returned dataframe in place
 
         Parameters
         ----------
-        sse
-            If true, compute column with secondary structure elements
-            (will be retained on subsequent calls even if sse = False)
         sasa
-            If true, add column solvent accessibility
+            If true, add column with residue solvent accessibility
             (will be retained on subsequent calls even if sasa = False)
 
         Returns
         -------
         Dataframe representation of model
         """
-        # built dataframe if not already existring
-        if self._df is None:
+        # built dataframe if not already existing
+        if self._atom_df is None:
             cols = self.atom_array.get_annotation_categories()
             _df_raw = {
                 col: self.atom_array.get_annotation(col) for col in cols
@@ -60,7 +59,7 @@ class Model:
                 _df_raw[col] = self.atom_array.coord[:, i]
 
             # replace masked values in custom fields not handled by biotite
-            self._df = pd.DataFrame(
+            self._atom_df = pd.DataFrame(
                 _df_raw
             ).replace(
                 {"?": pd.NA, ".": pd.NA}
@@ -70,35 +69,96 @@ class Model:
             for col in [
                 "label_entity_id", "label_seq_id", "auth_seq_id"
             ]:
-                if col in self._df.columns:
-                    self._df.loc[:, col] = self._df.loc[:, col].astype("Int64")
+                if col in self._atom_df.columns:
+                    self._atom_df.loc[:, col] = self._atom_df.loc[:, col].astype("Int64")
 
-        # annotate secondary structure, use 3-state DSSP nomenclature (even if different algorithm
-        # used by biotite)
-        if sse and "sse" not in self._df.columns:
-            sse = pd.Series(
-                struc.annotate_sse(self.atom_array)
-            ).replace({
+        # create residue-level dataframe; can only extract secondary structure annotation on this level in biotite
+        if self._res_df is None:
+            _res_ids, _res_names = struc.get_residues(self.atom_array)
+            _res_starts = struc.get_residue_starts(self.atom_array)
+            _sse = struc.annotate_sse(self.atom_array)
+            _chain_ids = self.atom_array[_res_starts].chain_id
+
+            # need to add _ins_code for cases where author numbering is used
+            # (otherwise residue id alone is not unique);
+            _ins_code = self.atom_array[_res_starts].ins_code
+
+            # use 3-state DSSP nomenclature for compatibility with everyone else (even if different algorithm)
+            _sse = struc.annotate_sse(self.atom_array)
+
+            assert len(_res_ids) == len(_res_names) == len(_res_starts) == len(_sse)
+
+            self._res_df = pd.DataFrame({
+                "res_id": _res_ids,
+                "res_name": _res_names,
+                "ins_code": _ins_code,
+                "chain_id": _chain_ids,
+                "sse": _sse,
+                "atom_df_start_idx": _res_starts,
+            })
+
+            self._res_df.loc[:, "sse"] = self._res_df.loc[:, "sse"].replace({
                 "a": "H",
                 "b": "E",
                 "c": "C",
                 "": pd.NA,
             })
 
-            # TODO: have to use get_residues()
-            # print(len(sse))
-            # print(len(self._df))
-            # print(len(struc.annotate_sse(self.atom_array)))
-            # assert len(sse) == len(self._df)
-            # self._df.loc[:, "sse"] = sse
+            # merge secondary structure back on atom dataframe
+            # self._atom_df = self._atom_df.merge(
+            #     self._res_df.loc[:, ["res_id", "ins_code", "chain_id", "sse"]],
+            #     on=["res_id", "ins_code", "chain_id"],
+            #     how="left",
+            # )
 
-            # TODO: separate atom and residue df?
+        # add solvent accessibility
+        if sasa and "sasa" not in self._atom_df.columns:
+            # compute on per-atom level first
+            sasa_vec = struc.sasa(self.atom_array)
+            assert len(sasa_vec) == len(self._atom_df)
+            self._atom_df.loc[:, "sasa"] = sasa_vec
 
-        if sasa and "sasa" not in self._df.columns:
-            print("compute sasa")
-            # TODO: annotate_sse(struc)
+            # group on residue level (drop null values first or aggregation will create zero value)
+            sasa_res_sum = self._atom_df.dropna(subset=["sasa"]).groupby(
+                ["res_id", "ins_code", "chain_id", "res_name"], sort=False
+            )["sasa"].sum().to_frame("sasa_residue").reset_index()
 
-        return self._df
+            # annotate maximum accessibility for residue (extended peptide) to compute relative accessibility
+            max_sasa = sasa_res_sum.res_name.map(RESIDUE_MAX_SASA)
+            sasa_res_sum.loc[:, "rel_sasa_residue"] = sasa_res_sum["sasa_residue"] / max_sasa
+
+            # merge back to residue-level dataframe
+            self._res_df = self._res_df.merge(
+                sasa_res_sum.drop(["res_name"], axis=1),
+                how="left",
+                on=["res_id", "ins_code", "chain_id"]
+            )
+
+        return self._atom_df
+
+    def res_df(
+        self,
+        sasa: bool = False,
+    ):
+        """
+        Return dataframe representation of model on *residue* level
+
+        Note: do not mutate returned dataframe in place
+
+        Parameters
+        ----------
+        sasa
+            If true, add column solvent accessibility
+            (will be retained on subsequent calls even if sasa = False)
+
+        Returns
+        -------
+        Dataframe representation of model
+        """
+        # create/update all internal representations including atom dataframe
+
+        self.atom_df(sasa=sasa)
+        return self._res_df
 
     def chains(self) -> list[str]:
         """
