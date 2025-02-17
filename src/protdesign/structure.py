@@ -100,18 +100,47 @@ class Model:
 
         return self._df
 
-    def chains(self):
+    def chains(self) -> list[str]:
+        """
+        List available chains in model (whether these are author
+        or label chain IDs is determined by use_author_fields parameter
+        when calling get_model / get_assembly_model
+
+        Returns
+        -------
+        Alphabetically sorted list of chain identifiers
+        """
         # return all available chains
-        # TODO: implement
-        raise NotImplementedError()
+        return sorted(
+            set(struc.get_chains(self.atom_array))
+        )
 
     def get_chain(
-        self
-    ):
-        # TODO: get_chains(struc)
-        # TODO: document
-        # TODO: check chain is valid
-        pass
+        self,
+        chain_id: str
+    ) -> Self:
+        """
+        Extract single chain from model. Use chains() to list
+        available chain identifiers in model.
+
+        Parameters
+        ----------
+        chain_id
+            Identifier of chain to extract
+
+        Returns
+        -------
+        Model limited to extracted chain
+        """
+        valid_chains = self.chains()
+        if chain_id not in valid_chains:
+            raise ValueError(
+                f"Invalid chain identifier, valid options are: {valid_chains}"
+            )
+
+        return type(self)(
+            self.atom_array[self.atom_array.chain_id == chain_id]
+        )
 
     # def map_indices(self):
     #     # TODO: implement; how to handle multiple chains or only do single chain?
@@ -151,7 +180,11 @@ class Model:
         format: StructureFormat="cif"  # noqa
     ) -> None:
         """
-        Save model coordinates to a file
+        Save model coordinates to a file.
+
+        Note that the underlying library biotite does not preserve both author and
+        label ids/numbering Users of the written file should always ensure that
+        identifiers in structure are treated appropriately (i.e. not mix numbering types).
 
         Parameters
         ----------
@@ -184,8 +217,7 @@ class Structure:
         "atom_id", "b_factor", "occupancy", "charge"
     ]
 
-    # extra fields only available through CIF/PDBx formats, we also retrieve these by default even
-    # if redundant to default fields extracted by biotite so we have all information available whenever needed
+    # extra fields only available through CIF/PDBx formats to get access to full numbering information
     _extra_fields_pdbx = _extra_fields + [
         "label_entity_id", "label_asym_id", "auth_asym_id", "label_seq_id", "auth_seq_id", "pdbx_PDB_ins_code"
     ]
@@ -273,6 +305,7 @@ class Structure:
         altloc: Literal["first", "occupancy", "all"] = "occupancy",
         use_author_fields: bool = True,
         include_bonds: bool = False,
+        add_all_fields: bool = False,
     ) -> Model:
         """
         Extract one model from asymmetric unit
@@ -286,18 +319,22 @@ class Structure:
             Multiple location (altloc) per atom resolution strategy (see biotite documentation for details)
         use_author_fields
             If True, use author chain and residue numbering (possibly containing insertion codes),
-            otherwise use label_seq_id and label_asym_id
+            otherwise use label_seq_id and label_asym_id (the latter option available for PDBx-based formats
+            (cif/bcif) only)
         include_bonds
             If True, include bond list (see biotite documentation for details)
+        add_all_fields
+            Extract all identifier columns (author and label ids), not just main numbering
+            selected with use_author_fields. Available for PDBx-based formats (cif/bcif) only.
 
         Returns
         -------
         Extracted model
         """
 
-        if not use_author_fields and not self.pdbx:
+        if (not use_author_fields or add_all_fields) and not self.pdbx:
             raise ValueError(
-                "Legacy PDB format only supports use_author_fields = True"
+                "Legacy PDB format only supports use_author_fields = True and add_all_fields = False"
             )
 
         if self.pdbx:
@@ -305,10 +342,15 @@ class Structure:
                 self.data,
                 model=model,
                 altloc=altloc,
-                extra_fields=self._extra_fields_pdbx,
+                extra_fields=self._extra_fields_pdbx if add_all_fields else self._extra_fields,
                 use_author_fields=use_author_fields,
                 include_bonds=include_bonds
             )
+
+            # remove insertion code, this belongs to author numbering and
+            # only creates confusion if label_seq_ids are used
+            if not use_author_fields:
+                coords.ins_code[:] = ""
         else:
             coords = pdb.get_structure(
                 self.data,
@@ -327,6 +369,7 @@ class Structure:
         altloc: Literal["first", "occupancy", "all"] = "occupancy",
         use_author_fields: bool = True,
         include_bonds: bool = False,
+        add_all_fields: bool = False,
     ) -> Model:
         """
         Extract one model from biological assembly
@@ -342,17 +385,21 @@ class Structure:
             Multiple location (altloc) per atom resolution strategy (see biotite documentation for details)
         use_author_fields
             If True, use author chain and residue numbering (possibly containing insertion codes),
-            otherwise use label_seq_id and label_asym_id
+            otherwise use label_seq_id and label_asym_id (the latter option available for PDBx-based formats
+            (cif/bcif) only)
         include_bonds
             If True, include bond list (see biotite documentation for details)
+        add_all_fields
+            Extract all identifier columns (author and label ids), not just main numbering
+            selected with use_author_fields. Available for PDBx-based formats (cif/bcif) only.
 
         Returns
         -------
         Extracted model from biological assembly
         """
-        if not use_author_fields and not self.pdbx:
+        if (not use_author_fields or add_all_fields) and not self.pdbx:
             raise ValueError(
-                "Legacy PDB format only supports use_author_fields = True"
+                "Legacy PDB format only supports use_author_fields = True and add_all_fields = False"
             )
 
         if self.pdbx:
@@ -361,10 +408,15 @@ class Structure:
                 assembly_id=assembly_id,
                 model=model,
                 altloc=altloc,
-                extra_fields=self._extra_fields_pdbx,
+                extra_fields=self._extra_fields_pdbx if add_all_fields else self._extra_fields,
                 use_author_fields=use_author_fields,
                 include_bonds=include_bonds
             )
+
+            # remove insertion code, this belongs to author numbering and
+            # only creates confusion if label_seq_ids are used
+            if not use_author_fields:
+                coords.ins_code[:] = ""
         else:
             coords = pdb.get_assembly(
                 self.data,
