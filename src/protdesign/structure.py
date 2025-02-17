@@ -106,13 +106,6 @@ class Model:
                 "": pd.NA,
             })
 
-            # merge secondary structure back on atom dataframe
-            # self._atom_df = self._atom_df.merge(
-            #     self._res_df.loc[:, ["res_id", "ins_code", "chain_id", "sse"]],
-            #     on=["res_id", "ins_code", "chain_id"],
-            #     how="left",
-            # )
-
         # add solvent accessibility
         if sasa and "sasa" not in self._atom_df.columns:
             # compute on per-atom level first
