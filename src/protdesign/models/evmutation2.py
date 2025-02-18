@@ -444,8 +444,9 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # score the designs relative to entity sequence (ideally, user supplied WT sequence, but user can
         # always rescore the designs later if needed)
 
-        # prepend reference sequence, and create instances
-        ref_and_designs = [target.rep] + list(designs.seq)
+        # prepend reference sequence, and create instances;
+        # note ref_and_designs is list[str] that is transformed to np array by EntityInstance constructor
+        ref_and_designs = ["".join(target.rep)] + list(designs.seq)
         instances = [
             SystemInstance(
                 EntityInstance(rep=rep)
@@ -482,8 +483,14 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
             model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred),
             self._reps_on_device(self.keep_model_after_pred)
         ):
+            # note that score_full_probability could also handle numpy arrays but not yet documented,
+            # so turn into list[str] for due diligence
+            str_instances = [
+                "".join(instance[0].rep) for instance in instances
+            ]
+
             scores = self.model.decoder.score_full_probability(
-                [instance[0].rep for instance in instances],
+                str_instances,
                 single=self._single_rep_on_device,
                 pairwise=self._pair_rep_on_device,
                 pos_mask=self._pos_mask_on_device,
@@ -676,9 +683,10 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # validate positions
         self.valid_positions(positions, entities=0, raise_invalid=True)
 
-        # extract sequences
+        # extract sequences;
+        # note: could also pass numpy rep directly but use proper signature for due diligence
         seqs = [
-            instance[0].rep for instance in instances
+            "".join(instance[0].rep) for instance in instances
         ]
 
         with (

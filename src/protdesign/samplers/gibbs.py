@@ -9,8 +9,8 @@ import pandas as pd
 import torch
 from protdesign.constants import GAP
 from protdesign.model import Generator, ConditionalMutationScorer
-from protdesign.entity import System, SystemInstance, EntityPosList, EntityInstance
-from protdesign.types import StatusCallback, EntityType
+from protdesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
+from protdesign.types import StatusCallback
 from protdesign.utils import status_progress, ensure_sequence
 
 ScanOrder = Literal[
@@ -215,7 +215,7 @@ class GibbsSampler(Generator):
         entities: Sequence[int] | None,
         fixed_pos: EntityPosList | None,
         deletions: bool,
-    ) -> Tuple[list[int], EntityType, list[str], list[Tuple[int, int]]]:
+    ) -> Tuple[list[int], list[str], list[Tuple[int, int]]]:
         """
         Helper method to verify specified entities and fixed positions, and compute
         list of positions in entities that are used for design
@@ -248,16 +248,6 @@ class GibbsSampler(Generator):
         else:
             # otherwise, use all entities
             entities = sorted(entities_to_type)
-
-        # ensure all designed entities are of same type to simplify sampling step
-        # (can eventually relax this requirement)
-        designed_types = {
-            entities_to_type[entity] for entity in entities
-        }
-        if len(designed_types) != 1:
-            raise ValueError("All designed entities must be of same type")
-
-        designed_type = list(designed_types)[0]
 
         # verify all designed entities have an existing representation (so we can assume length)
         for entity in entities:
@@ -296,18 +286,20 @@ class GibbsSampler(Generator):
         if len(design_pos) == 0:
             raise ValueError("No positions left to design after removing fixed positions")
 
-        # set up alphabet, retrieve from first designed entity for now;
-        # eventually could compare/merge alphabets for different designed_types to allow
-        # co-design of different types
-        alphabet = self._system[entities[0]].alphabet(include_gap=deletions)
+        # set up joint alphabet, merging across all entity types that are designed
+        alphabet = Entity.merge_alphabet_symbols([
+            self._system[entity_idx].alphabet(
+                include_gap=deletions
+            ) for entity_idx in entities
+        ])
 
-        return entities, designed_type, alphabet, design_pos
+        return entities, alphabet, design_pos
 
     def _init_samples(
         self,
         num_designs: int,
         entities: list[int],
-        alphabet: list[str],
+        deletions: bool,
         pos_to_design: list[Tuple[int, int]],
     ) -> Tuple[np.ndarray, dict[int, int], dict[int, int], np.ndarray, np.ndarray]:
         """
@@ -319,8 +311,8 @@ class GibbsSampler(Generator):
             Number of initialized samples to build
         entities
             Indices of designed entities
-        alphabet
-            Characters to initialize samples from
+        deletions
+            If true, gap symbol will be included in alphabet for initialization
         pos_to_design
             Variable positions that should be initialized
 
@@ -351,9 +343,10 @@ class GibbsSampler(Generator):
             dtype="<U1"
         )
 
-        alphabet_set = set(alphabet)
         for array_idx, entity_idx in enumerate(entities):
             entity = self._system[entity_idx]
+            alphabet = entity.alphabet(include_gap=deletions)
+            alphabet_set = set(alphabet)
 
             # initialize array-based mappings
             entity_to_array_idx_linear[entity_idx] = array_idx
@@ -439,14 +432,10 @@ class GibbsSampler(Generator):
             if GAP in scores.columns:
                 scores = scores.drop([GAP], axis=1)
 
-        returned_alphabet = "".join(scores.columns)
-        expected_alphabet = "".join(alphabet)
-
-        assert (
-            returned_alphabet == expected_alphabet
-        ), f"Invalid alphabet returned by scorer {scorer_idx} ({returned_alphabet} vs {expected_alphabet}"
-
-        return scores
+        # make sure dataframe has all columns for target alphabet
+        # (predictor may return more columns than needed for designed entities, or fewer if an entity leading
+        # to extended alphabet is not included in current sampled entity positions)
+        return scores.reindex(alphabet, axis=1)
 
     def _build_or_update_instances(
         self,
@@ -462,17 +451,11 @@ class GibbsSampler(Generator):
         Helper method to initialize or update samples from
         current state of sample array
         """
-        # numpy view speeds up instance creation by ~10x for large sample sets
-        # compared to iteration and string joining;
-        # we make a copy of the view to unlink the string representation from
-        # the underlying matrix in any case - if this ever was a real bottleneck,
-        # could try to keep the representation on each instance a view of samples
-        samples_joined = {
+        # copy instances just to be 100% on safe side so instances cannot be mutated by accident
+        samples_copy = {
             entity_idx: samples[
                 :, array_idx, :entity_to_len[entity_idx]
-            ].view(
-                f"<U{entity_to_len[entity_idx]}"
-            )[:, 0].copy()
+            ].copy()
             for entity_idx, array_idx in entity_to_array_idx.items()
         }
 
@@ -484,7 +467,7 @@ class GibbsSampler(Generator):
                 SystemInstance([
                     EntityInstance(
                         rep=(
-                            samples_joined[entity_idx][design_idx]
+                            samples_copy[entity_idx][design_idx]
                             if entity_idx in entities
                             else self._system[entity_idx].rep
                         )
@@ -499,9 +482,9 @@ class GibbsSampler(Generator):
                 updated_ent_idx = updated_entities[design_idx]
 
                 # assign updated representation
-                instances[design_idx][updated_ent_idx].rep = samples_joined[updated_ent_idx][design_idx]
+                instances[design_idx][updated_ent_idx].rep = samples_copy[updated_ent_idx][design_idx]
 
-        return instances, samples_joined
+        return instances, samples_copy
 
     def generate(
         self,
@@ -513,7 +496,7 @@ class GibbsSampler(Generator):
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
         # verify/update entity selection and extract positions to design
-        entities, designed_type, alphabet, pos_to_design = self._design_params(
+        entities, alphabet, pos_to_design = self._design_params(
             entities, fixed_pos, deletions
         )
 
@@ -528,7 +511,7 @@ class GibbsSampler(Generator):
             samples, entity_to_array_idx, entity_to_len,
             entity_to_array_idx_linear, entity_to_first_index_linear
         ) = self._init_samples(
-            num_designs, entities, alphabet, pos_to_design
+            num_designs, entities, deletions, pos_to_design
         )
 
         # initialize full instances to pass to scorers from sample array
@@ -607,9 +590,9 @@ class GibbsSampler(Generator):
                     )
 
                     # ensure nothing bad happened to row index
-                    assert (s.index.get_level_values(0) == design_idx_all).all()  # noqa
-                    assert (s.index.get_level_values(1) == step_ent).all()  # noqa
-                    assert (s.index.get_level_values(2) == step_pos).all()  # noqa
+                    assert np.all(s.index.get_level_values(0) == design_idx_all)
+                    assert np.all(s.index.get_level_values(1) == step_ent).all()
+                    assert np.all(s.index.get_level_values(2) == step_pos).all()
 
                     if agg_scores is None:
                         agg_scores = s

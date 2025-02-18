@@ -291,7 +291,7 @@ class ConditionalMutationScorer(_Core):
          columns index over different symbols (amino acids etc.). Guaranteed to have same length as instance,
          entities and positions. Rows must be in the same order as input instance/entity/position triplets.
          Columns must be in same order as returned by Entity.alphabet() (or union thereof if multiple types
-         of entities), missing predictions must be encoded by np.nan
+         of entities in system), missing predictions must be encoded by np.nan
 
         4. Optional insertion handling: Models able to provide scores for insertions should include these
          by requesting an alphabet including insertion symbols: Entity.alphabet(..., include_inserts=True).
@@ -300,9 +300,9 @@ class ConditionalMutationScorer(_Core):
          (with all uppercase symbols), with all uppercase/non-insert symbol values set to NaN.
 
         5. Methods returning predictions across entities with more than one alphabet should use
-         Entity.merge_alphabet_symbols() to determine the mixed alphabet/column order. The alphabet of each dataframe row
-         is implied by the type of the respective entity, all symbols from other alphabets not relevant
-         for current row should be set to NaN)
+         Entity.merge_alphabet_symbols() to determine the mixed alphabet/column order. The alphabet of each
+         dataframe row is implied by the type of the respective entity, all symbols from other alphabets
+         not relevant for current row should be set to NaN)
 
         Parameters
         ----------
