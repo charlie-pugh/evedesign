@@ -467,12 +467,20 @@ class GibbsSampler(Generator):
         # we make a copy of the view to unlink the string representation from
         # the underlying matrix in any case - if this ever was a real bottleneck,
         # could try to keep the representation on each instance a view of samples
-        samples_joined = {
+        # samples_joined = {
+        #     entity_idx: samples[
+        #         :, array_idx, :entity_to_len[entity_idx]
+        #     ].view(
+        #         f"<U{entity_to_len[entity_idx]}"
+        #     )[:, 0].copy()
+        #     for entity_idx, array_idx in entity_to_array_idx.items()
+        # }
+
+        # note: easier implementation than above now that we use numpy array for instance rep
+        samples_copy = {
             entity_idx: samples[
                 :, array_idx, :entity_to_len[entity_idx]
-            ].view(
-                f"<U{entity_to_len[entity_idx]}"
-            )[:, 0].copy()
+            ].copy()
             for entity_idx, array_idx in entity_to_array_idx.items()
         }
 
@@ -484,7 +492,7 @@ class GibbsSampler(Generator):
                 SystemInstance([
                     EntityInstance(
                         rep=(
-                            samples_joined[entity_idx][design_idx]
+                            samples_copy[entity_idx][design_idx]
                             if entity_idx in entities
                             else self._system[entity_idx].rep
                         )
@@ -499,9 +507,9 @@ class GibbsSampler(Generator):
                 updated_ent_idx = updated_entities[design_idx]
 
                 # assign updated representation
-                instances[design_idx][updated_ent_idx].rep = samples_joined[updated_ent_idx][design_idx]
+                instances[design_idx][updated_ent_idx].rep = samples_copy[updated_ent_idx][design_idx]
 
-        return instances, samples_joined
+        return instances, samples_copy
 
     def generate(
         self,

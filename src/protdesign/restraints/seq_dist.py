@@ -223,14 +223,14 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         for entity_idx, cur_ref_seqs in self._ref_seqs.items():
             # extract sequences for current entity from instances as numpy array
             # (do not use np.array(list) as this is way slower)
-            x = str_to_np_char_view(
+            x = np.array(
                 [inst[entity_idx].rep for inst in instances]
             )
 
             # iterate through references one by one;
             # TODO: optimize with numba or scipy cdist if large reference sequence sets
             #  (e.g. comparing to MSA) become relevant
-            for ref in cur_ref_seqs[:]:
+            for ref in cur_ref_seqs:
                 # silence type warnings by wrapping in array()
                 diff = np.array(ref != x)
 

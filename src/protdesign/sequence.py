@@ -4,7 +4,7 @@ Biopolymer sequence functionality (protein sequences etc.)
 from typing import List, Literal, Self, TextIO, Tuple
 from collections import abc
 from protdesign.constants import MASK
-from protdesign.types import BioPolymer
+from protdesign.types import BioPolymer, RepSequence
 from protdesign.utils import shorten
 
 
@@ -114,7 +114,7 @@ class Sequences:
             )
 
 def valid_sequence(
-    seq: str,
+    seq: str | RepSequence,
     alphabet: list[str],
     allow_mask: bool = False,
 ) -> Tuple[bool, List[Tuple[int, str]]]:

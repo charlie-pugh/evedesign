@@ -39,6 +39,6 @@ def test_seq_dist_restraint_and_gibbs_sampler():
     )
 
     for design in designs:
-        assert design[0].rep == "KAAACAAAA" or design[0].rep == "RAAACAAAA"
-        assert design[1].rep == "CCCCC"
-        assert design[2].rep == "DEQDY" or design[2].rep == "DEEDY"
+        assert "".join(design[0].rep) == "KAAACAAAA" or "".join(design[0].rep) == "RAAACAAAA"
+        assert "".join(design[1].rep) == "CCCCC"
+        assert "".join(design[2].rep) == "DEQDY" or "".join(design[2].rep) == "DEEDY"

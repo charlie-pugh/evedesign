@@ -7,7 +7,7 @@ from typing import Mapping, NamedTuple, Self
 import numpy as np
 from protdesign.sequence import valid_sequence, Sequences
 from protdesign.structure import Model
-from protdesign.types import EntityType, Metadata, BioPolymers
+from protdesign.types import EntityType, Metadata, BioPolymers, RepSequence
 from protdesign.constants import (
     VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
     VALID_DNA_OR_GAP_SORTED, VALID_DNA_SORTED,
@@ -48,12 +48,21 @@ Conventions:
 """
 StructureChainMap = dict[str, Model | list[Model]]
 
+def _rep_to_np_array(rep: RepSequence | str | None) -> RepSequence | None:
+    if isinstance(rep, str):
+        rep = np.array(list(rep), dtype="U1")
+    else:
+        if rep is not None and rep.dtype != "U1":
+            raise ValueError("rep must be None, str, or have dtype 'U1'")
+
+    return rep
+
 
 class Entity:
     def __init__(
         self,
         type: EntityType,  # noqa
-        rep: str | None = None,
+        rep: str | RepSequence | None = None,
         id: str | None = None,  # noqa
         copies: int | None = None,
         first_index: int | None = None,
@@ -95,7 +104,7 @@ class Entity:
             of the chain within the structure (homooligomer)
         """
         self.type_ = type
-        self.rep = rep
+        self.rep = _rep_to_np_array(rep)
         self.id_ = id
         self.copies = copies
 
@@ -123,7 +132,7 @@ class Entity:
         # for modeling the entity
         return (
             self.type_ == other.type_ and
-            self.rep == other.rep and
+            np.all(self.rep == other.rep) and
             self.id_ == other.id_ and
             self.copies == other.copies and
             self.first_index == other.first_index
@@ -227,7 +236,7 @@ class EntityInstance:
     """
     def __init__(
         self,
-        rep: str | None = None,
+        rep: RepSequence | str | None = None,
         embedding:  Embedding | None = None,
         models: StructureChainMap | None = None,
     ):
@@ -257,7 +266,7 @@ class EntityInstance:
             Structural models associated with each of the entities in the system.
             Set to None if no structural models are available.
         """
-        self.rep = rep
+        self.rep = _rep_to_np_array(rep)
         self.embedding = embedding
         self.models = models
 
@@ -267,9 +276,14 @@ class EntityInstance:
         else:
             structure_info = self.models
 
-        return f"EntityInstance(rep={shorten( self.rep)}, structure_models={structure_info})"
+        if self.rep is not None:
+            short_rep = shorten("".join(self.rep))
+        else:
+            short_rep = "n/a"
 
-    def normalized_rep(self) -> str:
+        return f"EntityInstance(rep={short_rep}, structure_models={structure_info})"
+
+    def normalized_rep(self) -> RepSequence:
         """
         Return representation without insert and deletion coding
         (all uppercase symbols, no gaps)
@@ -278,7 +292,7 @@ class EntityInstance:
         -------
         Normalized entity representation
         """
-        return self.rep.upper().replace(GAP, "")
+        return np.char.upper(self.rep[self.rep != GAP])
 
 
 class SystemInstance(UserList[EntityInstance]):
@@ -417,13 +431,12 @@ class System(UserList[Entity]):
                             models = ensure_sequence(models)
                             for model in models:
                                 valid = valid and model.represents(
-                                    positions, list(entity_instance.rep), allow_missing=True
+                                    positions, entity_instance.rep, allow_missing=True
                                 )
 
                                 # do not continue with comparison if we have at least one invalid structure
                                 if not valid:
                                     break
-
 
         if not valid and raise_invalid:
             raise ValueError("Provided instance is not valid for biomolecular system")
