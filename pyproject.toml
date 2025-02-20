@@ -23,6 +23,10 @@ classifiers = [
 ]
 dependencies = ["numpy", "pandas", "torch", "loguru", "biotite"]
 
+[project.optional-dependencies]
+evmutation2 = ["picasso_model"]
+express = ["dnachisel", "pydna"]
+
 [project.urls]
 Documentation = "https://github.com/thomashopf/protdesign#readme"
 Issues = "https://github.com/thomashopf/protdesign/issues"
