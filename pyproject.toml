@@ -7,7 +7,7 @@ name = "protdesign"
 dynamic = ["version"]
 description = ''
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "licenseref-proprietary"
 keywords = []
 authors = [
