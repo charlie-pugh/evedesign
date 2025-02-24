@@ -406,7 +406,7 @@ class System(UserList[Entity]):
                          )
                     )
 
-                if validate_reps and entity.rep is not None:
+                if validate_reps and entity_instance.rep is not None:
                     is_valid_seq, _ = entity_instance.rep is not None and valid_sequence(
                         entity_instance.rep,
                         entity.alphabet(
