@@ -116,7 +116,7 @@ class Entity:
         self.sequences = sequences
         self.structures = structures
 
-        if self.type_ in BioPolymers and first_index is None and first_index < 1:
+        if self.type_ in BioPolymers and (first_index is None or first_index < 1):
             raise ValueError(
                 f"first_index must be specified for type {self.type_} and must be >= 1"
             )
