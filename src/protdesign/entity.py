@@ -294,6 +294,22 @@ class EntityInstance:
         """
         return np.char.upper(self.rep[self.rep != GAP])
 
+    @staticmethod
+    def normalize_rep_str(rep: str) -> str:
+        """
+        Helper method to normalize representations that are in string format
+
+        Parameters
+        ----------
+        rep
+            String version of representation
+
+        Returns
+        -------
+        Normalized representation (inserts uppercased, gaps removed)
+        """
+        return rep.replace("-", "").upper()
+
 
 class SystemInstance(UserList[EntityInstance]):
     """

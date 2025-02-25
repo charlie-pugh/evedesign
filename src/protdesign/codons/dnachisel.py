@@ -20,7 +20,8 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
-from protdesign.entity import System, SystemInstance
+from protdesign.constants import GAP
+from protdesign.entity import System, SystemInstance, EntityInstance
 
 OPTIMIZATION_METHODS = [
     "use_best_codon",
@@ -175,8 +176,11 @@ class DNAChiselCodonOptimizer:
         downstream_dna
             Downstream nucleotides after coding sequence (e.g. assembly/cloning overhangs)
         reference_seq
-
+            If specified, only optimize positions in seq that differ from reference_seq
+            (reference_dna must be specified as well)
         reference_dna
+            Use this DNA sequence as template for optimization if reference_seq is specified,
+            keeping any positions that do not differ compared to seq constant on the DNA level
 
         Returns
         -------
@@ -184,29 +188,98 @@ class DNAChiselCodonOptimizer:
          (i) optimized DNA sequence for seq (*excluding* upstream and downstream DNA)
          (ii) final optimization score
         """
-        # TODO: need to handle fixed base sequence (with inserts/gap)
-        # TODO: genetic_table and translation to EnforceTranslation
-        # TODO: check reference seq and dna are both specified
+        if (
+            (reference_seq is None and reference_dna is not None) or
+            (reference_seq is not None and reference_dna is None)
+        ):
+            raise ValueError(
+                "Both reference_seq and reference_dna must be specified together or both None"
+            )
 
-        seq_norm = seq  # TODO: need to normalize seq
+        # normalized version of sequence (no gaps, insertions to uppercase)
+        seq_norm = EntityInstance.normalize_rep_str(seq)
         upstream_dna = upstream_dna.upper()
         downstream_dna = downstream_dna.upper()
 
-        # if no reference given, simply initialize the sequence
-        if reference_dna is None:
-            seq_dna = dc.reverse_translate(seq)   # TODO: use normalized sequence?
-        else:
-            # TODO: set up optimization relative to reference, need to fill in insertions
-            #  and mark positions to fix
-            seq_dna = None
-
-        # full sequence context for optimization problem
-        full_dna = upstream_dna + seq_dna + downstream_dna
+        # first, simply initialize the sequence (if we have a reference, we will backfill codons in next step)
+        seq_dna = dc.reverse_translate(seq_norm)
 
         # region in full_dna to optimize (corresponds to seq_dna, i.e. keep upstream/downstream sequence fixed)
         seq_dna_start = len(upstream_dna)
         seq_dna_end = len(upstream_dna) + len(seq_dna)
         seq_dna_loc = (seq_dna_start, seq_dna_end)
+
+        # fix codons based on reference sequence if specified
+        fixed_codon_constraints = []
+
+        if reference_dna is not None and reference_seq is not None:
+            ref_codon_idx = 0
+            # iterate through (potentially non-normal reference seq), we are only interested in "match states";
+            # note that reference_dna is based on normalized reference sequence so may have different length
+            ref_aa_codons = []
+            for ref_idx, ref_aa in enumerate(reference_seq):
+                if ref_aa == GAP:
+                    # if we have a gap, this is a match state but no corresponding codon;
+                    # keep alignment information by appending None, but do not increase codon index as
+                    # this position will not be present in reference_dna sequence
+                    ref_aa_codons.append(None)
+                else:
+                    # if match state, we keep the codon
+                    if ref_aa.upper() == ref_aa:
+                        ref_aa_codons.append(
+                            (ref_idx, ref_aa, reference_dna[ref_codon_idx : ref_codon_idx + 3])
+                        )
+
+                    # increase codon index in any case (match and insertion), to skip over insertion codon
+                    ref_codon_idx += 3
+
+            print("ref_aa --->", ref_aa_codons, len(ref_aa_codons))  # TODO: remove
+            seq_dna = list(seq_dna)
+
+            # iterate through optimized sequence and update codons where needed; jointly iterate through
+            # extracted reference sequence codons with ref_idx
+            ref_idx = 0
+            for i, aa in enumerate(seq):
+                # only fix codons if we are in a match state (i.e., not an insert/lowercase symbol)
+                if aa == GAP or aa == aa.upper():
+                    cur_ref = ref_aa_codons[ref_idx]
+                    print(i, aa, ref_idx, cur_ref)  # TODO: remove
+
+                    # we can only use a reference codon if there is no deletion in reference (coded by None)
+                    if cur_ref is not None:
+                        _, ref_aa, ref_codon = cur_ref
+
+                        # we can only keep the codon if the current position has the same aa as reference
+                        if aa != ref_aa:
+                            continue
+
+                        # replace codon with reference codon
+                        seq_dna[i * 3 : (i + 1) * 3] = ref_codon.lower()  # TODO: remove lower()
+                        print("swap", seq_dna[i * 3 : (i + 1) * 3], "->", ref_codon)  # TODO: remove
+
+                        # fix codon during optimization
+                        fixed_codon_constraints.append(
+                            dc.AvoidChanges(
+                                location=(seq_dna_start + i * 3, seq_dna_start + (i + 1) * 3)
+                            )
+                        )
+
+                    ref_idx += 1
+
+            print(seq_dna)  # TODO: remove
+            print(fixed_codon_constraints)  # TODO: remove
+
+            # verify that number of match states agrees between reference and optimized sequence
+            if ref_idx != len(ref_aa_codons):
+                raise ValueError(
+                    "Number of aligned positions between reference and optimized sequence do not match: " +
+                    f"ref: {reference_seq}, seq: {seq}"
+                )
+
+            seq_dna = "".join(seq_dna)
+
+        # full sequence context for optimization problem
+        full_dna = upstream_dna + seq_dna + downstream_dna
 
         # enforce correct translation of sequence and do not change upstream/downstream sequences
         seq_constraints = [
@@ -223,7 +296,7 @@ class DNAChiselCodonOptimizer:
 
         problem = dc.DnaOptimizationProblem(
             sequence=full_dna,
-            constraints=self.specifications + seq_constraints,
+            constraints=self.specifications + seq_constraints + fixed_codon_constraints,
             objectives=[dc.CodonOptimize(
                 codon_usage_table=self.codon_table,
                 method=self.method,
@@ -295,7 +368,7 @@ class DNAChiselCodonOptimizer:
             if reference_dna is None:
                 # optimize reference sequence first (as this is reference, do this without being constrained
                 # by any other sequence)
-                reference_dna = self._optimize_seq(
+                reference_dna, reference_dna_score = self._optimize_seq(
                     seq=reference_seq_norm, upstream_dna=upstream_dna, downstream_dna=downstream_dna
                 )
             else:
@@ -311,23 +384,31 @@ class DNAChiselCodonOptimizer:
                     )
         else:
             reference_seq = None
-            reference_seq_norm = None
-
-        print("REF DNA", reference_dna)
-
-        # print("REFERENCE", reference_seq)  # TODO: remove
-        # print("REFERENCE NORM", reference_seq_norm)  # TODO: remove
-        # print("REFERENCE DNA", reference_dna)   # TODO: remove
-
-        return  # TODO: remove
 
         # extract and deduplicate protein sequences (do not perform unnecessary optimizations);
         # do not normalize to keep potential alignment information
         unique_seqs = pd.Series(
             "".join(inst[entity].rep) for inst in instances
         ).drop_duplicates().tolist()
-        print("unique seqs", unique_seqs)  # TODO: remove
+
+        print("REF DNA", reference_dna)  # TODO: remove
+        print("----------")
+
+        # TODO: handle reference_dna None case
+        for seq in unique_seqs:
+            print()
+            print("seq =", seq, "ref =", reference_seq, "dna =", reference_dna)  # TODO: remove
+            # TODO: handle case where reference == current sequence here?
+            x = self._optimize_seq(
+                seq=seq,
+                upstream_dna=upstream_dna,
+                downstream_dna=downstream_dna,
+                reference_seq=reference_seq,
+                reference_dna=reference_dna
+            )
+
 
         # TODO: parallelization? method-specific?
         # TODO: after optimization verify forward and reverse complement for absence of patterns or raise error
+        # TODO: attach upstream_dna/downstream_dna
         return
