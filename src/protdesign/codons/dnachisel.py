@@ -4,7 +4,7 @@ Codon optimization with the DNA Chisel package
 TODO: if implementing any other codon optimizers in the future, rethink interfaces and extract
  shared functionality into abstract base class
 """
-import multiprocess as mp
+import multiprocessing as mp
 from typing import Sequence, Literal, Any
 import pandas as pd
 
@@ -20,8 +20,9 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
-from protdesign.constants import GAP
+from protdesign.constants import GAP, VALID_DNA_SORTED
 from protdesign.entity import System, SystemInstance, EntityInstance
+from protdesign.sequence import valid_sequence
 
 OPTIMIZATION_METHODS = [
     "use_best_codon",
@@ -154,6 +155,11 @@ class DNAChiselCodonOptimizer:
                 )
 
         # Number of CPUs to use for parallelization
+        if not cpu >= 1:
+            raise ValueError(
+                "cpu must be >= 1 (1 for serial execution, > 1 for parallel execution)"
+            )
+
         self.cpu = cpu
 
     def _optimize_seq(
@@ -233,7 +239,6 @@ class DNAChiselCodonOptimizer:
                     # increase codon index in any case (match and insertion), to skip over insertion codon
                     ref_codon_idx += 3
 
-            print("ref_aa --->", ref_aa_codons, len(ref_aa_codons))  # TODO: remove
             seq_dna = list(seq_dna)
 
             # iterate through optimized sequence and update codons where needed; jointly iterate through
@@ -243,7 +248,6 @@ class DNAChiselCodonOptimizer:
                 # only fix codons if we are in a match state (i.e., not an insert/lowercase symbol)
                 if aa == GAP or aa == aa.upper():
                     cur_ref = ref_aa_codons[ref_idx]
-                    print(i, aa, ref_idx, cur_ref)  # TODO: remove
 
                     # we can only use a reference codon if there is no deletion in reference (coded by None)
                     if cur_ref is not None:
@@ -254,8 +258,7 @@ class DNAChiselCodonOptimizer:
                             continue
 
                         # replace codon with reference codon
-                        seq_dna[i * 3 : (i + 1) * 3] = ref_codon.lower()  # TODO: remove lower()
-                        print("swap", seq_dna[i * 3 : (i + 1) * 3], "->", ref_codon)  # TODO: remove
+                        seq_dna[i * 3 : (i + 1) * 3] = ref_codon
 
                         # fix codon during optimization
                         fixed_codon_constraints.append(
@@ -265,9 +268,6 @@ class DNAChiselCodonOptimizer:
                         )
 
                     ref_idx += 1
-
-            print(seq_dna)  # TODO: remove
-            print(fixed_codon_constraints)  # TODO: remove
 
             # verify that number of match states agrees between reference and optimized sequence
             if ref_idx != len(ref_aa_codons):
@@ -335,9 +335,54 @@ class DNAChiselCodonOptimizer:
         downstream_dna: str,
         reference: SystemInstance | None = None,
         reference_dna: str | None = None,
-    ) -> Any:  # TODO: add proper return type
-        # TODO: documentation
-        # TODO: extract all generic unpacking code in abstract class?
+    ) -> Any:
+        """
+        Create codon-optimize DNA sequences for protein entity instances
+        (needs to be called once per protein entity in multi-entity systems)
+
+        Notes:
+        i) Returned sequences will *not* include upstream_dna and downstream_dna,
+         this is solely used as context for parametrizing the codon optimization
+         algorithm
+
+        ii) The method will return duplicate DNA sequences for duplicate protein
+         sequences (output is not deduplicated, this is responsibility of user)
+
+        iii) User is entirely responsible for ensuring that generated
+         DNA sequences are correctly inserted into an ORF with upstream_dna
+         and downstream_dna; verifying this without the full plasmid
+         context is not possible in general way in this function as we cannot
+         make the assumption that start/stop codons are necessarily part of
+         upstream_dna and downstream_dna, respectively (e.g. when cloning
+         a domain into a longer protein)
+
+        Parameters
+        ----------
+        system
+            System for which instances are provided
+        instances
+            Instances for which codon-optimized DNA sequences should be created
+        entity
+            Index of protein entity for which DNA sequence should be created
+        upstream_dna
+            Fixed DNA sequence directly upstream of DNA that will be generated here
+            (e.g. assembly handle)
+        downstream_dna
+            Fixed DNA sequence directly downstream of DNA that will be generated here
+            (e.g. assembly handle)
+        reference
+            Instance that should be used as reference to generate new DNA sequences.
+            If specified, will reuse codons from the reference in any non-indel positions
+            (to keep DNA background as constant as possible where needed)
+        reference_dna
+            DNA sequence for reference sequence (must translate into reference). If not specified,
+            the reference will be first codon-optimized on its own to create the DNA reference
+            from which codons will be reused.
+
+        Returns
+        -------
+         # TODO: add proper return type
+        """
         # verify that valid entity is selected
         if not 0 <= entity <= len(system):
             raise ValueError("Invalid entity index")
@@ -345,12 +390,27 @@ class DNAChiselCodonOptimizer:
         if system[entity].type_ != "protein":
             raise ValueError("Can only optimize protein entities")
 
+        # make sure all sequences are uppercase to simplify later handling
+        upstream_dna = upstream_dna.upper()
+        downstream_dna = downstream_dna.upper()
+
         # validate provided instances
         [
             system.valid_instance(
                 instance, validate_reps=True, fixed_length=False, allow_deletions=True, raise_invalid=True,
             ) for instance in instances
         ]
+
+        # validate upstream/downstream DNA sequences
+        for s in [upstream_dna, downstream_dna]:
+            s_valid, invalid_s_pos = valid_sequence(
+                s, VALID_DNA_SORTED, allow_mask=False
+            )
+
+            if not s_valid:
+                raise ValueError(
+                    f"upstream_dna or downstream_dna is not a valid DNA sequence, invalid symbols: {invalid_s_pos}"
+                )
 
         # check if we optimize a given reference sequence
         if reference is not None:
@@ -372,6 +432,16 @@ class DNAChiselCodonOptimizer:
                     seq=reference_seq_norm, upstream_dna=upstream_dna, downstream_dna=downstream_dna
                 )
             else:
+                reference_dna = reference_dna.upper()
+                valid_ref, invalid_ref_pos = valid_sequence(
+                    reference_dna, VALID_DNA_SORTED, allow_mask=False
+                )
+
+                if not valid_ref:
+                    raise ValueError(
+                        f"reference_dna is not a valid DNA sequence, invalid symbols: {invalid_ref_pos}"
+                    )
+
                 # verify that reference_dna has valid length and translation matches (with specified genetic code)
                 if len(reference_dna) != len(reference_seq_norm) * 3:
                     raise ValueError(
@@ -385,30 +455,31 @@ class DNAChiselCodonOptimizer:
         else:
             reference_seq = None
 
-        # extract and deduplicate protein sequences (do not perform unnecessary optimizations);
+        # extract and deduplicate protein sequences (do not perform unnecessary codon optimizations);
         # do not normalize to keep potential alignment information
-        unique_seqs = pd.Series(
+        all_seqs = pd.Series(
             "".join(inst[entity].rep) for inst in instances
-        ).drop_duplicates().tolist()
+        )
+        unique_seqs = all_seqs.drop_duplicates()
 
-        print("REF DNA", reference_dna)  # TODO: remove
-        print("----------")
+        # prepare list of individual optimization jobs
+        jobs = [
+            (seq, upstream_dna, downstream_dna, reference_seq, reference_dna)
+            for seq in unique_seqs.tolist()
+        ]
 
-        # TODO: handle reference_dna None case
-        for seq in unique_seqs:
-            print()
-            print("seq =", seq, "ref =", reference_seq, "dna =", reference_dna)  # TODO: remove
-            # TODO: handle case where reference == current sequence here?
-            x = self._optimize_seq(
-                seq=seq,
-                upstream_dna=upstream_dna,
-                downstream_dna=downstream_dna,
-                reference_seq=reference_seq,
-                reference_dna=reference_dna
-            )
+        # run jobs serially or in parallel
+        if self.cpu == 1:
+            res = [
+                self._optimize_seq(*job) for job in jobs
+            ]
+        elif self.cpu > 1:
+            with mp.Pool(processes=self.cpu) as pool:
+                res = pool.starmap(
+                    self._optimize_seq, jobs
+                )
 
-
-        # TODO: parallelization? method-specific?
-        # TODO: after optimization verify forward and reverse complement for absence of patterns or raise error
-        # TODO: attach upstream_dna/downstream_dna
-        return
+        # TODO: also return reference sequence?
+        # TODO: merge results back to dataframe (re-duplicate)?
+        # TODO: update return type (in signature and doc)
+        return res, reference_dna
