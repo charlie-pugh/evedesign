@@ -13,7 +13,7 @@ try:
     from dnachisel.builtin_specifications.codon_optimization.BaseCodonOptimizationClass import (
         BaseCodonOptimizationClass  # noqa
     )
-    from Bio.Seq import Seq
+    from Bio.Seq import Seq  # noqa
     from Bio.Restriction.Restriction_Dictionary import rest_dict  # noqa
     from Bio.Data.CodonTable import unambiguous_dna_by_name  # noqa
     IMPORT_AVAILABLE = True
@@ -479,7 +479,6 @@ class DNAChiselCodonOptimizer:
                     self._optimize_seq, jobs
                 )
 
-        # TODO: also return reference sequence?
         # TODO: merge results back to dataframe (re-duplicate)?
         # TODO: update return type (in signature and doc)
         return res, reference_dna
