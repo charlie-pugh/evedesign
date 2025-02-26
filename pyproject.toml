@@ -7,7 +7,7 @@ name = "protdesign"
 dynamic = ["version"]
 description = ''
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "licenseref-proprietary"
 keywords = []
 authors = [
@@ -22,6 +22,10 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = ["numpy", "pandas", "torch", "loguru", "biotite"]
+
+[project.optional-dependencies]
+evmutation2 = ["picasso_model"]
+expression = ["biopython", "dnachisel"]
 
 [project.urls]
 Documentation = "https://github.com/thomashopf/protdesign#readme"
