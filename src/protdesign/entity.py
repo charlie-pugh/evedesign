@@ -141,11 +141,12 @@ class Entity:
     def defined_sequence(self) -> bool:
         """
         Check if entity corresponds to a biopolymer (protein, ...)
-        and has a defined representative with non-zero length
+        and has a defined representation with non-zero length
 
-        Does *not* validate sequence symbols against alphabet as rep
-        in its most basic form is only meant to be a generic sequence
-        placeholder
+        Representation may include any valid biomolecule symbol,
+        gap (coding for deletion) and mask (coding for unspecified).
+
+        For now, not allowing inserts (lowercase symbols) in rep.
 
         Returns
         -------
@@ -155,7 +156,12 @@ class Entity:
             self.type_ in BioPolymers and
             self.rep is not None and
             len(self.rep) > 0 and
-            self.first_index is not None
+            self.first_index is not None and
+            valid_sequence(
+                self.rep,
+                self.alphabet(include_gap=True, include_inserts=False),
+                allow_mask=True
+            )
         )
 
     def alphabet(
