@@ -1,8 +1,8 @@
 """
 Codon optimization with the DNA Chisel package
 
-TODO: if implementing any other codon optimizers in the future, rethink interfaces and extract
- shared functionality into abstract base class
+TODO: if implementing any other codon optimizers in the future, extract useful shared functionality
+ into abstract base class
 """
 import multiprocessing as mp
 from typing import Sequence, Literal
@@ -343,7 +343,7 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         assert dna_seq_transl == seq_norm, "Translation of optimized sequence does not match input"
 
         # print(problem.mutation_space.string_representation())
-        # print(problem.objectives_text_summary())  # TODO: remove again
+        # print(problem.objectives_text_summary())
 
         return dna_seq_opt, opt_score
 
@@ -356,7 +356,7 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         downstream_dna: str,
         reference: SystemInstance | None = None,
         reference_dna: str | None = None,
-    ):
+    ) -> pd.DataFrame:
         """
         Create codon-optimize DNA sequences for protein entity instances
         (needs to be called once per protein entity in multi-entity systems)
@@ -402,7 +402,11 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
 
         Returns
         -------
-         # TODO: add proper return type
+        Dataframe (guaranteed to be of same length and in same order as supplied instances list)
+        with columns :
+         i. "rep" containing protein sequence as in instance
+         ii. "dna" containing the optimized DNA sequence guaranteed to translate into "rep",
+         iii. "score" with optimization score (should be set to NaN if not available)
         """
         # verify that valid entity is selected
         if not 0 <= entity <= len(system):
@@ -500,10 +504,16 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                     self._optimize_seq, jobs
                 )
 
-        # opt_unique = unique_seqs.to_frame("raw").assign(opt=res)
-        # opt_all = all_seqs.to_frame()
-        # return opt_unique
+        unique_res_df = unique_seqs.to_frame("rep").assign(
+            dna=[dna_seq for (dna_seq, score) in res],
+            score=[score for (dna_seq, score) in res],
+        )
 
-        # TODO: merge results back to dataframe (re-duplicate)?
-        # TODO: update return type (in signature and doc)
-        return res, reference_dna
+        res_df_all = all_seqs.to_frame("rep").merge(
+            unique_res_df, on="rep", how="left",
+        )
+
+        # verify we kept the original order of designs after merging
+        assert (res_df_all.rep == all_seqs.values).all()  # noqa
+
+        return res_df_all

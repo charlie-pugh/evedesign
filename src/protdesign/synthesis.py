@@ -4,6 +4,7 @@ Functionality related to physically making designed sequences (e.g. expressing p
 
 from abc import ABC, abstractmethod
 from typing import Sequence
+import pandas as pd
 from protdesign.entity import System, SystemInstance
 
 CodonUsageTable = dict[str, [dict[str, float]]]
@@ -26,7 +27,7 @@ class ProteinToDnaOptimizer(ABC):
         downstream_dna: str,
         reference: SystemInstance | None = None,
         reference_dna: str | None = None,
-    ):  # TODO: return type
+    ) -> pd.DataFrame:
         """
         Create optimized DNA sequences for protein entity instances
         (needs to be called once per protein entity in multi-entity systems)
@@ -72,6 +73,10 @@ class ProteinToDnaOptimizer(ABC):
 
         Returns
         -------
-         # TODO: add proper return type
+        Dataframe (guaranteed to be of same length and in same order as supplied instances list)
+        with columns :
+         i. "rep" containing protein sequence as in instance
+         ii. "dna" containing the optimized DNA sequence guaranteed to translate into "rep",
+         iii. "score" with optimization score (should be set to NaN if not available)
         """
         pass
