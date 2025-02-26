@@ -5,8 +5,10 @@ TODO: if implementing any other codon optimizers in the future, rethink interfac
  shared functionality into abstract base class
 """
 import multiprocessing as mp
-from typing import Sequence, Literal, Any
+from typing import Sequence, Literal
 import pandas as pd
+
+from protdesign.synthesis import ProteinToDnaOptimizer, CodonUsageTable
 
 try:
     import dnachisel as dc  # noqa
@@ -29,9 +31,8 @@ OPTIMIZATION_METHODS = [
     "match_codon_usage"
 ]
 
-CodonUsageTable = dict[str, [dict[str, float]]]
 
-class DNAChiselCodonOptimizer:
+class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
     available = IMPORT_AVAILABLE
 
     def __init__(
@@ -41,16 +42,13 @@ class DNAChiselCodonOptimizer:
         avoid_sites: list[str] | None,
         gc_min: float | None = 0.4,
         gc_max: float | None = 0.6,
-        gc_window: int | None = None,
+        gc_window: int | None = 20,
+        max_homopolymer_length: int | None = 5,
+        max_repeat_length: int | None = 9,
+        genetic_code: str = "Standard",
         extra_constraints: Sequence[dc.Specification] | None = (
             dc.AvoidHairpins(),
-            dc.AvoidPattern(dc.HomopolymerPattern("A", 5)),
-            dc.AvoidPattern(dc.HomopolymerPattern("C", 5)),
-            dc.AvoidPattern(dc.HomopolymerPattern("G", 5)),
-            dc.AvoidPattern(dc.HomopolymerPattern("T", 5)),
-            dc.AvoidPattern(dc.RepeatedKmerPattern(2, 5)),
         ),
-        genetic_code: str = "Standard",
         cpu: int = 1,
     ):
         """
@@ -74,6 +72,12 @@ class DNAChiselCodonOptimizer:
             Maximum GC content to enforce in optimized nucleotide sequence
         gc_window
             If specified, compute GC content in a local window; otherwise will compute over entire nucleotide sequence
+        max_homopolymer_length
+            Maximum acceptable length of homopolymers (e.g. AAAAA), will remove any homopolymers with
+            length > max_homopolymer_length. If None, will not constrain homopolymer occurrence.
+        max_repeat_length
+            Maximum acceptable length of arbitrary repeats; enforced during quantitative optimization
+            (i.e. not as strict constraint).
         genetic_code
             Genetic code to ensure nucleotide sequence translates into specified amino acid sequences
             (note this is redundant to codon_usage_table but internally needed by dnachisel)
@@ -125,6 +129,23 @@ class DNAChiselCodonOptimizer:
             self.specifications = list(extra_constraints)
         else:
             self.specifications = []
+
+        # quantitative specifications added to optimization (not enforced as strict constraints)
+        self.quant_specifications = []
+
+        if max_homopolymer_length is not None:
+            for nuc in ["A", "C", "G", "T"]:
+                # add 1 to length as max_homopolymer_length is maximum *acceptable* length
+                self.specifications.append(
+                    dc.AvoidPattern(dc.HomopolymerPattern(nuc, max_homopolymer_length + 1))
+                )
+
+        if max_repeat_length is not None:
+            # note this will not be confined to a specific location and will also consider
+            # upstream_dna and downstream_dna
+            self.quant_specifications.append(
+                dc.AvoidPattern(dc.RepeatedKmerPattern(2, max_repeat_length + 1))
+            )
 
         if (gc_min is None and gc_max is not None) or (gc_min is not None and gc_max is None):
             raise ValueError(
@@ -301,7 +322,7 @@ class DNAChiselCodonOptimizer:
                 codon_usage_table=self.codon_table,
                 method=self.method,
                 location=seq_dna_loc,
-            )],
+            )] + self.quant_specifications,
             logger=None
         )
 
@@ -322,7 +343,7 @@ class DNAChiselCodonOptimizer:
         assert dna_seq_transl == seq_norm, "Translation of optimized sequence does not match input"
 
         # print(problem.mutation_space.string_representation())
-        # print(problem.objectives_text_summary())
+        # print(problem.objectives_text_summary())  # TODO: remove again
 
         return dna_seq_opt, opt_score
 
@@ -335,7 +356,7 @@ class DNAChiselCodonOptimizer:
         downstream_dna: str,
         reference: SystemInstance | None = None,
         reference_dna: str | None = None,
-    ) -> Any:
+    ):
         """
         Create codon-optimize DNA sequences for protein entity instances
         (needs to be called once per protein entity in multi-entity systems)
@@ -478,6 +499,10 @@ class DNAChiselCodonOptimizer:
                 res = pool.starmap(
                     self._optimize_seq, jobs
                 )
+
+        # opt_unique = unique_seqs.to_frame("raw").assign(opt=res)
+        # opt_all = all_seqs.to_frame()
+        # return opt_unique
 
         # TODO: merge results back to dataframe (re-duplicate)?
         # TODO: update return type (in signature and doc)
