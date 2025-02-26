@@ -42,7 +42,7 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         avoid_sites: list[str] | None,
         gc_min: float | None = 0.4,
         gc_max: float | None = 0.6,
-        gc_window: int | None = 20,
+        gc_window: int | None = 30,
         max_homopolymer_length: int | None = 5,
         max_repeat_length: int | None = 9,
         genetic_code: str = "Standard",
