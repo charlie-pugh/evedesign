@@ -7,6 +7,7 @@ TODO: if implementing any other codon optimizers in the future, extract useful s
 import multiprocessing as mp
 from typing import Sequence, Literal
 import pandas as pd
+from dnachisel import NoSolutionError
 
 from protdesign.synthesis import ProteinToDnaOptimizer, CodonUsageTable
 
@@ -327,9 +328,16 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         )
 
         # raw_score = problem.objective_scores_sum()
-        problem.resolve_constraints()
-        problem.optimize()
-        opt_score = problem.objective_scores_sum()
+        try:
+            problem.resolve_constraints()
+            problem.optimize()
+            opt_score = problem.objective_scores_sum()
+        except NoSolutionError as e:
+            # wrap around NoSolutionError as there is an error passing it through
+            # to parent process in multiprocessing setting
+            raise ValueError(
+                f"Unable to optimize sequence '{seq}', relax constraints?"
+            ) from e
 
         # extract full optimized sequence with upstream/downstream DNA
         dna_opt = problem.sequence
