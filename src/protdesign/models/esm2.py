@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 import torch
+from typing import Literal, List, Sequence
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
@@ -17,6 +18,7 @@ from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosL
 from protdesign.constants import MASK, VALID_AA_OR_GAP_SORTED
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
+from protdesign.samplers.gibbs import GibbsSampler
 
 try:
     import torch
@@ -275,6 +277,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 token_ids_on_device = None
                 self._release_cache()
 
+    '''
     def generate(
         self,
         num_designs: int,
@@ -286,6 +289,157 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     ) -> List[SystemInstance]:
         """
         Generate protein sequences using the ESM2 model
+        """
+        self.ready_or_raise()
+    
+        # verify validity of entity selection, even if not used since
+        # at this point method can only handle single entity
+        if entities is not None:
+            entities = ensure_sequence(entities)
+            if len(entities) != 1 or entities[0] != 0:
+                raise ValueError("Can only design single entity (entities = [0] | None)")
+        else:
+            entities = [0]
+    
+        # Ensure num_designs is a multiple of batch_size
+        if rem := num_designs % self.decoder_batch_size:
+            num_designs_adj = num_designs + (self.decoder_batch_size - rem)
+            logger.warning(f"Adjusting num_designs from {num_designs} to {num_designs_adj} to be a multiple of batch_size")
+            num_designs = num_designs_adj
+            
+        target = self.system[0]
+    
+        # Extract fixed positions for the chain
+        if fixed_pos is not None:
+            if len(fixed_pos) != 1 or list(fixed_pos)[0] != 0:
+                raise ValueError("Only accepting position mapping for entity 0")
+    
+            # verify if all positions are valid
+            self.valid_positions(fixed_pos[0], entities=0, raise_invalid=True)
+            fixed_pos = set(fixed_pos[0])
+        else:
+            fixed_pos = set()
+    
+        if len(fixed_pos) == len(target.rep):
+            raise ValueError("All positions fixed, need to sample at least one position")
+    
+        # Mark which positions to design (with mask symbol)
+        base_seq = [
+            symbol if pos in fixed_pos else MASK
+            for pos, symbol in enumerate(
+                target.rep, start=target.first_index
+            )
+        ]
+        
+        # Convert to string
+        base_seq = "".join(base_seq)
+    
+        with (
+            model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred),
+            self._reps_on_device(self.keep_model_after_pred) as (encoding_device, token_ids_device)
+        ):
+            logger.info(f"Generating {num_designs} designs with ESM2")
+            
+            # Generate sequences using ESM2
+            designs = []
+            
+            # Create mask for positions to be designed
+            mask = torch.ones_like(token_ids_device)
+            for i, char in enumerate(base_seq):
+                if char != MASK:
+                    # +1 because of cls token at beginning
+                    mask[0, i+1] = 0
+            
+            with torch.no_grad():
+                for batch_start in range(0, num_designs, self.decoder_batch_size):
+                    batch_size = min(self.decoder_batch_size, num_designs - batch_start)
+                    
+                    # Create batch of token IDs
+                    batch_tokens = token_ids_device.repeat(batch_size, 1)
+                    batch_mask = mask.repeat(batch_size, 1)
+                    
+                    # For all masked positions, sample from the model distribution
+                    for pos in range(1, len(base_seq) + 1):  # Skip cls token at pos 0
+                        if base_seq[pos-1] == MASK:
+                            # Forward pass to get logits
+                            logits = self.model(batch_tokens)["logits"][:, pos, :]
+                            
+                            # Apply temperature
+                            if temperature > 0:
+                                logits = logits / temperature
+                            
+                            # Sample from the distribution
+                            probs = torch.softmax(logits, dim=-1)
+                            sampled_tokens = torch.multinomial(probs, 1).squeeze(-1)
+                            
+                            # Update tokens at this position
+                            batch_tokens[:, pos] = sampled_tokens
+                    
+                    # Convert back to amino acid sequences
+                    for i in range(batch_size):
+                        # Skip cls and eos tokens, convert to amino acids
+                        tokens = batch_tokens[i].cpu().tolist()[1:-1]  # Remove cls and eos tokens
+                        seq = "".join([self.alphabet.get_tok(token) for token in tokens])
+                        designs.append(seq)
+    
+        # score the designs relative to entity sequence
+        ref_and_designs = ["".join(target.rep)] + designs[:num_designs]  # Ensure we only return the requested number
+        
+        # Make sure sequences are properly converted to strings
+        instances = [
+            SystemInstance(
+                EntityInstance(rep=seq if isinstance(seq, str) else "".join(seq))
+            ) for seq in ref_and_designs
+        ]
+    
+        # Score and attach to instances (normalize by reference score)
+        scores = self.score(instances)
+        ref_score = scores[0]
+    
+        # Remove reference in first position
+        instances_with_score = [
+            SystemInstance(
+                EntityInstance(rep=seq),
+                score=score - ref_score
+            ) for seq, score in zip(ref_and_designs[1:], scores[1:])
+        ]
+    
+        assert len(instances_with_score) >= num_designs, "Not returning minimum guaranteed number of designs"
+        return instances_with_score[:num_designs]  # Return exactly the number requested
+    '''
+
+    def generate(
+        self,
+        num_designs: int,
+        entities: Sequence[int] | None = None,
+        fixed_pos: EntityPosList | None = None,
+        temperature: float = 1.0,
+        deletions: bool = False,
+        status_callback: StatusCallback | None = None,
+        num_sweeps: int = 10,  # Number of full Gibbs sweeps across all positions
+        scan_order: Literal["random", "sequential"] = "random"
+    ) -> List[SystemInstance]:
+        """
+        Generate protein sequences using the ESM2 model with Gibbs sampling
+
+        Parameters
+        ----------
+        num_designs
+            Number of designs to generate
+        entities
+            Which entities to design (defaults to all)
+        fixed_pos
+            Positions to keep fixed during design
+        temperature
+            Temperature parameter for sampling (higher = more diversity)
+        deletions
+            Whether to allow gap characters
+        status_callback
+            Callback for progress reporting
+        num_sweeps
+            Number of full Gibbs sweeps over all positions
+        scan_order
+            Whether to visit positions in random or sequential order
         """
         self.ready_or_raise()
 
@@ -300,7 +454,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             entities = [0]
 
         # Ensure num_designs is a multiple of batch_size
-        if rem := num_designs % self.decoder_batch_size != 0:
+        if rem := num_designs % self.decoder_batch_size:
             num_designs_adj = num_designs + (self.decoder_batch_size - rem)
             logger.warning(
                 f"Adjusting num_designs from {num_designs} to {num_designs_adj} to be a multiple of batch_size")
@@ -324,96 +478,137 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             raise ValueError(
                 "All positions fixed, need to sample at least one position")
 
-        # Mark which positions to design (with mask symbol)
-        base_seq = [
-            symbol if pos in fixed_pos else MASK
-            for pos, symbol in enumerate(
-                target.rep, start=target.first_index
-            )
+        # Determine positions to sample (those not in fixed_pos)
+        design_positions = [
+            pos for pos in range(target.first_index, target.first_index + len(target.rep))
+            if pos not in fixed_pos
         ]
 
-        # Convert to string
-        base_seq = "".join(base_seq)
+        # Initialize random number generator
+        rng = np.random.default_rng()
 
-        with (
-            model_param_context(
-                self._load_model, self._delete_model, self.keep_model_after_pred),
-            self._reps_on_device(self.keep_model_after_pred) as (encoding_device, token_ids_device)
-        ):
-            logger.info(f"Generating {num_designs} designs with ESM2")
+        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
+            logger.info(
+                f"Generating {num_designs} designs with ESM2 using Gibbs sampling")
 
-            # Generate sequences using ESM2
-            designs = []
+            # Initialize sequences either randomly or from template
+            sequences = []
+            for _ in range(num_designs):
+                # Start with wildtype sequence
+                seq_chars = list(target.rep)
 
-            # Create mask for positions to be designed
-            mask = torch.ones_like(token_ids_device)
-            for i, char in enumerate(base_seq):
-                if char != MASK:
-                    # +1 because of cls token at beginning
-                    mask[0, i+1] = 0
+                # Randomize all design positions
+                valid_aa = VALID_AA_OR_GAP_SORTED if deletions else [
+                    aa for aa in VALID_AA_OR_GAP_SORTED if aa != '-']
+                for pos in design_positions:
+                    idx = pos - target.first_index
+                    seq_chars[idx] = rng.choice(valid_aa)
 
-            with torch.no_grad():
-                for batch_start in range(0, num_designs, self.decoder_batch_size):
-                    batch_size = min(self.decoder_batch_size,
-                                     num_designs - batch_start)
+                sequences.append("".join(seq_chars))
 
-                    # Create batch of token IDs
-                    batch_tokens = token_ids_device.repeat(batch_size, 1)
-                    batch_mask = mask.repeat(batch_size, 1)
+            # Convert to SystemInstance objects and ensure sequences are strings
+            instances = []
+            for seq in sequences:
+                # Make sure sequence is a string
+                if isinstance(seq, np.ndarray):
+                    seq = "".join(seq)
+                instances.append(SystemInstance(EntityInstance(rep=seq)))
 
-                    # For all masked positions, sample from the model distribution
-                    for pos in range(1, len(base_seq) + 1):  # Skip cls token at pos 0
-                        if base_seq[pos-1] == MASK:
-                            # Forward pass to get logits
-                            logits = self.model(batch_tokens)[
-                                "logits"][:, pos, :]
+            # Status update function
+            def update_status(progress):
+                if status_callback:
+                    status_callback(progress)
 
-                            # Apply temperature
-                            if temperature > 0:
-                                logits = logits / temperature
+            # Perform Gibbs sampling
+            total_steps = num_sweeps * len(design_positions)
+            step_count = 0
 
-                            # Sample from the distribution
-                            probs = torch.softmax(logits, dim=-1)
-                            sampled_tokens = torch.multinomial(
-                                probs, 1).squeeze(-1)
+            for sweep in range(num_sweeps):
+                # Determine position order for this sweep
+                if scan_order == "random":
+                    rng.shuffle(design_positions)
 
-                            # Update tokens at this position
-                            batch_tokens[:, pos] = sampled_tokens
+                # For each position in the sweep
+                for pos in design_positions:
+                    pos_idx = pos - target.first_index  # Convert to 0-indexed
 
-                    # Convert back to amino acid sequences
-                    for i in range(batch_size):
-                        # Skip cls and eos tokens, convert to amino acids
-                        # Remove cls and eos tokens
-                        tokens = batch_tokens[i].cpu().tolist()[1:-1]
-                        seq = "".join([self.alphabet.get_tok(token)
-                                      for token in tokens])
-                        designs.append(seq)
+                    # Process designs in batches
+                    for batch_start in range(0, num_designs, self.decoder_batch_size):
+                        batch_end = min(
+                            batch_start + self.decoder_batch_size, num_designs)
+                        batch_instances = instances[batch_start:batch_end]
+                        batch_size = len(batch_instances)
 
-        # score the designs relative to entity sequence
-        # Ensure we only return the requested number
-        ref_and_designs = ["".join(target.rep)] + designs[:num_designs]
-        instances = [
-            SystemInstance(
-                EntityInstance(rep=rep)
-            ) for rep in ref_and_designs
-        ]
+                        # Make sure batch instances have string sequences
+                        for i, instance in enumerate(batch_instances):
+                            if isinstance(instance[0].rep, np.ndarray):
+                                batch_instances[i][0].rep = "".join(
+                                    instance[0].rep)
 
-        # Score and attach to instances (normalize by reference score)
-        scores = self.score(instances)
-        ref_score = scores[0]
+                        # Get conditional probabilities for this position across all sequences
+                        conditionals = self.score_conditional(
+                            batch_instances,
+                            entities=[0] * batch_size,
+                            positions=[pos] * batch_size
+                        )
 
-        # Remove reference in first position
-        instances_with_score = [
-            SystemInstance(
-                EntityInstance(rep=seq),
-                score=score - ref_score
-            ) for seq, score in zip(ref_and_designs, scores)
-        ][1:]
+                        # Filter conditionals to only valid amino acids
+                        # Define gap character
+                        GAP = '-'
+                        if not deletions:
+                            conditionals = conditionals.drop(
+                                GAP, axis=1, errors='ignore')
 
-        assert len(
-            instances_with_score) >= num_designs, "Not returning minimum guaranteed number of designs"
+                        # Apply temperature scaling
+                        prob_cols = [col for col in conditionals.columns if col !=
+                                     'entity' and col != 'instance' and col != 'pos']
+
+                        for i, row_idx in enumerate(conditionals.index):
+                            # Get probabilities for this instance
+                            probs = conditionals.loc[row_idx, prob_cols].values
+
+                            # Apply temperature scaling
+                            if temperature != 0:
+                                probs = np.exp(np.log(probs) / temperature)
+                                probs = probs / probs.sum()  # Renormalize
+
+                            # Sample a new amino acid
+                            new_aa = rng.choice(prob_cols, p=probs)
+
+                            # Update the sequence
+                            instance_idx = batch_start + i
+                            seq_chars = list(instances[instance_idx][0].rep)
+                            seq_chars[pos_idx] = new_aa
+                            instances[instance_idx][0].rep = "".join(seq_chars)
+
+                    # Update progress
+                    step_count += 1
+                    update_status(step_count / total_steps)
+
+            # Score the designs relative to entity sequence
+            ref_seq = "".join(target.rep)
+            all_sequences = [ref_seq] + \
+                [instance[0].rep for instance in instances]
+
+            all_instances = [
+                SystemInstance(EntityInstance(rep=seq))
+                for seq in all_sequences
+            ]
+
+            # Score and normalize by reference
+            scores = self.score(all_instances)
+            ref_score = scores[0]
+
+            # Attach scores to the instances
+            scored_instances = [
+                SystemInstance(
+                    EntityInstance(rep=instance[0].rep),
+                    score=score - ref_score
+                ) for instance, score in zip(instances, scores[1:])
+            ]
+
         # Return exactly the number requested
-        return instances_with_score[:num_designs]
+        return scored_instances[:num_designs]
 
     def score(
         self,
@@ -425,7 +620,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         # Validate sequences
         self._validate_instances(instances)
 
-        sequences = [instance[0].rep for instance in instances]
+        # Make sure sequences are strings, not numpy arrays
+        sequences = []
+        for instance in instances:
+            seq = instance[0].rep
+            # Convert numpy array to string if needed
+            if isinstance(seq, np.ndarray):
+                seq = "".join(seq)
+            sequences.append(seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             scores = []
@@ -492,6 +694,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         # Extract target entity from system and get sequence from instance
         target = self.system[0]
         instance_seq = instance[0].rep
+
+        # Convert numpy array to string if necessary
+        # Check if it's a numpy array
+        if hasattr(instance_seq, 'dtype') and hasattr(instance_seq, 'tolist'):
+            if instance_seq.dtype.kind == 'U':  # Unicode strings
+                instance_seq = ''.join(instance_seq.tolist())
+            else:
+                instance_seq = ''.join(instance_seq.astype(str).tolist())
 
         # Validate positions
         if positions is not None:
@@ -685,8 +895,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         # Validate positions
         self.valid_positions(positions, entities=0, raise_invalid=True)
 
-        # Extract sequences
-        seqs = [instance[0].rep for instance in instances]
+        # Extract sequences and ensure they're strings, not numpy arrays
+        seqs = []
+        for instance in instances:
+            seq = instance[0].rep
+            # Convert numpy array to string if needed
+            if isinstance(seq, np.ndarray):
+                seq = "".join(seq)
+            seqs.append(seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             conditionals_list = []
