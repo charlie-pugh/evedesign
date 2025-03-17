@@ -3,10 +3,12 @@ Specification of components of molecular design system (proteins, nucleic acids,
 """
 from collections import UserList
 from collections.abc import Sequence
-from typing import Mapping, NamedTuple, Self
+from io import StringIO
+from typing import Mapping, NamedTuple, Self, Any
 import numpy as np
+
 from protdesign.sequence import valid_sequence, Sequences
-from protdesign.structure import Model
+from protdesign.structure import Model, Structure
 from protdesign.types import EntityType, Metadata, BioPolymers, RepSequence
 from protdesign.constants import (
     VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
@@ -56,6 +58,70 @@ def _rep_to_np_array(rep: RepSequence | str | None) -> RepSequence | None:
             raise ValueError("rep must be None, str, or have dtype 'U1'")
 
     return rep
+
+
+def _serialize_chain_map(s: StructureChainMap | None) -> dict[str, Any] | None:
+    """
+    Serialize StructureChainMap to JSON-encodable representation
+
+    Parameters
+    ----------
+    s
+        Structure chain map to serialize
+
+    Returns
+    -------
+    Serialized chain map
+    """
+    if s is None:
+        return None
+
+    serialized_map = {}
+    for key, models in s.items():
+        # default to creating a sequence for simpler handling
+        models = ensure_sequence(models)
+        serialized_map[key] = []
+        for model in models:
+            assert len(model.chains()) == 1, "Only can serialize single-chain models"
+            f = StringIO()
+            model.to_file(f, format="cif")
+            serialized_map[key].append(f.getvalue())
+
+    return serialized_map
+
+def _deserialize_chain_map(s: dict[str, Any] | None) -> StructureChainMap | None:
+    """
+    Deserialize chain map from JSON-encodable representation to StructureChainMap object
+
+    Parameters
+    ----------
+    s
+        Serialized chain map
+
+    Returns
+    -------
+    Deserialized StructureChainMap
+    """
+    if s is None:
+        return None
+
+    deserialized_map = {}
+    for key, models in s.items():
+        models = ensure_sequence(models)
+        deserialized_map[key] = []
+        for model in models:
+            model_deserialized = Structure(
+                StringIO(model), format="cif"
+            ).get_model()
+
+            # extract single chain
+            chains = model_deserialized.chains()
+            assert (len(chains) == 1), "Only can deserialize single-chain models"
+            deserialized_map[key].append(
+                model_deserialized.get_chain(chains[0])
+            )
+
+    return deserialized_map
 
 
 class Entity:
@@ -136,6 +202,50 @@ class Entity:
             self.id_ == other.id_ and
             self.copies == other.copies and
             self.first_index == other.first_index
+        )
+
+    def serialize(self) -> dict[str, Any]:
+        """
+        Serialize entity to JSON-compatible representation
+
+        Returns
+        -------
+        Serialized entity represented as dict
+        """
+        return {
+            "id": self.id_,
+            "type": self.type_,
+            "rep": "".join(self.rep) if self.rep is not None else None,
+            "copies": self.copies,
+            "first_index": self.first_index,
+            "sequences": self.sequences.serialize() if self.sequences is not None else None,
+            "structures": _serialize_chain_map(self.structures),
+        }
+
+    @classmethod
+    def deserialize(cls, entity_dict: dict[str, Any]) -> Self:
+        """
+        Deserialize entity from JSON-compatible representation to object instance
+
+        Parameters
+        ----------
+        entity_dict
+            Entity attribute map
+
+        Returns
+        -------
+        Deserialized Entity instance
+        """
+        sequences = entity_dict.get("sequences")
+
+        return cls(
+            type=entity_dict.get("type"),
+            rep=entity_dict.get("rep"),
+            id=entity_dict.get("id"),
+            copies=entity_dict.get("copies"),
+            first_index=entity_dict.get("first_index"),
+            sequences=Sequences.deserialize(sequences) if sequences is not None else None,
+            structures=_deserialize_chain_map(entity_dict.get("structures")),
         )
 
     def defined_sequence(self) -> bool:
@@ -287,7 +397,43 @@ class EntityInstance:
         else:
             short_rep = "n/a"
 
-        return f"EntityInstance(rep={short_rep}, structure_models={structure_info})"
+        return f"EntityInstance(rep={short_rep}, models={structure_info})"
+
+    def serialize(self) -> dict[str, Any]:
+        """
+        Serialize entity instance to JSON-compatible representation
+
+        Returns
+        -------
+        Serialized entity instance represented as dict
+        """
+        return {
+            "rep": "".join(self.rep) if self.rep is not None else None,
+            "embedding": self.embedding.tolist() if self.embedding is not None else None,
+            "models": _serialize_chain_map(self.models),
+        }
+
+    @classmethod
+    def deserialize(cls, entity_inst_dict: dict[str, Any]) -> Self:
+        """
+        Deserialize entity instance from JSON-compatible representation
+        to object instance
+
+        Parameters
+        ----------
+        entity_inst_dict
+            Entity instance attribute map
+
+        Returns
+        -------
+        Deserialized EntityInstance object
+        """
+        embedding = entity_inst_dict.get("embedding")
+        return cls(
+            rep=entity_inst_dict.get("rep"),
+            embedding=np.array(embedding) if embedding is not None else None,
+            models=_deserialize_chain_map(entity_inst_dict.get("models")),
+        )
 
     def normalized_rep(self) -> RepSequence:
         """
@@ -354,6 +500,38 @@ class SystemInstance(UserList[EntityInstance]):
     def __repr__(self):
         return f"SystemInstance({self.data} score={self.score})"
 
+    def serialize(self) -> list[dict[str, Any]]:
+        """
+        Serialize system instance into JSON-compatible representation
+
+        Returns
+        -------
+        List of serialized EntityInstance objects
+        """
+        return [
+            entity_instance.serialize() for entity_instance in self.data
+        ]
+
+    @classmethod
+    def deserialize(cls, serialized_system_instance: list[dict[str, Any]]) -> Self:
+        """
+        Deserialize system instance from JSON-compatible representation into
+        object instance
+
+        Parameters
+        ----------
+        serialized_system_instance
+            SystemInstance representation as output by serialize() method
+
+        Returns
+        -------
+        List of deserialized EntityInstance objects
+        """
+        return cls([
+            EntityInstance.deserialize(entity_instance)
+            for entity_instance in serialized_system_instance
+        ])
+
 
 class System(UserList[Entity]):
     def __init__(self, entities: Entity | Sequence[Entity]):
@@ -385,6 +563,36 @@ class System(UserList[Entity]):
                 return False
 
         return True
+
+    def serialize(self) -> list[dict[str, Any]]:
+        """
+        Serialize system into JSON-compatible representation
+
+        Returns
+        -------
+        List of serialized Entity objects
+        """
+        return [
+            entity.serialize() for entity in self.data
+        ]
+
+    @classmethod
+    def deserialize(cls, serialized_system: list[dict[str, Any]]) -> Self:
+        """
+        Deserialize system from JSON-compatible representation into object instance
+
+        Parameters
+        ----------
+        serialized_system
+            System representation as output by serialize() method
+
+        Returns
+        -------
+        List of deserialized Entity objects
+        """
+        return cls([
+            Entity.deserialize(entity) for entity in serialized_system
+        ])
 
     def valid_instance(
         self,

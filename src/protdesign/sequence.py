@@ -1,7 +1,7 @@
 """
 Biopolymer sequence functionality (protein sequences etc.)
 """
-from typing import List, Literal, Self, TextIO, Tuple
+from typing import Any, List, Literal, Self, TextIO, Tuple
 from collections import abc
 from protdesign.constants import MASK
 from protdesign.types import BioPolymer, RepSequence
@@ -46,6 +46,42 @@ class Sequence:
             f"Sequence(id={self.id_} key={self.key} type={self.type_} seq={shorten(self.seq)})"
         )
 
+    def serialize(self) -> dict[str, Any]:
+        """
+        Serialize sequence into JSON-compatible representation
+
+        Returns
+        -------
+        Serialized sequence representation
+        """
+        return {
+            "seq": self.seq,
+            "id": self.id_,
+            "key": self.key,
+            "type": self.type_,
+        }
+
+    @classmethod
+    def deserialize(cls, serialized_seq: dict[str, Any]) -> Self:
+        """
+        Deserialize JSON-compatible representation into Sequence object
+
+        Parameters
+        ----------
+        serialized_seq
+            Serialized sequence representation
+
+        Returns
+        -------
+        Deserialized Sequence object
+        """
+        return cls(
+            seq=serialized_seq.get("seq"),
+            id=serialized_seq.get("id"),
+            key=serialized_seq.get("key"),
+            type=serialized_seq.get("type"),
+        )
+
 
 class Sequences:
     """
@@ -63,7 +99,6 @@ class Sequences:
         weights: List[float] | None = None,
         format: Literal["a3m", "a2m", "fasta"] | None = None,  # noqa
     ):
-
         self.seqs = seqs
         self.aligned = aligned
         self.type_ = type
@@ -77,6 +112,45 @@ class Sequences:
          # TODO: callback param for header parsing
         raise NotImplementedError(
             "Loading from file not yet implemented"
+        )
+
+    def serialize(self) -> dict[str, Any]:
+        """
+        Serialize sequences into JSON-compatible representation
+
+        Returns
+        -------
+        Serialized sequences
+        """
+        return {
+            "seqs": [seq.serialize() for seq in self.seqs],
+            "aligned": self.aligned,
+            "type": self.type_,
+            "weights": self.weights,
+            "format": self.format_,
+        }
+
+    @classmethod
+    def deserialize(cls, serialized_seqs: dict[str, Any]) -> Self:
+        """
+        Deserialize JSON-compatible representation of multiple sequences
+        into Sequences object
+
+        Parameters
+        ----------
+        serialized_seqs
+            Serialized representation of sequences
+
+        Returns
+        -------
+        Deserialized Sequence object
+        """
+        return cls(
+            seqs=[Sequence.deserialize(seq) for seq in serialized_seqs["seqs"]],
+            aligned=serialized_seqs.get("aligned"),
+            type=serialized_seqs.get("type"),
+            weights=serialized_seqs.get("weights"),
+            format=serialized_seqs.get("format"),
         )
 
     def dealign(self) -> Self:
