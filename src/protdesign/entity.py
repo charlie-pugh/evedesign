@@ -353,7 +353,7 @@ class EntityInstance:
     def __init__(
         self,
         rep: RepSequence | str | None = None,
-        embedding:  Embedding | None = None,
+        embedding: Embedding | None = None,
         models: StructureChainMap | None = None,
     ):
         """
