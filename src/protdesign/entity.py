@@ -500,7 +500,7 @@ class SystemInstance(UserList[EntityInstance]):
     def __repr__(self):
         return f"SystemInstance({self.data} score={self.score})"
 
-    def serialize(self) -> list[dict[str, Any]]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize system instance into JSON-compatible representation
 
@@ -508,12 +508,17 @@ class SystemInstance(UserList[EntityInstance]):
         -------
         List of serialized EntityInstance objects
         """
-        return [
-            entity_instance.serialize() for entity_instance in self.data
-        ]
+        return {
+            "entity_instances": [
+                entity_instance.serialize() for entity_instance in self.data
+            ],
+            "score":self.score,
+            "confidence": self.confidence,
+            "metadata": self.metadata,
+        }
 
     @classmethod
-    def deserialize(cls, serialized_system_instance: list[dict[str, Any]]) -> Self:
+    def deserialize(cls, serialized_system_instance: dict[str, Any]) -> Self:
         """
         Deserialize system instance from JSON-compatible representation into
         object instance
@@ -527,10 +532,15 @@ class SystemInstance(UserList[EntityInstance]):
         -------
         List of deserialized EntityInstance objects
         """
-        return cls([
-            EntityInstance.deserialize(entity_instance)
-            for entity_instance in serialized_system_instance
-        ])
+        return cls(
+            [
+                EntityInstance.deserialize(entity_instance)
+                for entity_instance in serialized_system_instance["entity_instances"]
+            ],
+            score=serialized_system_instance.get("score"),
+            confidence=serialized_system_instance.get("confidence"),
+            metadata=serialized_system_instance.get("metadata"),
+        )
 
 
 class System(UserList[Entity]):
