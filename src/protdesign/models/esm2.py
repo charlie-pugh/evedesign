@@ -1,13 +1,11 @@
 """
 Wrapper class around ESM2 model (Modified version with reverted scores)
 """
-from os import PathLike
 from typing import Self, Tuple, Sequence, List
 from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
-from loguru
 import torch
 from typing import Literal, List, Sequence
 
