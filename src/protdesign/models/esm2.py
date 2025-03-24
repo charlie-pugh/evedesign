@@ -229,6 +229,75 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 token_ids_on_device = None
                 self._release_cache()
 
+    def generate(
+        self,
+        num_designs: int,
+        entities: Sequence[int] | None = None,
+        fixed_pos: EntityPosList | None = None,
+        temperature: float = 1.0,
+        deletions: bool = False,
+        status_callback: StatusCallback | None = None,
+        num_sweeps: int = 10
+    ) -> List[SystemInstance]:
+        """
+        Generate protein sequences using the ESM2 model with the GibbsSampler
+        """
+        self.ready_or_raise()
+
+        entities = entities if entities is not None else [0]
+        if len(entities) != 1 or entities[0] != 0:
+            raise ValueError(
+                "Can only design single entity (entities = [0] | None)")
+
+        # Adjust num_designs to be a multiple of batch_size
+        if rem := num_designs % self.decoder_batch_size:
+            num_designs_adj = num_designs + (self.decoder_batch_size - rem)
+            logger.warning(
+                f"Adjusting num_designs from {num_designs} to {num_designs_adj} to be a multiple of batch_size")
+            num_designs = num_designs_adj
+
+        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
+            logger.info(
+                f"Generating {num_designs} designs with ESM2 using GibbsSampler")
+
+            # Create a GibbsSampler with this ESM2 model as the scorer
+            sampler = GibbsSampler(
+                scorers=[self],
+                weights=None,
+                num_sweeps=num_sweeps,
+                init_strategy="random",
+                scan_order="random",
+                temperature_schedule=lambda init_temp, *
+                args: init_temp,  # Constant temperature
+                require_strict_pos=True,
+                record_full_chain=False
+            )
+
+            # Generate designs
+            instances = sampler.generate(
+                num_designs=num_designs,
+                entities=entities,
+                fixed_pos=fixed_pos,
+                temperature=temperature,
+                deletions=deletions,
+                status_callback=status_callback
+            )
+
+        # Score designs relative to reference
+        target = self.system[0]
+        ref_instance = SystemInstance(EntityInstance(rep="".join(target.rep)))
+        all_instances = [ref_instance] + instances
+
+        logger.info(f"Scoring {len(instances)} generated designs")
+        scores = self.score(all_instances)
+        ref_score = scores[0]
+
+        # Attach normalized scores to instances (now reversed)
+        for i, instance in enumerate(instances):
+            instance.score = -(scores[i+1] - ref_score)  # Negate the score
+
+        return instances[:num_designs]
+
     def score(
         self,
         instances: Sequence[SystemInstance],
