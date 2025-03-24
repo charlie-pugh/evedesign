@@ -53,8 +53,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     def __init__(
         self,
         model_name: str = "esm2_t33_650M_UR50D",
-        decoder_batch_size: BatchSize = 64,
-        num_samples: int = 16,
+        decoder_batch_size: BatchSize = 32,
+        num_samples: int = 8,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
     ):
@@ -607,6 +607,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     def transform(
         self,
         instances: Sequence[SystemInstance],
+        entity: int | None = None,
+        status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
         """
         Transform system instances by adding embeddings from the ESM2 model
