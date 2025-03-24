@@ -1,5 +1,5 @@
 """
-Wrapper class around ESM2 model
+Wrapper class around ESM2 model (Modified version with reverted scores)
 """
 from os import PathLike
 from typing import Self, Tuple, Sequence, List
@@ -292,9 +292,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         scores = self.score(all_instances)
         ref_score = scores[0]
 
-        # Attach normalized scores to instances
+        # Attach normalized scores to instances (now reversed)
         for i, instance in enumerate(instances):
-            instance.score = scores[i+1] - ref_score
+            instance.score = -(scores[i+1] - ref_score)  # Negate the score
 
         return instances[:num_designs]
 
@@ -346,7 +346,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         ).squeeze(1)
 
                         seq_log_likelihood = seq_log_probs.sum().item()
-                        scores.append(seq_log_likelihood)
+                        # Negate the score to reverse it
+                        scores.append(-seq_log_likelihood)
 
         return np.array(scores)
 
@@ -436,7 +437,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             index=target_tokens_ref.unsqueeze(1)
                         ).squeeze(1)
 
-                        score_diff = mut_seq_log_probs.sum().item() - ref_seq_log_probs.sum().item()
+                        # Negate the score difference to reverse it
+                        score_diff = -(mut_seq_log_probs.sum().item() - ref_seq_log_probs.sum().item())
                         mut_scores[aa] = score_diff
 
                     # Store results for this position
@@ -517,7 +519,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     ).squeeze(1)
 
                     mut_score = mut_seq_log_probs.sum().item()
-                    mutant_scores.append(mut_score - ref_score)
+                    # Negate the score difference to reverse it
+                    mutant_scores.append(-(mut_score - ref_score))
 
         return np.array(mutant_scores)
 
@@ -571,6 +574,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     results = self.model(seq_tokens, repr_layers=[])
                     logits = results["logits"][0]
                     pos_logits = logits[pos_idx + 1]  # +1 for BOS token
+                    
+                    # Reverse the logits before softmax to invert probabilities
+                    pos_logits = -pos_logits
                     pos_probs = torch.softmax(pos_logits, dim=-1)
 
                     # Convert to amino acid probabilities
@@ -595,3 +601,80 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         conditionals = conditionals.set_index(['instance', 'entity', 'pos'])
 
         return conditionals
+
+    def transform(
+        self,
+        instances: Sequence[SystemInstance],
+        entity: int | None = None,
+        status_callback: StatusCallback | None = None
+    ) -> List[SystemInstance]:
+        """
+        Transform system instances by adding embeddings from the ESM2 model
+        """
+        self.ready_or_raise()
+        self._validate_instances(instances)
+        
+        # Default to entity 0 if not specified
+        entity = 0 if entity is None else entity
+        if entity != 0:
+            raise ValueError("Model can only handle one single entity")
+            
+        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
+            transformed_instances = []
+            
+            # Process in batches
+            for batch_start in range(0, len(instances), self.decoder_batch_size):
+                batch_end = min(batch_start + self.decoder_batch_size, len(instances))
+                batch_instances = instances[batch_start:batch_end]
+                
+                # Prepare batch sequences
+                sequences = []
+                for instance in batch_instances:
+                    seq = instance[0].rep
+                    if isinstance(seq, np.ndarray):
+                        seq = "".join(seq)
+                    sequences.append(seq)
+                
+                # Create batch data for ESM2
+                batch_data = [(f"seq_{i}", seq) for i, seq in enumerate(sequences)]
+                _, _, batch_tokens = self.batch_converter(batch_data)
+                batch_tokens = batch_tokens.to(self.device)
+                
+                # Get embeddings
+                with torch.no_grad():
+                    results = self.model(batch_tokens, repr_layers=[self.model.num_layers])
+                    representations = results["representations"][self.model.num_layers]
+                    
+                    # Create transformed instances with embeddings
+                    for i, instance in enumerate(batch_instances):
+                        # Create new entity instances with the same properties
+                        new_entities = []
+                        for entity_instance in instance:
+                            # Create a new EntityInstance with the same rep
+                            new_entity = EntityInstance(rep=entity_instance.rep)
+                            # Copy other attributes if they exist
+                            if hasattr(entity_instance, 'structure'):
+                                new_entity.structure = entity_instance.structure
+                            new_entities.append(new_entity)
+                        
+                        # Create a new SystemInstance with these entities
+                        new_instance = SystemInstance(new_entities)
+                        
+                        # Store the embedding (excluding the BOS token)
+                        embedding = representations[i, 1:len(sequences[i])+1].cpu().numpy()
+                        new_instance[0].embedding = embedding
+                        
+                        # Optionally, calculate and store score
+                        logits = results["logits"][i]
+                        token_probs = torch.log_softmax(logits[:-1], dim=-1)
+                        target_tokens = batch_tokens[i, 1:]
+                        seq_log_probs = torch.gather(
+                            token_probs, 
+                            dim=1,
+                            index=target_tokens.unsqueeze(1)
+                        ).squeeze(1)
+                        new_instance.score = seq_log_probs.sum().item()
+                        
+                        transformed_instances.append(new_instance)
+            
+        return transformed_instances
