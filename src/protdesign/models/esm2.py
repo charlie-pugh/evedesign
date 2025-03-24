@@ -298,58 +298,111 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return instances[:num_designs]
 
-    def score(
+    def single_mutation_scan(
         self,
-        instances: Sequence[SystemInstance],
+        instance: SystemInstance,
+        entity: int | None = None,
+        positions: Sequence[int] | None = None,
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> pd.DataFrame:
+        """
+        Perform a single mutation scan for the given instance
+        """
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances([instance])
 
-        # Convert any sequence arrays to strings
-        sequences = []
-        for instance in instances:
-            seq = instance[0].rep
-            if isinstance(seq, np.ndarray):
-                seq = "".join(seq)
-            sequences.append(seq)
+        entity = 0 if entity is None else entity
+        if entity != 0:
+            raise ValueError("Model can only handle one single entity")
+
+        # Get sequence and convert to string if needed
+        target = self.system[0]
+        instance_seq = instance[0].rep
+        if isinstance(instance_seq, np.ndarray):
+            instance_seq = "".join(instance_seq)
+
+        # Validate positions
+        if positions is not None:
+            self.valid_positions(positions, entities=0, raise_invalid=True)
+        else:
+            positions = list(
+                range(target.first_index, target.first_index + len(target.rep)))
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            scores = []
+            mutation_effects = []
 
-            # Process in batches
-            for batch_start in range(0, len(sequences), self.decoder_batch_size):
-                batch_end = min(
-                    batch_start + self.decoder_batch_size, len(sequences))
-                batch_seqs = sequences[batch_start:batch_end]
+            # Prepare reference sequence
+            ref_data = [("protein", instance_seq)]
+            _, _, ref_tokens = self.batch_converter(ref_data)
+            ref_tokens = ref_tokens.to(self.device)
 
-                # Prepare batch data
-                batch_data = [(f"seq_{i}", seq)
-                              for i, seq in enumerate(batch_seqs)]
-                _, _, batch_tokens = self.batch_converter(batch_data)
-                batch_tokens = batch_tokens.to(self.device)
+            # Calculate reference score
+            with torch.no_grad():
+                ref_results = self.model(ref_tokens, repr_layers=[])
+                ref_logits = ref_results["logits"][0]
+                ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
 
-                # Compute log-likelihoods
-                with torch.no_grad():
-                    results = self.model(batch_tokens, repr_layers=[])
-                    logits = results["logits"]
+                # For each position to scan
+                for pos in positions:
+                    pos_idx = pos - target.first_index
+                    wt_aa = instance_seq[pos_idx]
 
-                    # Calculate log-likelihood for each sequence
-                    for i, seq in enumerate(batch_seqs):
-                        token_probs = torch.log_softmax(logits[i, :-1], dim=-1)
-                        target_tokens = batch_tokens[i, 1:]
+                    # Score each possible substitution
+                    mut_scores = {}
+                    for aa in VALID_AA_OR_GAP_SORTED:
+                        if aa == '-':  # Skip gap character
+                            continue
 
-                        seq_log_probs = torch.gather(
-                            token_probs,
+                        # If same as wildtype, effect is 0
+                        if aa == wt_aa:
+                            mut_scores[aa] = 0.0
+                            continue
+
+                        # Create and score mutant sequence
+                        mut_seq = instance_seq[:pos_idx] + \
+                            aa + instance_seq[pos_idx+1:]
+                        mut_data = [("mutant", mut_seq)]
+                        _, _, mut_tokens = self.batch_converter(mut_data)
+                        mut_tokens = mut_tokens.to(self.device)
+
+                        mut_results = self.model(mut_tokens, repr_layers=[])
+                        mut_logits = mut_results["logits"][0]
+                        mut_log_probs = torch.log_softmax(mut_logits, dim=-1)
+
+                        # Calculate log-likelihood difference
+                        target_tokens = mut_tokens[0, 1:]
+                        mut_seq_log_probs = torch.gather(
+                            mut_log_probs[:-1],
                             dim=1,
                             index=target_tokens.unsqueeze(1)
                         ).squeeze(1)
 
-                        seq_log_likelihood = seq_log_probs.sum().item()
-                        # Negate the score to reverse it
-                        scores.append(-seq_log_likelihood)
+                        target_tokens_ref = ref_tokens[0, 1:]
+                        ref_seq_log_probs = torch.gather(
+                            ref_log_probs[:-1],
+                            dim=1,
+                            index=target_tokens_ref.unsqueeze(1)
+                        ).squeeze(1)
 
-        return np.array(scores)
+                        # Negate the score difference to reverse it
+                        score_diff = - \
+                            (mut_seq_log_probs.sum().item() -
+                             ref_seq_log_probs.sum().item())
+                        mut_scores[aa] = score_diff
+
+                    # Store results for this position
+                    mutation_effects.append({
+                        'pos': pos,
+                        'ref': wt_aa,
+                        **mut_scores
+                    })
+
+        # Convert to dataframe with proper index format
+        df = pd.DataFrame(mutation_effects)
+        df = df.set_index(['pos', 'ref'])
+        df = pd.concat({entity: df}, names=["entity"])
+
+        return df
 
     def score_mutants(
         self,
