@@ -457,74 +457,83 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return df
 
-    def score_mutants(
+    def score_conditional(
         self,
-        instance: SystemInstance,
-        mutants: Sequence[Mutant],
+        instances: Sequence[SystemInstance],
+        entities: Sequence[int],
+        positions: Sequence[int],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> pd.DataFrame:
+        """
+        Score conditional probabilities for specified positions in the sequences
+        """
         self.ready_or_raise()
-        self._validate_instances([instance])
-        self.system.valid_mutants(
-            instance, mutants, deletions=False, insertions=False, raise_invalid=True
-        )
+        self._validate_instances(instances)
 
-        # Get instance sequence
+        # Validate input parameters
+        if set(entities) != {0}:
+            raise ValueError("Can only specify entities with index 0")
+
+        if not len(instances) == len(entities) == len(positions):
+            raise ValueError(
+                "Sequences for instances, entities and positions must all have same length")
+
+        # Validate positions
         target = self.system[0]
-        instance_seq = instance[0].rep
-        if isinstance(instance_seq, np.ndarray):
-            instance_seq = "".join(instance_seq)
+        self.valid_positions(positions, entities=0, raise_invalid=True)
+
+        # Convert sequences to strings if needed
+        seqs = []
+        for instance in instances:
+            seq = instance[0].rep
+            if isinstance(seq, np.ndarray):
+                seq = "".join(seq)
+            seqs.append(seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            # Score reference sequence
-            ref_data = [("protein", instance_seq)]
-            _, _, ref_tokens = self.batch_converter(ref_data)
-            ref_tokens = ref_tokens.to(self.device)
+            conditionals_list = []
 
-            with torch.no_grad():
-                ref_results = self.model(ref_tokens, repr_layers=[])
-                ref_logits = ref_results["logits"][0]
-                ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
+            # Process each sequence and position pair
+            for i, (seq, pos) in enumerate(zip(seqs, positions)):
+                pos_idx = pos - target.first_index
 
-                target_tokens_ref = ref_tokens[0, 1:]
-                ref_seq_log_probs = torch.gather(
-                    ref_log_probs[:-1],
-                    dim=1,
-                    index=target_tokens_ref.unsqueeze(1)
-                ).squeeze(1)
-                ref_score = ref_seq_log_probs.sum().item()
+                # Prepare the sequence
+                seq_data = [("protein", seq)]
+                _, _, seq_tokens = self.batch_converter(seq_data)
+                seq_tokens = seq_tokens.to(self.device)
 
-                # Score each mutant
-                mutant_scores = []
-                for mutant in mutants:
-                    # Apply mutations to sequence
-                    mut_seq = list(instance_seq)
-                    for sub in mutant:
-                        pos_idx = sub.pos - target.first_index
-                        mut_seq[pos_idx] = sub.to
-                    mut_seq = "".join(mut_seq)
+                with torch.no_grad():
+                    # Get conditional probabilities at the specified position
+                    results = self.model(seq_tokens, repr_layers=[])
+                    logits = results["logits"][0]
+                    pos_logits = logits[pos_idx + 1]  # +1 for BOS token
 
-                    # Score the mutant
-                    mut_data = [("mutant", mut_seq)]
-                    _, _, mut_tokens = self.batch_converter(mut_data)
-                    mut_tokens = mut_tokens.to(self.device)
+                    # Reverse the logits before softmax to invert probabilities
+                    pos_logits = -pos_logits
+                    pos_probs = torch.softmax(pos_logits, dim=-1)
 
-                    mut_results = self.model(mut_tokens, repr_layers=[])
-                    mut_logits = mut_results["logits"][0]
-                    mut_log_probs = torch.log_softmax(mut_logits, dim=-1)
+                    # Convert to amino acid probabilities
+                    aa_probs = {}
+                    for aa in VALID_AA_OR_GAP_SORTED:
+                        if aa == '-':  # Skip gap character
+                            aa_probs[aa] = 0.0
+                        else:
+                            aa_token = self.alphabet.get_idx(aa)
+                            aa_probs[aa] = pos_probs[aa_token].item()
 
-                    target_tokens = mut_tokens[0, 1:]
-                    mut_seq_log_probs = torch.gather(
-                        mut_log_probs[:-1],
-                        dim=1,
-                        index=target_tokens.unsqueeze(1)
-                    ).squeeze(1)
+                # Store results
+                conditionals_list.append({
+                    'instance': i,
+                    'entity': entities[i],
+                    'pos': positions[i],
+                    **aa_probs
+                })
 
-                    mut_score = mut_seq_log_probs.sum().item()
-                    # Negate the score difference to reverse it
-                    mutant_scores.append(-(mut_score - ref_score))
+        # Create dataframe with proper index format
+        conditionals = pd.DataFrame(conditionals_list)
+        conditionals = conditionals.set_index(['instance', 'entity', 'pos'])
 
-        return np.array(mutant_scores)
+        return conditionals
 
     def transform(
         self,
