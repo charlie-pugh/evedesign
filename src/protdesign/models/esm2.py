@@ -351,111 +351,74 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return np.array(scores)
 
-    def single_mutation_scan(
+    def score_mutants(
         self,
         instance: SystemInstance,
-        entity: int | None = None,
-        positions: Sequence[int] | None = None,
+        mutants: Sequence[Mutant],
         status_callback: StatusCallback | None = None
-    ) -> pd.DataFrame:
-        """
-        Perform a single mutation scan for the given instance
-        """
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
         self._validate_instances([instance])
+        self.system.valid_mutants(
+            instance, mutants, deletions=False, insertions=False, raise_invalid=True
+        )
 
-        entity = 0 if entity is None else entity
-        if entity != 0:
-            raise ValueError("Model can only handle one single entity")
-
-        # Get sequence and convert to string if needed
+        # Get instance sequence
         target = self.system[0]
         instance_seq = instance[0].rep
         if isinstance(instance_seq, np.ndarray):
             instance_seq = "".join(instance_seq)
 
-        # Validate positions
-        if positions is not None:
-            self.valid_positions(positions, entities=0, raise_invalid=True)
-        else:
-            positions = list(
-                range(target.first_index, target.first_index + len(target.rep)))
-
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            mutation_effects = []
-
-            # Prepare reference sequence
+            # Score reference sequence
             ref_data = [("protein", instance_seq)]
             _, _, ref_tokens = self.batch_converter(ref_data)
             ref_tokens = ref_tokens.to(self.device)
 
-            # Calculate reference score
             with torch.no_grad():
                 ref_results = self.model(ref_tokens, repr_layers=[])
                 ref_logits = ref_results["logits"][0]
                 ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
 
-                # For each position to scan
-                for pos in positions:
-                    pos_idx = pos - target.first_index
-                    wt_aa = instance_seq[pos_idx]
+                target_tokens_ref = ref_tokens[0, 1:]
+                ref_seq_log_probs = torch.gather(
+                    ref_log_probs[:-1],
+                    dim=1,
+                    index=target_tokens_ref.unsqueeze(1)
+                ).squeeze(1)
+                ref_score = ref_seq_log_probs.sum().item()
 
-                    # Score each possible substitution
-                    mut_scores = {}
-                    for aa in VALID_AA_OR_GAP_SORTED:
-                        if aa == '-':  # Skip gap character
-                            continue
+                # Score each mutant
+                mutant_scores = []
+                for mutant in mutants:
+                    # Apply mutations to sequence
+                    mut_seq = list(instance_seq)
+                    for sub in mutant:
+                        pos_idx = sub.pos - target.first_index
+                        mut_seq[pos_idx] = sub.to
+                    mut_seq = "".join(mut_seq)
 
-                        # If same as wildtype, effect is 0
-                        if aa == wt_aa:
-                            mut_scores[aa] = 0.0
-                            continue
+                    # Score the mutant
+                    mut_data = [("mutant", mut_seq)]
+                    _, _, mut_tokens = self.batch_converter(mut_data)
+                    mut_tokens = mut_tokens.to(self.device)
 
-                        # Create and score mutant sequence
-                        mut_seq = instance_seq[:pos_idx] + \
-                            aa + instance_seq[pos_idx+1:]
-                        mut_data = [("mutant", mut_seq)]
-                        _, _, mut_tokens = self.batch_converter(mut_data)
-                        mut_tokens = mut_tokens.to(self.device)
+                    mut_results = self.model(mut_tokens, repr_layers=[])
+                    mut_logits = mut_results["logits"][0]
+                    mut_log_probs = torch.log_softmax(mut_logits, dim=-1)
 
-                        mut_results = self.model(mut_tokens, repr_layers=[])
-                        mut_logits = mut_results["logits"][0]
-                        mut_log_probs = torch.log_softmax(mut_logits, dim=-1)
+                    target_tokens = mut_tokens[0, 1:]
+                    mut_seq_log_probs = torch.gather(
+                        mut_log_probs[:-1],
+                        dim=1,
+                        index=target_tokens.unsqueeze(1)
+                    ).squeeze(1)
 
-                        # Calculate log-likelihood difference
-                        target_tokens = mut_tokens[0, 1:]
-                        mut_seq_log_probs = torch.gather(
-                            mut_log_probs[:-1],
-                            dim=1,
-                            index=target_tokens.unsqueeze(1)
-                        ).squeeze(1)
+                    mut_score = mut_seq_log_probs.sum().item()
+                    # Negate the score difference to reverse it
+                    mutant_scores.append(-(mut_score - ref_score))
 
-                        target_tokens_ref = ref_tokens[0, 1:]
-                        ref_seq_log_probs = torch.gather(
-                            ref_log_probs[:-1],
-                            dim=1,
-                            index=target_tokens_ref.unsqueeze(1)
-                        ).squeeze(1)
-
-                        # Negate the score difference to reverse it
-                        score_diff = - \
-                            (mut_seq_log_probs.sum().item() -
-                             ref_seq_log_probs.sum().item())
-                        mut_scores[aa] = score_diff
-
-                    # Store results for this position
-                    mutation_effects.append({
-                        'pos': pos,
-                        'ref': wt_aa,
-                        **mut_scores
-                    })
-
-        # Convert to dataframe with proper index format
-        df = pd.DataFrame(mutation_effects)
-        df = df.set_index(['pos', 'ref'])
-        df = pd.concat({entity: df}, names=["entity"])
-
-        return df
+        return np.array(mutant_scores)
 
     def score_conditional(
         self,
