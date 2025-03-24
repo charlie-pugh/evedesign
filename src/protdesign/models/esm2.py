@@ -10,6 +10,7 @@ import pandas as pd
 from loguru import logger
 import torch
 from typing import Literal, List, Sequence
+import esm
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
