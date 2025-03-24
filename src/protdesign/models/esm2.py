@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+from loguru
 import torch
 from typing import Literal, List, Sequence
 
@@ -53,8 +53,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     def __init__(
         self,
         model_name: str = "esm2_t33_650M_UR50D",
-        decoder_batch_size: BatchSize = 32,
-        num_samples: int = 8,
+        decoder_batch_size: BatchSize = 64,
+        num_samples: int = 16,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
     ):
