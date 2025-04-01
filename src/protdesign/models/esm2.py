@@ -68,10 +68,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         device
             Device to use for computations
         """
-        if not self.available:
-            raise ValueError(
-                "ESM2 package could not be imported. Is it installed already?")
-
         self.model_name = model_name
         self.keep_model_after_build = keep_model_after_build
         self.keep_model_after_pred = True
@@ -100,7 +96,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     @property
     def ready(self):
-        return self.system is not None and self.encoding is not None
+        return self.system is not None
 
     @property
     def system(self) -> System | None:
@@ -167,19 +163,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     ) -> Self:
         self.can_model_or_raise(system, data)
         self._system = system
-        target = self.system[0]
 
-        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
-            data = [("protein", "".join(target.rep))]
-            _, _, token_ids = self.batch_converter(data)
-            token_ids = token_ids.to(self.device)
-
-            with torch.no_grad():
-                results = self.model(token_ids, repr_layers=[
-                                     self.model.num_layers])
-                representations = results["representations"][self.model.num_layers]
-                self.token_ids = token_ids.cpu()
-                self.encoding = representations.cpu()
+        self.encoding = None
+        self.token_ids = None
 
         return self
 
@@ -204,24 +190,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 raise_invalid=True,
             ) for instance in instances
         ]
-
-    @contextmanager
-    def _reps_on_device(self, keep: bool = True):
-        encoding_on_device = None
-        token_ids_on_device = None
-
-        try:
-            if self.encoding is not None:
-                encoding_on_device = self.encoding.to(self.device)
-            if self.token_ids is not None:
-                token_ids_on_device = self.token_ids.to(self.device)
-
-            yield encoding_on_device, token_ids_on_device
-        finally:
-            if not keep:
-                encoding_on_device = None
-                token_ids_on_device = None
-                self._release_cache()
 
     def generate(
         self,
