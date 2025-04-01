@@ -242,6 +242,10 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         """
         self.ready_or_raise()
 
+        # Add validation for deletions parameter
+        if deletions:
+            raise ValueError("ESM2 model does not support deletions (gaps)")
+
         entities = entities if entities is not None else [0]
         if len(entities) != 1 or entities[0] != 0:
             raise ValueError(
@@ -274,7 +278,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 entities=entities,
                 fixed_pos=fixed_pos,
                 temperature=temperature,
-                deletions=deletions,
+                deletions=deletions,  # This will now be False because of the validation
                 status_callback=status_callback
             )
 
