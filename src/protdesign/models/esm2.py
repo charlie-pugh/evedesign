@@ -291,11 +291,11 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         scores = self.score(all_instances)
         ref_score = scores[0]
 
-        # Attach normalized scores to instances (now reversed)
+        # Attach normalized scores to instances
         for i, instance in enumerate(instances):
             instance.score = -(scores[i+1] - ref_score)  # Negate the score
 
-        return instances[:num_designs]
+        return instances
 
     def score(
         self,
