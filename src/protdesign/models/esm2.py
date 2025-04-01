@@ -20,18 +20,12 @@ from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 from protdesign.samplers.gibbs import GibbsSampler
 
-try:
-    import torch
-    IMPORT_AVAILABLE = True
-except ImportError:
-    IMPORT_AVAILABLE = False
-
 
 class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
     """
     Wrapper class around ESM2 model
     """
-    available = IMPORT_AVAILABLE
+    available = True
     name: str = "ESM2"
 
     # core properties
