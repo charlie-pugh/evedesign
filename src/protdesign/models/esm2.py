@@ -1,8 +1,5 @@
-"""
-Wrapper class around ESM2 model (Modified version with reverted scores)
-"""
 from os import PathLike
-from typing import Self, Tuple, Sequence, List
+from typing import Self, Tuple, Sequence, List, Callable
 from contextlib import contextmanager
 
 import numpy as np
@@ -51,6 +48,12 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         num_samples: int = 16,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
+        # Added GibbsSampler hyperparameters
+        num_sweeps: int = 10,
+        init_strategy: Literal["random", "uniform"] = "random",
+        scan_order: Literal["sequential", "random"] = "random",
+        temperature_schedule: Callable = lambda init_temp, *
+            args: init_temp,  # Constant temperature by default
     ):
         """
         Instantiate new ESM2 model
@@ -67,6 +70,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             If True, keep model parameters associated to instance after build step
         device
             Device to use for computations
+        num_sweeps
+            Number of Gibbs sampling sweeps to perform when generating sequences
+        init_strategy
+            Strategy for initializing sequences ("random" or "uniform")
+        scan_order
+            Order in which to scan positions during Gibbs sampling ("sequential" or "random")
+        temperature_schedule
+            Function that takes initial temperature and returns temperature for current sweep
         """
         self.model_name = model_name
         self.keep_model_after_build = keep_model_after_build
@@ -80,6 +91,12 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         self.decoder_batch_size = decoder_batch_size
         self.num_samples = num_samples
+
+        # Store GibbsSampler hyperparameters
+        self.num_sweeps = num_sweeps
+        self.init_strategy = init_strategy
+        self.scan_order = scan_order
+        self.temperature_schedule = temperature_schedule
 
         if self.num_samples < 1:
             raise ValueError("num_samples must be > 0")
@@ -96,7 +113,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     @property
     def ready(self):
-        return self.system is not None
+        return self._system is not None
 
     @property
     def system(self) -> System | None:
@@ -199,10 +216,29 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature: float = 1.0,
         deletions: bool = False,
         status_callback: StatusCallback | None = None,
-        num_sweeps: int = 10
     ) -> List[SystemInstance]:
         """
         Generate protein sequences using the ESM2 model with the GibbsSampler
+
+        Parameters
+        ----------
+        num_designs
+            Number of protein sequences to generate
+        entities
+            Indices of entities to redesign (default: [0])
+        fixed_pos
+            Positions to keep fixed during design
+        temperature
+            Initial temperature for sampling
+        deletions
+            Whether to allow deletions
+        status_callback
+            Optional callback function for progress updates
+
+        Returns
+        -------
+        List[SystemInstance]
+            Generated protein sequence instances
         """
         self.ready_or_raise()
 
@@ -220,15 +256,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             logger.info(
                 f"Generating {num_designs} designs with ESM2 using GibbsSampler")
 
-            # Create a GibbsSampler with this ESM2 model as the scorer
+            # Create a GibbsSampler using the configured hyperparameters
             sampler = GibbsSampler(
                 scorers=[self],
                 weights=None,
-                num_sweeps=num_sweeps,
-                init_strategy="random",
-                scan_order="random",
-                temperature_schedule=lambda init_temp, *
-                args: init_temp,  # Constant temperature
+                num_sweeps=self.num_sweeps,
+                init_strategy=self.init_strategy,
+                scan_order=self.scan_order,
+                temperature_schedule=self.temperature_schedule,
                 require_strict_pos=True,
                 record_full_chain=False
             )
