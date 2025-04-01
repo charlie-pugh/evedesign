@@ -214,8 +214,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         # Adjust num_designs to be a multiple of batch_size
         if rem := num_designs % self.decoder_batch_size:
             num_designs_adj = num_designs + (self.decoder_batch_size - rem)
-            logger.warning(
-                f"Adjusting num_designs from {num_designs} to {num_designs_adj} to be a multiple of batch_size")
             num_designs = num_designs_adj
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
