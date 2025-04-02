@@ -390,7 +390,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
         """
-        Perform a single mutation scan for the given instance
+        Perform a single mutation scan for the given instance using the Wildtype marginal probability approach
         """
         self.ready_or_raise()
         self._validate_instances([instance])
@@ -420,16 +420,24 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             _, _, ref_tokens = self.batch_converter(ref_data)
             ref_tokens = ref_tokens.to(self.device)
 
-            # Calculate reference score
+            # Calculate reference probabilities with a single forward pass
             with torch.no_grad():
                 ref_results = self.model(ref_tokens, repr_layers=[])
-                ref_logits = ref_results["logits"][0]
+                # Exclude the last position (EOS token)
+                ref_logits = ref_results["logits"][0, :-1]
                 ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
 
                 # For each position to scan
                 for pos in positions:
                     pos_idx = pos - target.first_index
                     wt_aa = instance_seq[pos_idx]
+
+                    # Get the token index in the model for each position
+                    # +1 because of the BOS token at the beginning
+                    token_idx = pos_idx + 1
+
+                    # Extract log probabilities for all amino acids at this position
+                    pos_log_probs = ref_log_probs[token_idx]
 
                     # Score each possible substitution
                     mut_scores = {}
@@ -442,36 +450,18 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             mut_scores[aa] = 0.0
                             continue
 
-                        # Create and score mutant sequence
-                        mut_seq = instance_seq[:pos_idx] + \
-                            aa + instance_seq[pos_idx+1:]
-                        mut_data = [("mutant", mut_seq)]
-                        _, _, mut_tokens = self.batch_converter(mut_data)
-                        mut_tokens = mut_tokens.to(self.device)
+                        # Get the token index for this amino acid
+                        aa_token = self.alphabet.get_idx(aa)
 
-                        mut_results = self.model(mut_tokens, repr_layers=[])
-                        mut_logits = mut_results["logits"][0]
-                        mut_log_probs = torch.log_softmax(mut_logits, dim=-1)
+                        # Calculate the change in log likelihood
+                        # Higher probability = better, so negate for effect score where lower = better
+                        wt_token = self.alphabet.get_idx(wt_aa)
 
-                        # Calculate log-likelihood difference
-                        target_tokens = mut_tokens[0, 1:]
-                        mut_seq_log_probs = torch.gather(
-                            mut_log_probs[:-1],
-                            dim=1,
-                            index=target_tokens.unsqueeze(1)
-                        ).squeeze(1)
-
-                        target_tokens_ref = ref_tokens[0, 1:]
-                        ref_seq_log_probs = torch.gather(
-                            ref_log_probs[:-1],
-                            dim=1,
-                            index=target_tokens_ref.unsqueeze(1)
-                        ).squeeze(1)
-
-                        # Negate the score difference to reverse it
+                        # For wildtype marginal probability, calculate:
+                        # -log(p(mut_aa)) + log(p(wt_aa))
                         score_diff = - \
-                            (mut_seq_log_probs.sum().item() -
-                             ref_seq_log_probs.sum().item())
+                            (pos_log_probs[aa_token].item() -
+                             pos_log_probs[wt_token].item())
                         mut_scores[aa] = score_diff
 
                     # Store results for this position
@@ -507,7 +497,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             instance_seq = "".join(instance_seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            # Score reference sequence
+            # Score reference sequence with a single forward pass
             ref_data = [("protein", instance_seq)]
             _, _, ref_tokens = self.batch_converter(ref_data)
             ref_tokens = ref_tokens.to(self.device)
@@ -517,43 +507,34 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 ref_logits = ref_results["logits"][0]
                 ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
 
-                target_tokens_ref = ref_tokens[0, 1:]
-                ref_seq_log_probs = torch.gather(
-                    ref_log_probs[:-1],
-                    dim=1,
-                    index=target_tokens_ref.unsqueeze(1)
-                ).squeeze(1)
-                ref_score = ref_seq_log_probs.sum().item()
-
-                # Score each mutant
+                # Calculate scores for all mutants using the reference probabilities
                 mutant_scores = []
                 for mutant in mutants:
-                    # Apply mutations to sequence
-                    mut_seq = list(instance_seq)
+                    total_score = 0.0
+
                     for sub in mutant:
                         pos_idx = sub.pos - target.first_index
-                        mut_seq[pos_idx] = sub.to
-                    mut_seq = "".join(mut_seq)
+                        wt_aa = instance_seq[pos_idx]
+                        mut_aa = sub.to
 
-                    # Score the mutant
-                    mut_data = [("mutant", mut_seq)]
-                    _, _, mut_tokens = self.batch_converter(mut_data)
-                    mut_tokens = mut_tokens.to(self.device)
+                        if wt_aa == mut_aa:
+                            continue  # No change in score for unchanged positions
 
-                    mut_results = self.model(mut_tokens, repr_layers=[])
-                    mut_logits = mut_results["logits"][0]
-                    mut_log_probs = torch.log_softmax(mut_logits, dim=-1)
+                        # Get token indices
+                        token_pos = pos_idx + 1  # +1 for BOS token
+                        wt_token = self.alphabet.get_idx(wt_aa)
+                        mut_token = self.alphabet.get_idx(mut_aa)
 
-                    target_tokens = mut_tokens[0, 1:]
-                    mut_seq_log_probs = torch.gather(
-                        mut_log_probs[:-1],
-                        dim=1,
-                        index=target_tokens.unsqueeze(1)
-                    ).squeeze(1)
+                        # Calculate score difference for this mutation
+                        wt_log_prob = ref_log_probs[token_pos, wt_token].item()
+                        mut_log_prob = ref_log_probs[token_pos, mut_token].item(
+                        )
 
-                    mut_score = mut_seq_log_probs.sum().item()
-                    # Negate the score difference to reverse it
-                    mutant_scores.append(-(mut_score - ref_score))
+                        # Add to total score (higher probability = better, so negate)
+                        score_diff = -(mut_log_prob - wt_log_prob)
+                        total_score += score_diff
+
+                    mutant_scores.append(total_score)
 
         return np.array(mutant_scores)
 
