@@ -682,21 +682,18 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                                          self.model.num_layers])
                     representations = results["representations"][self.model.num_layers]
 
-                    # Create transformed instances with embeddings
+                    # In transform method
                     for i, instance in enumerate(batch_instances):
-                        # Create new entity instances with the same properties
-                        new_entities = []
-                        for entity_instance in instance:
-                            # Create a new EntityInstance with the same rep
-                            new_entity = EntityInstance(
-                                rep=entity_instance.rep)
-                            # Copy other attributes if they exist
-                            if hasattr(entity_instance, 'structure'):
-                                new_entity.structure = entity_instance.structure
-                            new_entities.append(new_entity)
+                        # Create new entity instance (we know there's exactly one)
+                        entity_instance = instance[0]
+                        new_entity = EntityInstance(rep=entity_instance.rep)
 
-                        # Create a new SystemInstance with these entities
-                        new_instance = SystemInstance(new_entities)
+                        # Copy other attributes if they exist
+                        if hasattr(entity_instance, 'structure'):
+                            new_entity.structure = entity_instance.structure
+
+                        # Create a new SystemInstance with this entity
+                        new_instance = SystemInstance([new_entity])
 
                         # Store the embedding (excluding the BOS token)
                         embedding = representations[i, 1:len(
