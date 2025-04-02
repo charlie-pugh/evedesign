@@ -84,6 +84,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.keep_model_after_pred = True
         self.device = device
 
+        # Define maximum sequence length for ESM2 models (1024 tokens - 2 for special tokens)
+        self.max_seq_length = 1022
+
         self._system = None
         self.model = None
         self.alphabet = None
@@ -130,6 +133,11 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         target = system[0]
         if not target.defined_sequence():
             return False, "Entity must have defined rep sequence"
+
+        # Add check for sequence length
+        max_seq_length = 1022  # 1024 - 2 for special tokens
+        if len(target.rep) > max_seq_length:
+            return False, f"Sequence length ({len(target.rep)}) exceeds maximum allowed ({max_seq_length})"
 
         return True, ""
 
@@ -181,6 +189,13 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.can_model_or_raise(system, data)
         self._system = system
 
+        # Additional check for sequence length
+        target = system[0]
+        if len(target.rep) > self.max_seq_length:
+            raise ValueError(
+                f"Sequence length ({len(target.rep)}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
+            )
+
         self.encoding = None
         self.token_ids = None
 
@@ -198,6 +213,17 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self,
         instances: Sequence[SystemInstance],
     ) -> None:
+        # Check sequence length for all instances
+        for instance in instances:
+            seq = instance[0].rep
+            seq_len = len(seq) if not isinstance(seq, np.ndarray) else len(seq)
+
+            if seq_len > self.max_seq_length:
+                raise ValueError(
+                    f"Sequence length ({seq_len}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
+                )
+
+        # Existing validation
         [
             self.system.valid_instance(
                 instance,
@@ -250,6 +276,13 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         if len(entities) != 1 or entities[0] != 0:
             raise ValueError(
                 "Can only design single entity (entities = [0] | None)")
+
+        # Check sequence length of target
+        target = self.system[0]
+        if len(target.rep) > self.max_seq_length:
+            raise ValueError(
+                f"Target sequence length ({len(target.rep)}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
+            )
 
         # Adjust num_designs to be a multiple of batch_size
         if rem := num_designs % self.decoder_batch_size:
