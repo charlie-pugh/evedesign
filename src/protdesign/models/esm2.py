@@ -12,7 +12,7 @@ from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
 )
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.constants import MASK, VALID_AA_OR_GAP_SORTED
+from protdesign.constants import MASK
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 from protdesign.samplers.gibbs import GibbsSampler
@@ -434,7 +434,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                     # Score each possible substitution
                     mut_scores = {}
-                    for aa in VALID_AA_OR_GAP_SORTED:
+                    for aa in target.alphabet(include_gap=False):
                         if aa == '-':  # Skip gap character
                             continue
 
@@ -615,7 +615,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                     # Convert to amino acid probabilities
                     aa_probs = {}
-                    for aa in VALID_AA_OR_GAP_SORTED:
+                    for aa in target.alphabet(include_gap=False):
                         if aa == '-':  # Skip gap character
                             aa_probs[aa] = 0.0
                         else:
