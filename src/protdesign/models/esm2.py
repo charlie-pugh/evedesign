@@ -325,7 +325,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         # Attach normalized scores to instances
         for i, instance in enumerate(instances):
-            instance.score = -(scores[i+1] - ref_score)  # Negate the score
+            instance.score = (scores[i+1] - ref_score)
 
         return instances
 
@@ -377,8 +377,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         ).squeeze(1)
 
                         seq_log_likelihood = seq_log_probs.sum().item()
-                        # Negate the score to reverse it
-                        scores.append(-seq_log_likelihood)
+
+                        scores.append(seq_log_likelihood)
 
         return np.array(scores)
 
@@ -462,7 +462,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         score_diff = - \
                             (pos_log_probs[aa_token].item() -
                              pos_log_probs[wt_token].item())
-                        mut_scores[aa] = score_diff
+                        mut_scores[aa] = -score_diff
 
                     # Store results for this position
                     mutation_effects.append({
