@@ -547,6 +547,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     ) -> pd.DataFrame:
         """
         Score conditional probabilities for specified positions in the sequences
+        with batching for efficiency
         """
         self.ready_or_raise()
         self._validate_instances(instances)
@@ -574,41 +575,54 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             conditionals_list = []
 
-            # Process each sequence and position pair
-            for i, (seq, pos) in enumerate(zip(seqs, positions)):
-                pos_idx = pos - target.first_index
+            # Process in batches
+            for batch_start in range(0, len(seqs), self.decoder_batch_size):
+                batch_end = min(
+                    batch_start + self.decoder_batch_size, len(seqs))
+                batch_seqs = seqs[batch_start:batch_end]
+                batch_positions = positions[batch_start:batch_end]
+                batch_indices = list(range(batch_start, batch_end))
+                batch_entities = entities[batch_start:batch_end]
 
-                # Prepare the sequence
-                seq_data = [("protein", seq)]
-                _, _, seq_tokens = self.batch_converter(seq_data)
-                seq_tokens = seq_tokens.to(self.device)
+                # Prepare batch data
+                batch_data = [(f"seq_{i}", seq)
+                              for i, seq in enumerate(batch_seqs)]
+                _, _, batch_tokens = self.batch_converter(batch_data)
+                batch_tokens = batch_tokens.to(self.device)
 
                 with torch.no_grad():
-                    # Get conditional probabilities at the specified position
-                    results = self.model(seq_tokens, repr_layers=[])
-                    logits = results["logits"][0]
-                    pos_logits = logits[pos_idx + 1]  # +1 for BOS token
+                    # Forward pass for the entire batch
+                    results = self.model(batch_tokens, repr_layers=[])
+                    logits = results["logits"]
 
-                    # Reverse the logits before softmax to invert probabilities
-                    pos_logits = -pos_logits
-                    pos_probs = torch.softmax(pos_logits, dim=-1)
+                    # Process each sequence in the batch
+                    for batch_idx, (orig_idx, pos, entity) in enumerate(zip(batch_indices, batch_positions, batch_entities)):
+                        pos_idx = pos - target.first_index
 
-                    # Convert to amino acid probabilities
-                    aa_probs = {}
-                    for aa in target.alphabet(include_gap=False):
-                        if aa == '-':  # Skip gap character
-                            aa_probs[aa] = 0.0
-                        else:
-                            aa_token = self.alphabet.get_idx(aa)
-                            aa_probs[aa] = pos_probs[aa_token].item()
+                        # Get logits for this position (+1 for BOS token)
+                        token_idx = pos_idx + 1
+                        pos_logits = logits[batch_idx, token_idx]
 
-                # Store results
-                conditionals_list.append({
-                    'instance': i,
-                    'entity': entities[i],
-                    'pos': positions[i],
-                    **aa_probs
-                })
+                        # Reverse the logits before softmax to invert probabilities
+                        pos_logits = -pos_logits
+                        pos_probs = torch.softmax(pos_logits, dim=-1)
+
+                        # Convert to amino acid probabilities
+                        aa_probs = {}
+                        for aa in target.alphabet(include_gap=False):
+                            if aa == '-':  # Skip gap character
+                                aa_probs[aa] = 0.0
+                            else:
+                                aa_token = self.alphabet.get_idx(aa)
+                                aa_probs[aa] = pos_probs[aa_token].item()
+
+                        # Store results
+                        conditionals_list.append({
+                            'instance': orig_idx,
+                            'entity': entity,
+                            'pos': pos,
+                            **aa_probs
+                        })
 
         # Create dataframe with proper index format
         conditionals = pd.DataFrame(conditionals_list)
