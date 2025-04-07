@@ -276,18 +276,16 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                         _, ref_aa, ref_codon = cur_ref
 
                         # we can only keep the codon if the current position has the same aa as reference
-                        if aa != ref_aa:
-                            continue
+                        if aa == ref_aa:
+                            # replace codon with reference codon
+                            seq_dna[i * 3 : (i + 1) * 3] = ref_codon
 
-                        # replace codon with reference codon
-                        seq_dna[i * 3 : (i + 1) * 3] = ref_codon
-
-                        # fix codon during optimization
-                        fixed_codon_constraints.append(
-                            dc.AvoidChanges(
-                                location=(seq_dna_start + i * 3, seq_dna_start + (i + 1) * 3)
+                            # fix codon during optimization
+                            fixed_codon_constraints.append(
+                                dc.AvoidChanges(
+                                    location=(seq_dna_start + i * 3, seq_dna_start + (i + 1) * 3)
+                                )
                             )
-                        )
 
                     ref_idx += 1
 
