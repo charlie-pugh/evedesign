@@ -14,7 +14,7 @@ from protdesign.model import (
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
-from protdesign.samplers.gibbs import GibbsSampler
+from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy
 
 
 class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
@@ -49,8 +49,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         device: DeviceType = "cpu",
         # Added GibbsSampler hyperparameters
         num_sweeps: int = 10,
-        init_strategy: Literal["random", "uniform"] = "random",
-        scan_order: Literal["sequential", "random"] = "random",
+        init_strategy: Literal["random", "system"] = "system",
+        scan_order: ScanOrder = "random",
         temperature_schedule: Callable = lambda init_temp, *
             args: init_temp,  # Constant temperature by default
     ):
@@ -72,7 +72,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         num_sweeps
             Number of Gibbs sampling sweeps to perform when generating sequences
         init_strategy
-            Strategy for initializing sequences ("random" or "uniform")
+            Strategy for initializing sequences ("random" or "system")
         scan_order
             Order in which to scan positions during Gibbs sampling ("sequential" or "random")
         temperature_schedule
@@ -92,16 +92,12 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.batch_converter = None
 
         self.decoder_batch_size = decoder_batch_size
-        self.num_samples = num_samples
 
         # Store GibbsSampler hyperparameters
         self.num_sweeps = num_sweeps
         self.init_strategy = init_strategy
         self.scan_order = scan_order
         self.temperature_schedule = temperature_schedule
-
-        if self.num_samples < 1:
-            raise ValueError("num_samples must be > 0")
 
         if self.decoder_batch_size != "auto" and self.decoder_batch_size < 1:
             raise ValueError("decoder_batch_size must be at least 1 or 'auto'")
@@ -212,26 +208,26 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self,
         instances: Sequence[SystemInstance],
     ) -> None:
-        # Check sequence length for all instances
+        # Validate all instances in a single loop
         for instance in instances:
-            seq = instance[0].rep
-            seq_len = len(seq) if not isinstance(seq, np.ndarray) else len(seq)
-
-            if seq_len > self.max_seq_length:
-                raise ValueError(
-                    f"Sequence length ({seq_len}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
-                )
-
-        # Existing validation
-        [
+            # First validate the instance with system validation
             self.system.valid_instance(
                 instance,
                 validate_reps=True,
                 fixed_length=True,
                 allow_deletions=False,
                 raise_invalid=True,
-            ) for instance in instances
-        ]
+            )
+
+            # Now that we know the instance is valid
+            seq = instance[0].rep
+            seq_len = len(seq)
+
+            # Check sequence length
+            if seq_len > self.max_seq_length:
+                raise ValueError(
+                    f"Sequence length ({seq_len}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
+                )
 
     def generate(
         self,
@@ -341,8 +337,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         sequences = []
         for instance in instances:
             seq = instance[0].rep
-            if isinstance(seq, np.ndarray):
-                seq = "".join(seq)
+            seq = "".join(seq)
             sequences.append(seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
@@ -402,8 +397,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         # Get sequence and convert to string if needed
         target = self.system[0]
         instance_seq = instance[0].rep
-        if isinstance(instance_seq, np.ndarray):
-            instance_seq = "".join(instance_seq)
+        instance_seq = "".join(instance_seq)
 
         # Validate positions
         if positions is not None:
@@ -459,10 +453,10 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                         # For wildtype marginal probability, calculate:
                         # -log(p(mut_aa)) + log(p(wt_aa))
-                        score_diff = - \
+                        score_diff =  \
                             (pos_log_probs[aa_token].item() -
                              pos_log_probs[wt_token].item())
-                        mut_scores[aa] = -score_diff
+                        mut_scores[aa] = score_diff
 
                     # Store results for this position
                     mutation_effects.append({
@@ -493,8 +487,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         # Get instance sequence
         target = self.system[0]
         instance_seq = instance[0].rep
-        if isinstance(instance_seq, np.ndarray):
-            instance_seq = "".join(instance_seq)
+        instance_seq = "".join(instance_seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             # Score reference sequence with a single forward pass
@@ -530,7 +523,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         mut_log_prob = ref_log_probs[token_pos, mut_token].item(
                         )
 
-                        score_diff = -(mut_log_prob - wt_log_prob)
+                        score_diff = (mut_log_prob - wt_log_prob)
                         total_score += score_diff
 
                     mutant_scores.append(total_score)
@@ -603,8 +596,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         pos_logits = logits[batch_idx, token_idx]
 
                         # Reverse the logits before softmax to invert probabilities
-                        pos_logits = -pos_logits
-                        pos_probs = torch.softmax(pos_logits, dim=-1)
+                        # pos_probs = torch.softmax(pos_logits, dim=-1)
 
                         # Convert to amino acid probabilities
                         aa_probs = {}
@@ -613,7 +605,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                                 aa_probs[aa] = 0.0
                             else:
                                 aa_token = self.alphabet.get_idx(aa)
-                                aa_probs[aa] = pos_probs[aa_token].item()
+                                aa_probs[aa] = pos_logits[aa_token].item()
 
                         # Store results
                         conditionals_list.append({
@@ -659,8 +651,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 sequences = []
                 for instance in batch_instances:
                     seq = instance[0].rep
-                    if isinstance(seq, np.ndarray):
-                        seq = "".join(seq)
+                    seq = "".join(seq)
                     sequences.append(seq)
 
                 # Create batch data for ESM2
@@ -675,15 +666,28 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                                          self.model.num_layers])
                     representations = results["representations"][self.model.num_layers]
 
-                    # In transform method
+                    # Process each instance in the batch
                     for i, instance in enumerate(batch_instances):
                         # Create new entity instance (we know there's exactly one)
                         entity_instance = instance[0]
-                        new_entity = EntityInstance(rep=entity_instance.rep)
 
-                        # Copy other attributes if they exist
+                        # Create new entity with proper initialization to preserve models
+                        new_entity = EntityInstance(
+                            rep=entity_instance.rep,
+                            models=entity_instance.models  # Copy over 3D structures
+                        )
+
+                        # Copy structure attribute if it exists
                         if hasattr(entity_instance, 'structure'):
                             new_entity.structure = entity_instance.structure
+
+                        # Copy confidence attribute if it exists
+                        if hasattr(entity_instance, 'confidence'):
+                            new_entity.confidence = entity_instance.confidence
+
+                        # Copy metadata attribute if it exists
+                        if hasattr(entity_instance, 'metadata'):
+                            new_entity.metadata = entity_instance.metadata
 
                         # Create a new SystemInstance with this entity
                         new_instance = SystemInstance([new_entity])
@@ -693,7 +697,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             sequences[i])+1].cpu().numpy()
                         new_instance[0].embedding = embedding
 
-                        # Optionally, calculate and store score
+                        # Calculate and store score from this model
                         logits = results["logits"][i]
                         token_probs = torch.log_softmax(logits[:-1], dim=-1)
                         target_tokens = batch_tokens[i, 1:]
@@ -703,6 +707,15 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             index=target_tokens.unsqueeze(1)
                         ).squeeze(1)
                         new_instance.score = seq_log_probs.sum().item()
+
+                        # Copy over original instance score if this method doesn't set it
+                        # (though in this case we do set it above)
+                        if hasattr(instance, 'score') and not hasattr(new_instance, 'score'):
+                            new_instance.score = instance.score
+
+                        # Copy any other SystemInstance attributes that might be relevant
+                        if hasattr(instance, 'metadata'):
+                            new_instance.metadata = instance.metadata
 
                         transformed_instances.append(new_instance)
 
