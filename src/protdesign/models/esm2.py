@@ -530,7 +530,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         mut_log_prob = ref_log_probs[token_pos, mut_token].item(
                         )
 
-                        # Add to total score (higher probability = better, so negate)
                         score_diff = -(mut_log_prob - wt_log_prob)
                         total_score += score_diff
 
