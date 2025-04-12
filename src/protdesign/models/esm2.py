@@ -1,12 +1,13 @@
 from os import PathLike
 from typing import Self, Tuple, Sequence, List, Callable
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 import torch
-from typing import Literal, List, Sequence
+from typing import Literal, List, Sequence, Optional, Union
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
@@ -42,7 +43,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     def __init__(
         self,
-        model_name: str = "esm2_t33_650M_UR50D",
+        model_name: Optional[str] = None,
+        model_file_path: Optional[Union[str, PathLike]] = None,
         decoder_batch_size: BatchSize = 64,
         num_samples: int = 16,
         keep_model_after_build: bool = False,
@@ -60,7 +62,11 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         Parameters
         ----------
         model_name
-            Name of the ESM2 model to load (e.g., "esm2_t33_650M_UR50D")
+            Name of the ESM2 model to load from HuggingFace (e.g., "esm2_t33_650M_UR50D").
+            Must specify either model_name or model_file_path, but not both.
+        model_file_path
+            Path to a local .pt model file to load.
+            Must specify either model_name or model_file_path, but not both.
         decoder_batch_size
             Maximum number of sequences to process concurrently
         num_samples
@@ -78,7 +84,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature_schedule
             Function that takes initial temperature and returns temperature for current sweep
         """
+        # Validate model specification parameters
+        if (model_name is None and model_file_path is None) or (model_name is not None and model_file_path is not None):
+            raise ValueError(
+                "Must specify exactly one of model_name or model_file_path, but not both")
+
         self.model_name = model_name
+        self.model_file_path = Path(
+            model_file_path) if model_file_path is not None else None
         self.keep_model_after_build = keep_model_after_build
         self.keep_model_after_pred = True
         self.device = device
@@ -157,8 +170,31 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         if self.model is not None:
             return
 
-        self.model, self.alphabet = torch.hub.load(
-            "facebookresearch/esm:main", self.model_name)
+        if self.model_name is not None:
+            # Load from HuggingFace hub
+            self.model, self.alphabet = torch.hub.load(
+                "facebookresearch/esm:main", self.model_name)
+        elif self.model_file_path is not None:
+            # Load from local file path
+            try:
+                import esm
+                from esm import pretrained
+                print('ESM is installed and available')
+
+                # Extract model name from file path
+                model_name = self.model_file_path.stem
+
+                # Load checkpoint
+                checkpoint = torch.load(
+                    self.model_file_path, weights_only=False, map_location=self.device)
+
+                # Load model and alphabet using appropriate function
+                self.model, self.alphabet = pretrained.load_model_and_alphabet_core(
+                    model_name, checkpoint)
+            except ImportError:
+                raise ValueError(
+                    'ESM library is not installed. Please install it with: pip install fair-esm')
+
         self.model = self.model.to(self.device)
         self.batch_converter = self.alphabet.get_batch_converter()
         self.model.eval()
@@ -195,6 +231,10 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.token_ids = None
 
         return self
+
+    # The rest of the class remains the same...
+    # positions, _validate_instances, generate, score, single_mutation_scan,
+    # score_mutants, score_conditional, transform
 
     def positions(
         self,
