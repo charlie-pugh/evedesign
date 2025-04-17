@@ -48,6 +48,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         model_name: Optional[str] = None,
         model_file_path: Optional[Union[str, PathLike]] = None,
         decoder_batch_size: BatchSize = 64,
+
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
         # Added GibbsSampler hyperparameters
@@ -57,6 +58,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature_schedule: Callable = lambda init_temp, *
             args: init_temp,  # Constant temperature by default
     ):
+
         # Validate model specification parameters
         if (model_name is None and model_file_path is None) or (model_name is not None and model_file_path is not None):
             raise ValueError(
@@ -164,6 +166,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     self.model_file_path)
             except Exception as e:
                 logger.error(f"Error loading model from local path: {e}")
+
                 raise ValueError(
                     f"Failed to load model from {self.model_file_path}: {e}")
 
@@ -178,6 +181,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     def _delete_model(self):
         self.model = None
         self.tokenizer = None  # Changed from alphabet to tokenizer
+
         self._release_cache()
 
     def build(
@@ -393,6 +397,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                         # Sum log probs to get sequence log likelihood
                         seq_log_likelihood = seq_log_probs.sum().item()
+
                         scores.append(seq_log_likelihood)
 
         return np.array(scores)
@@ -447,6 +452,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     wt_aa = instance_seq[pos_idx]
 
                     # Adjust for tokenizer offsets (assuming 1-to-1 mapping + 1 for start token)
+
                     token_idx = pos_idx + 1
 
                     # Extract log probabilities for all amino acids at this position
@@ -471,6 +477,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         # -log(p(mut_aa)) + log(p(wt_aa))
                         score_diff = (pos_log_probs[aa_token].item() -
                                       pos_log_probs[wt_token].item())
+
                         mut_scores[aa] = score_diff
 
                     # Store results for this position
@@ -577,8 +584,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         seqs = []
         for instance in instances:
             seq = instance[0].rep
-            if isinstance(seq, np.ndarray):
-                seq = "".join(seq)
+            seq = "".join(seq)
             seqs.append(seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
@@ -732,6 +738,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         new_instance.score = seq_log_probs.sum().item()
 
                         # Copy over original instance score if needed
+
                         if hasattr(instance, 'score') and not hasattr(new_instance, 'score'):
                             new_instance.score = instance.score
 
