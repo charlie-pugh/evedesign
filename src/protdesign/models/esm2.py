@@ -17,6 +17,8 @@ from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy
 
+from transformers import EsmForMaskedLM, AutoTokenizer
+
 
 class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
     """
@@ -46,7 +48,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         model_name: Optional[str] = None,
         model_file_path: Optional[Union[str, PathLike]] = None,
         decoder_batch_size: BatchSize = 64,
-        num_samples: int = 16,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
         # Added GibbsSampler hyperparameters
@@ -56,34 +57,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature_schedule: Callable = lambda init_temp, *
             args: init_temp,  # Constant temperature by default
     ):
-        """
-        Instantiate new ESM2 model
-
-        Parameters
-        ----------
-        model_name
-            Name of the ESM2 model to load from HuggingFace (e.g., "esm2_t33_650M_UR50D").
-            Must specify either model_name or model_file_path, but not both.
-        model_file_path
-            Path to a local .pt model file to load.
-            Must specify either model_name or model_file_path, but not both.
-        decoder_batch_size
-            Maximum number of sequences to process concurrently
-        num_samples
-            Number of samples to generate when sampling sequences
-        keep_model_after_build
-            If True, keep model parameters associated to instance after build step
-        device
-            Device to use for computations
-        num_sweeps
-            Number of Gibbs sampling sweeps to perform when generating sequences
-        init_strategy
-            Strategy for initializing sequences ("random" or "system")
-        scan_order
-            Order in which to scan positions during Gibbs sampling ("sequential" or "random")
-        temperature_schedule
-            Function that takes initial temperature and returns temperature for current sweep
-        """
         # Validate model specification parameters
         if (model_name is None and model_file_path is None) or (model_name is not None and model_file_path is not None):
             raise ValueError(
@@ -101,8 +74,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         self._system = None
         self.model = None
-        self.alphabet = None
-        self.batch_converter = None
+        self.tokenizer = None  # Changed from alphabet to tokenizer
 
         self.decoder_batch_size = decoder_batch_size
 
@@ -172,31 +144,29 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         if self.model_name is not None:
             # Load from HuggingFace hub
-            self.model, self.alphabet = torch.hub.load(
-                "facebookresearch/esm:main", self.model_name)
+            try:
+                # For remote loading from HuggingFace
+                self.model = EsmForMaskedLM.from_pretrained(
+                    f"facebook/{self.model_name}").to(self.device)
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    f"facebook/{self.model_name}")
+            except Exception as e:
+                logger.error(f"Error loading model from HuggingFace: {e}")
+                raise ValueError(
+                    f"Failed to load model {self.model_name} from HuggingFace: {e}")
         elif self.model_file_path is not None:
             # Load from local file path
             try:
-                import esm
-                from esm import pretrained
-                print('ESM is installed and available')
-
-                # Extract model name from file path
-                model_name = self.model_file_path.stem
-
-                # Load checkpoint
-                checkpoint = torch.load(
-                    self.model_file_path, weights_only=False, map_location=self.device)
-
-                # Load model and alphabet using appropriate function
-                self.model, self.alphabet = pretrained.load_model_and_alphabet_core(
-                    model_name, checkpoint)
-            except ImportError:
+                # For local loading from a directory
+                self.model = EsmForMaskedLM.from_pretrained(
+                    self.model_file_path).to(self.device)
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_file_path)
+            except Exception as e:
+                logger.error(f"Error loading model from local path: {e}")
                 raise ValueError(
-                    'ESM library is not installed. Please install it with: pip install fair-esm')
+                    f"Failed to load model from {self.model_file_path}: {e}")
 
-        self.model = self.model.to(self.device)
-        self.batch_converter = self.alphabet.get_batch_converter()
         self.model.eval()
 
     def _release_cache(self):
@@ -207,8 +177,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     def _delete_model(self):
         self.model = None
-        self.alphabet = None
-        self.batch_converter = None
+        self.tokenizer = None  # Changed from alphabet to tokenizer
         self._release_cache()
 
     def build(
@@ -389,30 +358,41 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     batch_start + self.decoder_batch_size, len(sequences))
                 batch_seqs = sequences[batch_start:batch_end]
 
-                # Prepare batch data
-                batch_data = [(f"seq_{i}", seq)
-                              for i, seq in enumerate(batch_seqs)]
-                _, _, batch_tokens = self.batch_converter(batch_data)
-                batch_tokens = batch_tokens.to(self.device)
+                # Prepare batch data with tokenizer
+                inputs = self.tokenizer(
+                    batch_seqs, return_tensors="pt", padding=True).to(self.device)
 
                 # Compute log-likelihoods
                 with torch.no_grad():
-                    results = self.model(batch_tokens, repr_layers=[])
-                    logits = results["logits"]
+                    outputs = self.model(**inputs)
+                    logits = outputs.logits
 
                     # Calculate log-likelihood for each sequence
                     for i, seq in enumerate(batch_seqs):
-                        token_probs = torch.log_softmax(logits[i, :-1], dim=-1)
-                        target_tokens = batch_tokens[i, 1:]
+                        # Get sequence length (excluding padding)
+                        # -2 for special tokens
+                        seq_len = len(self.tokenizer.encode(seq)) - 2
 
+                        # Extract logits for the actual sequence (excluding padding and the last token)
+                        # Skip the first special token
+                        seq_logits = logits[i, 1:seq_len+1]
+
+                        # Get target tokens (shifted by one position)
+                        # +2 to include one more token as target
+                        target_tokens = inputs.input_ids[i, 2:seq_len+2]
+
+                        # Calculate log probabilities
+                        token_probs = torch.log_softmax(seq_logits, dim=-1)
+
+                        # Gather log probs for the target tokens
                         seq_log_probs = torch.gather(
                             token_probs,
                             dim=1,
                             index=target_tokens.unsqueeze(1)
                         ).squeeze(1)
 
+                        # Sum log probs to get sequence log likelihood
                         seq_log_likelihood = seq_log_probs.sum().item()
-
                         scores.append(seq_log_likelihood)
 
         return np.array(scores)
@@ -449,16 +429,16 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             mutation_effects = []
 
-            # Prepare reference sequence
-            ref_data = [("protein", instance_seq)]
-            _, _, ref_tokens = self.batch_converter(ref_data)
-            ref_tokens = ref_tokens.to(self.device)
+            # Prepare reference sequence with tokenizer
+            inputs = self.tokenizer(
+                instance_seq, return_tensors="pt").to(self.device)
 
             # Calculate reference probabilities with a single forward pass
             with torch.no_grad():
-                ref_results = self.model(ref_tokens, repr_layers=[])
-                # Exclude the last position (EOS token)
-                ref_logits = ref_results["logits"][0, :-1]
+                outputs = self.model(**inputs)
+                ref_logits = outputs.logits[0]
+
+                # Convert logits to log probabilities
                 ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
 
                 # For each position to scan
@@ -466,8 +446,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     pos_idx = pos - target.first_index
                     wt_aa = instance_seq[pos_idx]
 
-                    # Get the token index in the model for each position
-                    # +1 because of the BOS token at the beginning
+                    # Adjust for tokenizer offsets (assuming 1-to-1 mapping + 1 for start token)
                     token_idx = pos_idx + 1
 
                     # Extract log probabilities for all amino acids at this position
@@ -485,17 +464,13 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             continue
 
                         # Get the token index for this amino acid
-                        aa_token = self.alphabet.get_idx(aa)
-
-                        # Calculate the change in log likelihood
-                        # Higher probability = better, so negate for effect score where lower = better
-                        wt_token = self.alphabet.get_idx(wt_aa)
+                        aa_token = self.tokenizer.convert_tokens_to_ids(aa)
+                        wt_token = self.tokenizer.convert_tokens_to_ids(wt_aa)
 
                         # For wildtype marginal probability, calculate:
                         # -log(p(mut_aa)) + log(p(wt_aa))
-                        score_diff =  \
-                            (pos_log_probs[aa_token].item() -
-                             pos_log_probs[wt_token].item())
+                        score_diff = (pos_log_probs[aa_token].item() -
+                                      pos_log_probs[wt_token].item())
                         mut_scores[aa] = score_diff
 
                     # Store results for this position
@@ -531,13 +506,12 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             # Score reference sequence with a single forward pass
-            ref_data = [("protein", instance_seq)]
-            _, _, ref_tokens = self.batch_converter(ref_data)
-            ref_tokens = ref_tokens.to(self.device)
+            inputs = self.tokenizer(
+                instance_seq, return_tensors="pt").to(self.device)
 
             with torch.no_grad():
-                ref_results = self.model(ref_tokens, repr_layers=[])
-                ref_logits = ref_results["logits"][0]
+                outputs = self.model(**inputs)
+                ref_logits = outputs.logits[0]
                 ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
 
                 # Calculate scores for all mutants using the reference probabilities
@@ -553,10 +527,13 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         if wt_aa == mut_aa:
                             continue  # No change in score for unchanged positions
 
-                        # Get token indices
-                        token_pos = pos_idx + 1  # +1 for BOS token
-                        wt_token = self.alphabet.get_idx(wt_aa)
-                        mut_token = self.alphabet.get_idx(mut_aa)
+                        # Adjust for tokenizer offsets
+                        token_pos = pos_idx + 1  # +1 for start token
+
+                        # Get token IDs
+                        wt_token = self.tokenizer.convert_tokens_to_ids(wt_aa)
+                        mut_token = self.tokenizer.convert_tokens_to_ids(
+                            mut_aa)
 
                         # Calculate score difference for this mutation
                         wt_log_prob = ref_log_probs[token_pos, wt_token].item()
@@ -616,27 +593,22 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 batch_indices = list(range(batch_start, batch_end))
                 batch_entities = entities[batch_start:batch_end]
 
-                # Prepare batch data
-                batch_data = [(f"seq_{i}", seq)
-                              for i, seq in enumerate(batch_seqs)]
-                _, _, batch_tokens = self.batch_converter(batch_data)
-                batch_tokens = batch_tokens.to(self.device)
+                # Prepare batch data with tokenizer
+                inputs = self.tokenizer(
+                    batch_seqs, return_tensors="pt", padding=True).to(self.device)
 
                 with torch.no_grad():
                     # Forward pass for the entire batch
-                    results = self.model(batch_tokens, repr_layers=[])
-                    logits = results["logits"]
+                    outputs = self.model(**inputs)
+                    logits = outputs.logits
 
                     # Process each sequence in the batch
                     for batch_idx, (orig_idx, pos, entity) in enumerate(zip(batch_indices, batch_positions, batch_entities)):
                         pos_idx = pos - target.first_index
 
-                        # Get logits for this position (+1 for BOS token)
-                        token_idx = pos_idx + 1
+                        # Get logits for this position (adjust for tokenizer offsets)
+                        token_idx = pos_idx + 1  # +1 for start token
                         pos_logits = logits[batch_idx, token_idx]
-
-                        # Reverse the logits before softmax to invert probabilities
-                        # pos_probs = torch.softmax(pos_logits, dim=-1)
 
                         # Convert to amino acid probabilities
                         aa_probs = {}
@@ -644,7 +616,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             if aa == '-':  # Skip gap character
                                 aa_probs[aa] = 0.0
                             else:
-                                aa_token = self.alphabet.get_idx(aa)
+                                aa_token = self.tokenizer.convert_tokens_to_ids(
+                                    aa)
                                 aa_probs[aa] = pos_logits[aa_token].item()
 
                         # Store results
@@ -694,24 +667,26 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     seq = "".join(seq)
                     sequences.append(seq)
 
-                # Create batch data for ESM2
-                batch_data = [(f"seq_{i}", seq)
-                              for i, seq in enumerate(sequences)]
-                _, _, batch_tokens = self.batch_converter(batch_data)
-                batch_tokens = batch_tokens.to(self.device)
+                # Tokenize sequences
+                inputs = self.tokenizer(
+                    sequences, return_tensors="pt", padding=True).to(self.device)
 
                 # Get embeddings
                 with torch.no_grad():
-                    results = self.model(batch_tokens, repr_layers=[
-                                         self.model.num_layers])
-                    representations = results["representations"][self.model.num_layers]
+                    outputs = self.model(**inputs, output_hidden_states=True)
+
+                    # Get the hidden states from the last layer
+                    # Note: For EsmForMaskedLM, the hidden states are typically accessed as:
+                    # hidden_states = outputs.hidden_states[-1]
+                    # Last layer hidden states
+                    hidden_states = outputs.hidden_states[-1]
 
                     # Process each instance in the batch
                     for i, instance in enumerate(batch_instances):
-                        # Create new entity instance (we know there's exactly one)
+                        # Create new entity instance
                         entity_instance = instance[0]
 
-                        # Create new entity with proper initialization to preserve models
+                        # Create new entity with proper initialization
                         new_entity = EntityInstance(
                             rep=entity_instance.rep,
                             models=entity_instance.models  # Copy over 3D structures
@@ -732,28 +707,35 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         # Create a new SystemInstance with this entity
                         new_instance = SystemInstance([new_entity])
 
-                        # Store the embedding (excluding the BOS token)
-                        embedding = representations[i, 1:len(
-                            sequences[i])+1].cpu().numpy()
-                        new_instance[0].embedding = embedding
+                        # Get sequence length (excluding padding)
+                        # -2 for special tokens
+                        seq_len = len(self.tokenizer.encode(sequences[i])) - 2
 
-                        # Calculate and store score from this model
-                        logits = results["logits"][i]
-                        token_probs = torch.log_softmax(logits[:-1], dim=-1)
-                        target_tokens = batch_tokens[i, 1:]
+                        # Store the embedding (excluding the first token which is the start token)
+                        embedding = hidden_states[i, 1:seq_len+1].cpu().numpy()
+                        new_entity.embedding = embedding
+
+                        # Calculate and store score
+                        logits = outputs.logits[i, :-1]  # exclude last token
+                        token_probs = torch.log_softmax(logits, dim=-1)
+
+                        # Get the target tokens (shifted by one)
+                        target_tokens = inputs.input_ids[i, 1:seq_len+1]
+
+                        # Calculate log probabilities for target tokens
                         seq_log_probs = torch.gather(
                             token_probs,
                             dim=1,
                             index=target_tokens.unsqueeze(1)
                         ).squeeze(1)
+
                         new_instance.score = seq_log_probs.sum().item()
 
-                        # Copy over original instance score if this method doesn't set it
-                        # (though in this case we do set it above)
+                        # Copy over original instance score if needed
                         if hasattr(instance, 'score') and not hasattr(new_instance, 'score'):
                             new_instance.score = instance.score
 
-                        # Copy any other SystemInstance attributes that might be relevant
+                        # Copy any other SystemInstance attributes
                         if hasattr(instance, 'metadata'):
                             new_instance.metadata = instance.metadata
 
