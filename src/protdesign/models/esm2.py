@@ -285,13 +285,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             raise ValueError(
                 "Can only design single entity (entities = [0] | None)")
 
-        # Check sequence length of target
-        target = self.system[0]
-        if len(target.rep) > self.max_seq_length:
-            raise ValueError(
-                f"Target sequence length ({len(target.rep)}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
-            )
-
         # Adjust num_designs to be a multiple of batch_size
         if rem := num_designs % self.decoder_batch_size:
             num_designs_adj = num_designs + (self.decoder_batch_size - rem)
