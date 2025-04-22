@@ -131,14 +131,17 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
-        return RequiredResources(
-            min_gpu_cores=1,
-            min_gpu_memory_per_core=16000,
-            min_cpu_cores=1,
-            min_cpu_memory_per_core=16000,
-            max_batch_size=512,
-            time=1,
+        raise NotImplementedError(
+            "Resource estimation not yet implemented"
         )
+        # return RequiredResources(
+        #     min_gpu_cores=1,
+        #     min_gpu_memory_per_core=16000,
+        #     min_cpu_cores=1,
+        #     min_cpu_memory_per_core=16000,
+        #     max_batch_size=512,
+        #     time=1,
+        # )
 
     def _load_model(self):
         if self.model is not None:
