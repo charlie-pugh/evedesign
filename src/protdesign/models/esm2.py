@@ -708,36 +708,20 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     # Process each instance in the batch
                     for i, instance in enumerate(batch_instances):
                         # Create new entity instance
-                        entity_instance = instance[0]
-
-                        # Create new entity with proper initialization
-                        new_entity = EntityInstance(
-                            rep=entity_instance.rep,
-                            models=entity_instance.models  # Copy over 3D structures
-                        )
-
-                        # Copy structure attribute if it exists
-                        if hasattr(entity_instance, 'structure'):
-                            new_entity.structure = entity_instance.structure
-
-                        # Copy confidence attribute if it exists
-                        if hasattr(entity_instance, 'confidence'):
-                            new_entity.confidence = entity_instance.confidence
-
-                        # Copy metadata attribute if it exists
-                        if hasattr(entity_instance, 'metadata'):
-                            new_entity.metadata = entity_instance.metadata
+                        new_entity = instance[0].copy()
 
                         # Create a new SystemInstance with this entity
-                        new_instance = SystemInstance([new_entity])
+                        new_instance = instance.copy()
+                        new_instance.entity_instances = [new_entity]
 
                         # Get sequence length (excluding padding)
                         # -2 for special tokens
                         seq_len = len(self.tokenizer.encode(sequences[i])) - 2
 
                         # Store the embedding (excluding the first token which is the start token)
-                        embedding = hidden_states[i, 1:seq_len+1].cpu().numpy()
-                        new_entity.embedding = embedding
+                        new_entity.embedding = hidden_states[i, 1:seq_len+1].cpu().numpy()
+                        # Replace the entity instance in copied system instance
+                        new_instance.data = [new_entity]
 
                         # Calculate and store score
                         logits = outputs.logits[i, :-1]  # exclude last token
@@ -754,16 +738,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         ).squeeze(1)
 
                         new_instance.score = seq_log_probs.sum().item()
-
-                        # Copy over original instance score if needed
-
-                        if hasattr(instance, 'score') and not hasattr(new_instance, 'score'):
-                            new_instance.score = instance.score
-
-                        # Copy any other SystemInstance attributes
-                        if hasattr(instance, 'metadata'):
-                            new_instance.metadata = instance.metadata
-
                         transformed_instances.append(new_instance)
 
         return transformed_instances
