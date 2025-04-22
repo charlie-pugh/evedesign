@@ -17,14 +17,18 @@ from protdesign.utils import ensure_sequence, model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
 from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy
 
-from transformers import EsmForMaskedLM, AutoTokenizer
+try:
+    from transformers import EsmForMaskedLM, AutoTokenizer
+    IMPORT_AVAILABLE = True
+except ImportError:
+    IMPORT_AVAILABLE = False
 
 
 class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
     """
     Wrapper class around ESM2 model
     """
-    available = True
+    available = IMPORT_AVAILABLE
     name: str = "ESM2"
 
     # core properties
@@ -48,7 +52,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         model_name: Optional[str] = None,
         model_file_path: Optional[Union[str, PathLike]] = None,
         decoder_batch_size: BatchSize = 64,
-
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
         # Added GibbsSampler hyperparameters
@@ -58,6 +61,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature_schedule: Callable = lambda init_temp, *
             args: init_temp,  # Constant temperature by default
     ):
+        if not self.available:
+            raise ValueError("transformers package could not be imported. Is it installed already?")
 
         # Validate model specification parameters
         if (model_name is None and model_file_path is None) or (model_name is not None and model_file_path is not None):
