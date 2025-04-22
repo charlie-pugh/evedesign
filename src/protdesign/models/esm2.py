@@ -49,7 +49,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self,
         model_name: str | None = None,
         model_dir_path: str | PathLike | None = None,
-        decoder_batch_size: BatchSize = 64,
+        batch_size: BatchSize = 64,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
         # GibbsSampler hyperparameters
@@ -82,7 +82,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.model = None
         self.tokenizer = None  # Changed from alphabet to tokenizer
 
-        self.decoder_batch_size = decoder_batch_size
+        self.batch_size = batch_size
 
         # Store GibbsSampler hyperparameters
         self.num_sweeps = num_sweeps
@@ -90,12 +90,12 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.scan_order = scan_order
         self.temperature_schedule = temperature_schedule
 
-        if self.decoder_batch_size != "auto" and self.decoder_batch_size < 1:
+        if self.batch_size != "auto" and self.batch_size < 1:
             raise ValueError(
                 "decoder_batch_size must be at least 1 or 'auto'"
             )
 
-        if self.decoder_batch_size == "auto":
+        if self.batch_size == "auto":
             raise NotImplementedError(
                 "Automatic batch_size not yet implemented"
             )
@@ -301,8 +301,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             )
 
         # Adjust num_designs to be a multiple of batch_size
-        if rem := num_designs % self.decoder_batch_size:
-            num_designs_adj = num_designs + (self.decoder_batch_size - rem)
+        if rem := num_designs % self.batch_size:
+            num_designs_adj = num_designs + (self.batch_size - rem)
             num_designs = num_designs_adj
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
@@ -366,9 +366,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             scores = []
 
             # Process in batches
-            for batch_start in range(0, len(sequences), self.decoder_batch_size):
+            for batch_start in range(0, len(sequences), self.batch_size):
                 batch_end = min(
-                    batch_start + self.decoder_batch_size, len(sequences)
+                    batch_start + self.batch_size, len(sequences)
                 )
                 batch_seqs = sequences[batch_start:batch_end]
 
@@ -604,9 +604,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             conditionals_list = []
 
             # Process in batches
-            for batch_start in range(0, len(seqs), self.decoder_batch_size):
+            for batch_start in range(0, len(seqs), self.batch_size):
                 batch_end = min(
-                    batch_start + self.decoder_batch_size, len(seqs)
+                    batch_start + self.batch_size, len(seqs)
                 )
                 batch_seqs = seqs[batch_start:batch_end]
                 batch_positions = positions[batch_start:batch_end]
@@ -677,9 +677,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             transformed_instances = []
 
             # Process in batches
-            for batch_start in range(0, len(instances), self.decoder_batch_size):
+            for batch_start in range(0, len(instances), self.batch_size):
                 batch_end = min(
-                    batch_start + self.decoder_batch_size, len(instances)
+                    batch_start + self.batch_size, len(instances)
                 )
                 batch_instances = instances[batch_start:batch_end]
 
