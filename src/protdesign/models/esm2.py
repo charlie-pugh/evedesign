@@ -1,24 +1,22 @@
 from os import PathLike
-from typing import Self, Tuple, Sequence, List, Callable
-from contextlib import contextmanager
+from typing import Self, Tuple, Sequence, List
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 import torch
-from typing import Literal, List, Sequence, Optional, Union
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
 )
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.utils import ensure_sequence, model_param_context
+from protdesign.utils import model_param_context
 from protdesign.types import DeviceType, StatusCallback, BatchSize
-from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy
+from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
 
 try:
-    from transformers import EsmForMaskedLM, AutoTokenizer
+    from transformers import EsmForMaskedLM, AutoTokenizer  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -49,29 +47,30 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
-        model_file_path: Optional[Union[str, PathLike]] = None,
+        model_name: str | None = None,
+        model_dir_path: str | PathLike | None = None,
         decoder_batch_size: BatchSize = 64,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
-        # Added GibbsSampler hyperparameters
-        num_sweeps: int = 10,
-        init_strategy: Literal["random", "system"] = "system",
+        # GibbsSampler hyperparameters
+        num_sweeps: int = 1000,
+        init_strategy: InitStrategy = "system",
         scan_order: ScanOrder = "random",
-        temperature_schedule: Callable = lambda init_temp, *
-            args: init_temp,  # Constant temperature by default
+        temperature_schedule: TemperatureSchedule | None = None
     ):
         if not self.available:
-            raise ValueError("transformers package could not be imported. Is it installed already?")
+            raise ValueError(
+                "transformers package could not be imported. Is it installed already?"
+            )
 
         # Validate model specification parameters
-        if (model_name is None and model_file_path is None) or (model_name is not None and model_file_path is not None):
+        if (model_name is None and model_dir_path is None) or (model_name is not None and model_dir_path is not None):
             raise ValueError(
-                "Must specify exactly one of model_name or model_file_path, but not both")
+                "Must specify exactly one of model_name or model_file_path, but not both"
+            )
 
         self.model_name = model_name
-        self.model_file_path = Path(
-            model_file_path) if model_file_path is not None else None
+        self.model_dir_path = Path(model_dir_path) if model_dir_path is not None else None
         self.keep_model_after_build = keep_model_after_build
         self.keep_model_after_pred = True
         self.device = device
@@ -92,11 +91,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.temperature_schedule = temperature_schedule
 
         if self.decoder_batch_size != "auto" and self.decoder_batch_size < 1:
-            raise ValueError("decoder_batch_size must be at least 1 or 'auto'")
+            raise ValueError(
+                "decoder_batch_size must be at least 1 or 'auto'"
+            )
 
         if self.decoder_batch_size == "auto":
             raise NotImplementedError(
-                "Automatic batch_size not yet implemented")
+                "Automatic batch_size not yet implemented"
+            )
 
         self.token_ids = None
         self.encoding = None
@@ -157,26 +159,32 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             try:
                 # For remote loading from HuggingFace
                 self.model = EsmForMaskedLM.from_pretrained(
-                    f"facebook/{self.model_name}").to(self.device)
+                    f"facebook/{self.model_name}"
+                ).to(self.device)
                 self.tokenizer = AutoTokenizer.from_pretrained(
-                    f"facebook/{self.model_name}")
+                    f"facebook/{self.model_name}"
+                )
             except Exception as e:
                 logger.error(f"Error loading model from HuggingFace: {e}")
                 raise ValueError(
-                    f"Failed to load model {self.model_name} from HuggingFace: {e}")
-        elif self.model_file_path is not None:
+                    f"Failed to load model {self.model_name} from HuggingFace: {e}"
+                )
+        elif self.model_dir_path is not None:
             # Load from local file path
             try:
                 # For local loading from a directory
                 self.model = EsmForMaskedLM.from_pretrained(
-                    self.model_file_path).to(self.device)
+                    self.model_dir_path
+                ).to(self.device)
                 self.tokenizer = AutoTokenizer.from_pretrained(
-                    self.model_file_path)
+                    self.model_dir_path
+                )
             except Exception as e:
                 logger.error(f"Error loading model from local path: {e}")
 
                 raise ValueError(
-                    f"Failed to load model from {self.model_file_path}: {e}")
+                    f"Failed to load model from {self.model_dir_path}: {e}"
+                )
 
         self.model.eval()
 
@@ -212,10 +220,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.token_ids = None
 
         return self
-
-    # The rest of the class remains the same...
-    # positions, _validate_instances, generate, score, single_mutation_scan,
-    # score_mutants, score_conditional, transform
 
     def positions(
         self,
@@ -286,12 +290,15 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         # Add validation for deletions parameter
         if deletions:
-            raise ValueError("ESM2 model does not support deletions (gaps)")
+            raise ValueError(
+                "ESM2 model does not support deletions (gaps)"
+            )
 
         entities = entities if entities is not None else [0]
         if len(entities) != 1 or entities[0] != 0:
             raise ValueError(
-                "Can only design single entity (entities = [0] | None)")
+                "Can only design single entity (entities = [0] | None)"
+            )
 
         # Adjust num_designs to be a multiple of batch_size
         if rem := num_designs % self.decoder_batch_size:
@@ -300,7 +307,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             logger.info(
-                f"Generating {num_designs} designs with ESM2 using GibbsSampler")
+                f"Generating {num_designs} designs with ESM2 using GibbsSampler"
+            )
 
             # Create a GibbsSampler using the configured hyperparameters
             sampler = GibbsSampler(
@@ -360,12 +368,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             # Process in batches
             for batch_start in range(0, len(sequences), self.decoder_batch_size):
                 batch_end = min(
-                    batch_start + self.decoder_batch_size, len(sequences))
+                    batch_start + self.decoder_batch_size, len(sequences)
+                )
                 batch_seqs = sequences[batch_start:batch_end]
 
                 # Prepare batch data with tokenizer
                 inputs = self.tokenizer(
-                    batch_seqs, return_tensors="pt", padding=True).to(self.device)
+                    batch_seqs, return_tensors="pt", padding=True
+                ).to(self.device)
 
                 # Compute log-likelihoods
                 with torch.no_grad():
@@ -430,7 +440,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             self.valid_positions(positions, entities=0, raise_invalid=True)
         else:
             positions = list(
-                range(target.first_index, target.first_index + len(target.rep)))
+                range(target.first_index, target.first_index + len(target.rep))
+            )
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             mutation_effects = []
@@ -515,7 +526,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             # Score reference sequence with a single forward pass
             inputs = self.tokenizer(
-                instance_seq, return_tensors="pt").to(self.device)
+                instance_seq, return_tensors="pt"
+            ).to(self.device)
 
             with torch.no_grad():
                 outputs = self.model(**inputs)
@@ -545,8 +557,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                         # Calculate score difference for this mutation
                         wt_log_prob = ref_log_probs[token_pos, wt_token].item()
-                        mut_log_prob = ref_log_probs[token_pos, mut_token].item(
-                        )
+                        mut_log_prob = ref_log_probs[token_pos, mut_token].item()
 
                         score_diff = (mut_log_prob - wt_log_prob)
                         total_score += score_diff
@@ -575,7 +586,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         if not len(instances) == len(entities) == len(positions):
             raise ValueError(
-                "Sequences for instances, entities and positions must all have same length")
+                "Sequences for instances, entities and positions must all have same length"
+            )
 
         # Validate positions
         target = self.system[0]
@@ -594,7 +606,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             # Process in batches
             for batch_start in range(0, len(seqs), self.decoder_batch_size):
                 batch_end = min(
-                    batch_start + self.decoder_batch_size, len(seqs))
+                    batch_start + self.decoder_batch_size, len(seqs)
+                )
                 batch_seqs = seqs[batch_start:batch_end]
                 batch_positions = positions[batch_start:batch_end]
                 batch_indices = list(range(batch_start, batch_end))
@@ -602,7 +615,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                 # Prepare batch data with tokenizer
                 inputs = self.tokenizer(
-                    batch_seqs, return_tensors="pt", padding=True).to(self.device)
+                    batch_seqs, return_tensors="pt", padding=True
+                ).to(self.device)
 
                 with torch.no_grad():
                     # Forward pass for the entire batch
@@ -610,7 +624,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     logits = outputs.logits
 
                     # Process each sequence in the batch
-                    for batch_idx, (orig_idx, pos, entity) in enumerate(zip(batch_indices, batch_positions, batch_entities)):
+                    for batch_idx, (orig_idx, pos, entity) in enumerate(
+                            zip(batch_indices, batch_positions, batch_entities)
+                    ):
                         pos_idx = pos - target.first_index
 
                         # Get logits for this position (adjust for tokenizer offsets)
@@ -623,8 +639,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             if aa == '-':  # Skip gap character
                                 aa_probs[aa] = 0.0
                             else:
-                                aa_token = self.tokenizer.convert_tokens_to_ids(
-                                    aa)
+                                aa_token = self.tokenizer.convert_tokens_to_ids(aa)
                                 aa_probs[aa] = pos_logits[aa_token].item()
 
                         # Store results
@@ -645,7 +660,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self,
         instances: Sequence[SystemInstance],
         entity: int | None = None,
-        status_callback: StatusCallback | None = None
+        status_callback: StatusCallback | None = None   # noqa
     ) -> List[SystemInstance]:
         """
         Transform system instances by adding embeddings from the ESM2 model
@@ -664,7 +679,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             # Process in batches
             for batch_start in range(0, len(instances), self.decoder_batch_size):
                 batch_end = min(
-                    batch_start + self.decoder_batch_size, len(instances))
+                    batch_start + self.decoder_batch_size, len(instances)
+                )
                 batch_instances = instances[batch_start:batch_end]
 
                 # Prepare batch sequences
@@ -676,7 +692,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                 # Tokenize sequences
                 inputs = self.tokenizer(
-                    sequences, return_tensors="pt", padding=True).to(self.device)
+                    sequences, return_tensors="pt", padding=True
+                ).to(self.device)
 
                 # Get embeddings
                 with torch.no_grad():
