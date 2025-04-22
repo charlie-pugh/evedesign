@@ -183,15 +183,18 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         use_gpu: bool = True,
         build: bool = True,
     ) -> RequiredResources:
-        # TODO: implement meaningful requirements depending on target size instead of made up values
-        return RequiredResources(
-            min_gpu_cores=1,
-            min_gpu_memory_per_core=16000,
-            min_cpu_cores=1,
-            min_cpu_memory_per_core=16000,
-            max_batch_size=512,
-            time=1,
+        raise NotImplementedError(
+            "Resource estimation not yet implemented"
         )
+        # TODO: implement meaningful requirements depending on target size instead of made up values
+        # return RequiredResources(
+        #     min_gpu_cores=1,
+        #     min_gpu_memory_per_core=16000,
+        #     min_cpu_cores=1,
+        #     min_cpu_memory_per_core=16000,
+        #     max_batch_size=512,
+        #     time=1,
+        # )
 
     def _load_model(self):
         # avoid reloading if already loaded

@@ -399,6 +399,21 @@ class EntityInstance:
 
         return f"EntityInstance(rep={short_rep}, models={structure_info})"
 
+    def copy(self) -> Self:
+        """
+        Create a shallow copy of the entity instance (rep, embedding and models
+        will still point to same objects as before)
+
+        Returns
+        -------
+        Shallow copy
+        """
+        return type(self)(
+            rep=self.rep,
+            embedding=self.embedding,
+            models=self.models
+        )
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize entity instance to JSON-compatible representation
@@ -499,6 +514,21 @@ class SystemInstance(UserList[EntityInstance]):
 
     def __repr__(self):
         return f"SystemInstance({self.data} score={self.score})"
+
+    def copy(self) -> Self:
+        """
+        Create a shallow copy of the system instance
+
+        Returns
+        -------
+        Shallow copy
+        """
+        return type(self)(
+            entity_instances=self.data.copy(),
+            score=self.score,
+            confidence=self.confidence,
+            metadata=self.metadata.copy() if self.metadata is not None else None
+        )
 
     def serialize(self) -> dict[str, Any]:
         """
