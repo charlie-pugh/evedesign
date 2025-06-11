@@ -7,11 +7,12 @@ from typing import Sequence, Literal, Callable, Tuple, List
 import numpy as np
 import pandas as pd
 import torch
+from loguru import logger
 from protdesign.constants import GAP
 from protdesign.model import Generator, ConditionalMutationScorer
 from protdesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback
-from protdesign.utils import status_progress, ensure_sequence
+from protdesign.utils import status_progress, ensure_sequence, map_array
 
 ScanOrder = Literal[
     "random", "sequential"
@@ -37,6 +38,8 @@ _ENTITY = "entity"
 _POS = "pos"
 _FROM = "from"
 _TO = "to"
+_SCORE_DIFF = "score_diff"
+_TEMPERATURE = "temperature"
 
 
 class GibbsSampler(Generator):
@@ -502,6 +505,9 @@ class GibbsSampler(Generator):
 
         # auxiliary variables for fancy indexing into design array
         alphabet_array = np.array(alphabet)
+        alphabet_map = {
+            symbol: idx for idx, symbol in enumerate(alphabet_array)
+        }
         design_idx_all = np.arange(num_designs)
 
         # initialize samples for all designed chains, we represent these as numpy arrays
@@ -536,7 +542,7 @@ class GibbsSampler(Generator):
         if self.record_full_chain:
             updates = np.empty(
                 (self.num_sweeps * num_steps, num_designs),
-                dtype=[(_ENTITY, int), (_POS, int), (_TO, "<U1")]
+                dtype=[(_ENTITY, int), (_POS, int), (_TO, "<U1"), (_SCORE_DIFF, float), (_TEMPERATURE, float)]
             )
         else:
             updates = None
@@ -605,6 +611,15 @@ class GibbsSampler(Generator):
 
                 # Gibbs step
 
+                # keep track of token before update for chain tracking, and remap to numeric indices
+                current_tokens = samples[
+                    design_idx_all,
+                    entity_to_array_idx_linear[step_ent],
+                    step_pos - entity_to_first_index_linear[step_ent],
+                ].copy()
+
+                current_token_idx = map_array(current_tokens, alphabet_map)
+
                 # replace any missing values to exclude from sampling, and scale by temperature for current step;
                 # Note we are using an inverted scale here (e.g. not -E/T but E/T where higher E means "better");
                 # we go through pytorch here to use the parallelized multinomial implementation which is much
@@ -617,9 +632,14 @@ class GibbsSampler(Generator):
 
                 sampled_token_idx = torch.multinomial(
                     p, num_samples=1
-                ).flatten().numpy()
+                ).flatten()
 
-                sampled_tokens = alphabet_array[sampled_token_idx]
+                sampled_tokens = alphabet_array[sampled_token_idx.numpy()]
+
+                # compute temperature-scaled score difference to current token
+                score_diff = (
+                    scores_scaled[design_idx_all, sampled_token_idx] - scores_scaled[design_idx_all, current_token_idx]
+                )
 
                 # update sample matrix and instances for next step
                 assert len(design_idx_all) == len(step_ent) == len(step_pos) == len(sampled_tokens)
@@ -630,6 +650,10 @@ class GibbsSampler(Generator):
                     entity_to_array_idx_linear[step_ent],
                     step_pos - entity_to_first_index_linear[step_ent],
                 ] = sampled_tokens
+
+                logger.info(
+                    f"Gibbs sweep={sweep + 1}/{self.num_sweeps} step={step + 1}/{num_steps} T={step_temp:.3f}"
+                )
 
                 # update instances based on new design matrix
                 instances, _ = self._build_or_update_instances(
@@ -648,6 +672,8 @@ class GibbsSampler(Generator):
                     updates[_ENTITY][cur_iter, :] = step_ent
                     updates[_POS][cur_iter, :] = step_pos
                     updates[_TO][cur_iter, :] = sampled_tokens
+                    updates[_SCORE_DIFF][cur_iter, :] = score_diff
+                    updates[_TEMPERATURE][cur_iter, :] = step_temp
 
         # attach metadata to instances
         if updates is not None:
