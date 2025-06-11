@@ -530,9 +530,12 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # as was used for entity specification as we have a fixed-length model
         self._validate_instances([instance])
 
-        if entity is None:
-            entity = 0
+        if positions is not None and entity is None:
+            raise ValueError(
+                "Parameter entity must be explicitly specified if using parameter positions"
+            )
 
+        entity = 0 if entity is None else entity
         if entity != 0:
             raise ValueError("Model can only handle one single entity")
 
