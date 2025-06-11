@@ -680,7 +680,7 @@ class GibbsSampler(Generator):
             for design_idx in range(num_designs):
                 instances[design_idx].metadata = {
                     "init": {
-                        entity_idx: initial_samples_joined[entity_idx][design_idx]
+                        entity_idx: "".join(initial_samples_joined[entity_idx][design_idx])
                         for entity_idx in entities
                     },
                     "chain": updates[:, design_idx].tolist()
