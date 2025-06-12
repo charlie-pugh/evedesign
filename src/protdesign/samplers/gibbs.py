@@ -358,14 +358,21 @@ class GibbsSampler(Generator):
             # randomize full sequence across all chains
             seq_len = len(entity.rep)
 
-            # initialize relevant slice of array for each entity across all chains/samples
-            samples[
-                :, array_idx, :seq_len
-            ] = self.rng.choice(
-                alphabet, size=(num_designs, seq_len), replace=True
-            )
+            # initialize relevant slice of array for each entity across all chains/samples;
+            if self.init_strategy == "random":
+                samples[
+                    :, array_idx, :seq_len
+                ] = self.rng.choice(
+                    alphabet, size=(num_designs, seq_len), replace=True
+                )
+            elif self.init_strategy == "system":
+                samples[
+                    :, array_idx, :seq_len
+                ] = entity.rep
+            else:
+                assert False, "Should never happen"
 
-            # set fixed positions based on system representation
+            # set fixed positions based on system representation (this will be redundant for init_strategy == "system")
             for pos, symbol in enumerate(entity.rep, start=entity.first_index):
                 if symbol not in alphabet_set:
                     raise ValueError(
