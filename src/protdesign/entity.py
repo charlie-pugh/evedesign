@@ -837,6 +837,28 @@ class System(UserList[Entity]):
             ) for entity, entity_instance in zip(self.data, instance)
         ])
 
+    def rep_to_instance(self) -> SystemInstance:
+        """
+        Transform system into its own system instance
+        (e.g. for scoring WT sequence that design was started from),
+        using primary rep only
+
+        Note: Not all systems can be transformed into a valid
+         system instance, e.g. if mask or gap characters are present.
+         In these cases, a ValueError will be raised via valid_instance().
+
+        Returns
+        -------
+        System instance derived from system representation
+        """
+        instance = SystemInstance([
+            EntityInstance(rep=entity.rep) for entity in self.data
+        ])
+
+        self.valid_instance(instance, raise_invalid=True)
+
+        return instance
+
     def mutate(
         self,
         instance: SystemInstance,

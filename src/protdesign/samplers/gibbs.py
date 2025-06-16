@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from loguru import logger
 from protdesign.constants import GAP
-from protdesign.model import Generator, ConditionalMutationScorer
+from protdesign.model import Generator, ConditionalMutationScorer, Scorer
 from protdesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback
 from protdesign.utils import status_progress, ensure_sequence, map_array
@@ -40,6 +40,8 @@ _FROM = "from"
 _TO = "to"
 _SCORE_DIFF = "score_diff"
 _TEMPERATURE = "temperature"
+
+SCORE_COMPONENT_KEY = "scores"
 
 
 class GibbsSampler(Generator):
@@ -496,6 +498,73 @@ class GibbsSampler(Generator):
 
         return instances, samples_copy
 
+    def _score_designs(self, instances: list[SystemInstance]):
+        """
+        Compute final design scores as far as possible, modifying instances in place
+
+        If all scorers implement Scorer interface, will attach weighted sum of scores
+        to score attribute; individual unweighted scores will be attached to metadata attribute
+        in any case.
+        """
+        # if models support generic score computation, attach composite and individual scores
+        # to generated instances
+        all_scores_applied = True
+
+        # accumulator for weighted scores
+        weighted_score_sum = np.zeros(len(instances))
+
+        # check if we can use system rep to normalize the scores to a shared reference
+        try:
+            ref_instance = self.system.rep_to_instance()
+            instances_with_ref = [ref_instance] + instances
+        except ValueError:
+            ref_instance = None
+            instances_with_ref = instances
+
+        for scorer_idx, (scorer, weight) in enumerate(
+            zip(self.scorers, self.weights)
+        ):
+            if isinstance(scorer, Scorer):
+                scorer_name = type(scorer).__name__
+
+                # score instances with current model
+                scores_with_ref = scorer.score(instances_with_ref)
+
+                # normalize scores to target if possible, otherwise take as is
+                if ref_instance is not None:
+                    scores = scores_with_ref[1:] - scores_with_ref[0]
+                else:
+                    scores = scores_with_ref
+
+                assert len(scores) == len(instances) == len(weighted_score_sum)
+
+                weighted_score_sum += weight * scores
+
+                # attach score component to instance
+                for idx, score in enumerate(scores.tolist()):
+                    # initialize metadata (careful about any values that may already be present)
+                    if instances[idx].metadata is None:
+                        instances[idx].metadata = {}
+
+                    if SCORE_COMPONENT_KEY not in instances[idx].metadata:
+                        instances[idx].metadata[SCORE_COMPONENT_KEY] = []
+
+                    instances[idx].metadata[SCORE_COMPONENT_KEY].append({
+                        "index": scorer_idx,
+                        "name": scorer_name,
+                        "weight": weight,
+                        "score": score,
+                        "ref_score": float(scores_with_ref[0]) if ref_instance is not None else None,
+                    })
+            else:
+                # need to write it this slightly ugly way or linter complains about type of scorer in if clause
+                all_scores_applied = False
+
+        # attach full score to instances (in-place) if we could compute all components
+        if all_scores_applied:
+            for idx, score in enumerate(weighted_score_sum):
+                instances[idx].score = score
+
     def generate(
         self,
         num_designs: int,
@@ -692,5 +761,8 @@ class GibbsSampler(Generator):
                     },
                     "chain": updates[:, design_idx].tolist()
                 }
+
+        # score final designs (modifying in place)
+        self._score_designs(instances)
 
         return instances
