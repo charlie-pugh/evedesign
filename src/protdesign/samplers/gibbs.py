@@ -360,30 +360,25 @@ class GibbsSampler(Generator):
             # randomize full sequence across all chains
             seq_len = len(entity.rep)
 
-            # initialize relevant slice of array for each entity across all chains/samples;
-            if self.init_strategy == "random":
-                samples[
-                    :, array_idx, :seq_len
-                ] = self.rng.choice(
-                    alphabet, size=(num_designs, seq_len), replace=True
-                )
-            elif self.init_strategy == "system":
-                samples[
-                    :, array_idx, :seq_len
-                ] = entity.rep
-            else:
-                assert False, "Should never happen"
+            # initialize relevant slice of array for each entity across all chains/samples randomly;
+            # in case of using fixed starting sequence (init_strategy == 'system') we will overwrite
+            # this random init further down for simplicity
+            samples[
+                :, array_idx, :seq_len
+            ] = self.rng.choice(
+                alphabet, size=(num_designs, seq_len), replace=True
+            )
 
             # set fixed positions based on system representation (this will be redundant for init_strategy == "system")
             for pos, symbol in enumerate(entity.rep, start=entity.first_index):
-                if symbol not in alphabet_set:
-                    raise ValueError(
-                        "Fixed position in system representation is not part of alphabet" +
-                        f" (entity: {entity_idx}, pos: {pos}, symbol: {symbol}, valid alphabet: {alphabet})"
-                    )
-
                 # set to fixed symbol
-                if (entity_idx, pos) not in pos_to_design:
+                if (entity_idx, pos) not in pos_to_design or self.init_strategy == "system":
+                    if symbol not in alphabet_set:
+                        raise ValueError(
+                            "Fixed position in system representation is not part of alphabet" +
+                            f" (entity: {entity_idx}, pos: {pos}, symbol: {symbol}, valid alphabet: {alphabet})"
+                        )
+
                     samples[:, array_idx, pos - entity.first_index] = symbol
 
         return samples, entity_to_array_idx, entity_to_len, entity_to_array_idx_linear, entity_to_first_index_linear
