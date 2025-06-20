@@ -369,8 +369,10 @@ class MutationScorer(_Core):
             Target system instance specification to mutate
         entity
             Index of entity for which mutation scan should be computed. If None, score all entities in system.
+            Must be specified as int if using positions parameter.
         positions
-            Subset of positions to score. If None, scores for all positions will be computed.
+            Subset of positions to score. If None, scores for all positions will be computed across all entities;
+            if specified, must also specify entity.
         status_callback
             Callback function to track computation status
 

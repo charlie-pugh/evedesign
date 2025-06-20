@@ -7,11 +7,12 @@ from typing import Sequence, Literal, Callable, Tuple, List
 import numpy as np
 import pandas as pd
 import torch
+from loguru import logger
 from protdesign.constants import GAP
-from protdesign.model import Generator, ConditionalMutationScorer
+from protdesign.model import Generator, ConditionalMutationScorer, Scorer
 from protdesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
 from protdesign.types import StatusCallback
-from protdesign.utils import status_progress, ensure_sequence
+from protdesign.utils import status_progress, ensure_sequence, map_array
 
 ScanOrder = Literal[
     "random", "sequential"
@@ -37,6 +38,10 @@ _ENTITY = "entity"
 _POS = "pos"
 _FROM = "from"
 _TO = "to"
+_SCORE_DIFF = "score_diff"
+_TEMPERATURE = "temperature"
+
+SCORE_COMPONENT_KEY = "scores"
 
 
 class GibbsSampler(Generator):
@@ -355,23 +360,25 @@ class GibbsSampler(Generator):
             # randomize full sequence across all chains
             seq_len = len(entity.rep)
 
-            # initialize relevant slice of array for each entity across all chains/samples
+            # initialize relevant slice of array for each entity across all chains/samples randomly;
+            # in case of using fixed starting sequence (init_strategy == 'system') we will overwrite
+            # this random init further down for simplicity
             samples[
                 :, array_idx, :seq_len
             ] = self.rng.choice(
                 alphabet, size=(num_designs, seq_len), replace=True
             )
 
-            # set fixed positions based on system representation
+            # set fixed positions based on system representation (this will be redundant for init_strategy == "system")
             for pos, symbol in enumerate(entity.rep, start=entity.first_index):
-                if symbol not in alphabet_set:
-                    raise ValueError(
-                        "Fixed position in system representation is not part of alphabet" +
-                        f" (entity: {entity_idx}, pos: {pos}, symbol: {symbol}, valid alphabet: {alphabet})"
-                    )
-
                 # set to fixed symbol
-                if (entity_idx, pos) not in pos_to_design:
+                if (entity_idx, pos) not in pos_to_design or self.init_strategy == "system":
+                    if symbol not in alphabet_set:
+                        raise ValueError(
+                            "Fixed position in system representation is not part of alphabet" +
+                            f" (entity: {entity_idx}, pos: {pos}, symbol: {symbol}, valid alphabet: {alphabet})"
+                        )
+
                     samples[:, array_idx, pos - entity.first_index] = symbol
 
         return samples, entity_to_array_idx, entity_to_len, entity_to_array_idx_linear, entity_to_first_index_linear
@@ -486,6 +493,73 @@ class GibbsSampler(Generator):
 
         return instances, samples_copy
 
+    def _score_designs(self, instances: list[SystemInstance]):
+        """
+        Compute final design scores as far as possible, modifying instances in place
+
+        If all scorers implement Scorer interface, will attach weighted sum of scores
+        to score attribute; individual unweighted scores will be attached to metadata attribute
+        in any case.
+        """
+        # if models support generic score computation, attach composite and individual scores
+        # to generated instances
+        all_scores_applied = True
+
+        # accumulator for weighted scores
+        weighted_score_sum = np.zeros(len(instances))
+
+        # check if we can use system rep to normalize the scores to a shared reference
+        try:
+            ref_instance = self.system.rep_to_instance()
+            instances_with_ref = [ref_instance] + instances
+        except ValueError:
+            ref_instance = None
+            instances_with_ref = instances
+
+        for scorer_idx, (scorer, weight) in enumerate(
+            zip(self.scorers, self.weights)
+        ):
+            if isinstance(scorer, Scorer):
+                scorer_name = type(scorer).__name__
+
+                # score instances with current model
+                scores_with_ref = scorer.score(instances_with_ref)
+
+                # normalize scores to target if possible, otherwise take as is
+                if ref_instance is not None:
+                    scores = scores_with_ref[1:] - scores_with_ref[0]
+                else:
+                    scores = scores_with_ref
+
+                assert len(scores) == len(instances) == len(weighted_score_sum)
+
+                weighted_score_sum += weight * scores
+
+                # attach score component to instance
+                for idx, score in enumerate(scores.tolist()):
+                    # initialize metadata (careful about any values that may already be present)
+                    if instances[idx].metadata is None:
+                        instances[idx].metadata = {}
+
+                    if SCORE_COMPONENT_KEY not in instances[idx].metadata:
+                        instances[idx].metadata[SCORE_COMPONENT_KEY] = []
+
+                    instances[idx].metadata[SCORE_COMPONENT_KEY].append({
+                        "index": scorer_idx,
+                        "name": scorer_name,
+                        "weight": weight,
+                        "score": score,
+                        "ref_score": float(scores_with_ref[0]) if ref_instance is not None else None,
+                    })
+            else:
+                # need to write it this slightly ugly way or linter complains about type of scorer in if clause
+                all_scores_applied = False
+
+        # attach full score to instances (in-place) if we could compute all components
+        if all_scores_applied:
+            for idx, score in enumerate(weighted_score_sum):
+                instances[idx].score = score
+
     def generate(
         self,
         num_designs: int,
@@ -502,6 +576,9 @@ class GibbsSampler(Generator):
 
         # auxiliary variables for fancy indexing into design array
         alphabet_array = np.array(alphabet)
+        alphabet_map = {
+            symbol: idx for idx, symbol in enumerate(alphabet_array)
+        }
         design_idx_all = np.arange(num_designs)
 
         # initialize samples for all designed chains, we represent these as numpy arrays
@@ -536,7 +613,7 @@ class GibbsSampler(Generator):
         if self.record_full_chain:
             updates = np.empty(
                 (self.num_sweeps * num_steps, num_designs),
-                dtype=[(_ENTITY, int), (_POS, int), (_TO, "<U1")]
+                dtype=[(_ENTITY, int), (_POS, int), (_TO, "<U1"), (_SCORE_DIFF, float), (_TEMPERATURE, float)]
             )
         else:
             updates = None
@@ -605,6 +682,15 @@ class GibbsSampler(Generator):
 
                 # Gibbs step
 
+                # keep track of token before update for chain tracking, and remap to numeric indices
+                current_tokens = samples[
+                    design_idx_all,
+                    entity_to_array_idx_linear[step_ent],
+                    step_pos - entity_to_first_index_linear[step_ent],
+                ].copy()
+
+                current_token_idx = map_array(current_tokens, alphabet_map)
+
                 # replace any missing values to exclude from sampling, and scale by temperature for current step;
                 # Note we are using an inverted scale here (e.g. not -E/T but E/T where higher E means "better");
                 # we go through pytorch here to use the parallelized multinomial implementation which is much
@@ -617,9 +703,14 @@ class GibbsSampler(Generator):
 
                 sampled_token_idx = torch.multinomial(
                     p, num_samples=1
-                ).flatten().numpy()
+                ).flatten()
 
-                sampled_tokens = alphabet_array[sampled_token_idx]
+                sampled_tokens = alphabet_array[sampled_token_idx.numpy()]
+
+                # compute temperature-scaled score difference to current token
+                score_diff = (
+                    scores_scaled[design_idx_all, sampled_token_idx] - scores_scaled[design_idx_all, current_token_idx]
+                )
 
                 # update sample matrix and instances for next step
                 assert len(design_idx_all) == len(step_ent) == len(step_pos) == len(sampled_tokens)
@@ -630,6 +721,10 @@ class GibbsSampler(Generator):
                     entity_to_array_idx_linear[step_ent],
                     step_pos - entity_to_first_index_linear[step_ent],
                 ] = sampled_tokens
+
+                logger.info(
+                    f"Gibbs sweep={sweep + 1}/{self.num_sweeps} step={step + 1}/{num_steps} T={step_temp:.3f}"
+                )
 
                 # update instances based on new design matrix
                 instances, _ = self._build_or_update_instances(
@@ -648,16 +743,21 @@ class GibbsSampler(Generator):
                     updates[_ENTITY][cur_iter, :] = step_ent
                     updates[_POS][cur_iter, :] = step_pos
                     updates[_TO][cur_iter, :] = sampled_tokens
+                    updates[_SCORE_DIFF][cur_iter, :] = score_diff
+                    updates[_TEMPERATURE][cur_iter, :] = step_temp
 
         # attach metadata to instances
         if updates is not None:
             for design_idx in range(num_designs):
                 instances[design_idx].metadata = {
                     "init": {
-                        entity_idx: initial_samples_joined[entity_idx][design_idx]
+                        entity_idx: "".join(initial_samples_joined[entity_idx][design_idx])
                         for entity_idx in entities
                     },
                     "chain": updates[:, design_idx].tolist()
                 }
+
+        # score final designs (modifying in place)
+        self._score_designs(instances)
 
         return instances
