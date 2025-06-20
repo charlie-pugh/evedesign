@@ -8,6 +8,7 @@ import multiprocessing as mp
 from typing import Sequence, Literal
 import pandas as pd
 from dnachisel import NoSolutionError
+from loguru import logger
 
 from protdesign.synthesis import ProteinToDnaOptimizer, CodonUsageTable
 
@@ -92,8 +93,6 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                 "dnachisel or biopython package could not be imported. Are they already installed?"
             )
 
-        self.genetic_code = genetic_code
-
         if method not in OPTIMIZATION_METHODS:
             raise ValueError(
                 f"Invalid optimization method, valid options are {OPTIMIZATION_METHODS} "
@@ -106,6 +105,10 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
             raise ValueError(
                 f"Invalid codon table, valid options are {dc.biotools.CODON_TABLE_NAMES}"
             )
+
+        self.genetic_code = genetic_code
+        self.start_codons = unambiguous_dna_by_name[self.genetic_code].start_codons
+        self.stop_codons =  unambiguous_dna_by_name[self.genetic_code].stop_codons
 
         # retrieve explicit codon table as dictionary right away so we can verify against genetic code
         if isinstance(codon_usage_table, str):
@@ -430,6 +433,15 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         # make sure all sequences are uppercase to simplify later handling
         upstream_dna = upstream_dna.upper()
         downstream_dna = downstream_dna.upper()
+
+        # check if upstream/downstream DNA includes start and stop codons, respectively;
+        # if not, warn the user (this may however be a valid input if trying to insert
+        # into a larger ORF)
+        if not any([upstream_dna.endswith(codon) for codon in self.start_codons]):
+            logger.warning("upstream_dna does not contain a start codon. Is this intentional?")
+
+        if not any([downstream_dna.startswith(codon) for codon in self.stop_codons]):
+            logger.warning("downstream_dna does not contain a stop codon. Is this intentional?")
 
         # validate provided instances
         [
