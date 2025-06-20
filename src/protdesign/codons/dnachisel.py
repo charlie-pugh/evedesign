@@ -47,10 +47,9 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         gc_window: int | None = 30,
         max_homopolymer_length: int | None = 5,
         max_repeat_length: int | None = 9,
+        avoid_hairpins: bool = True,
         genetic_code: str = "Standard",
-        extra_constraints: Sequence[dc.Specification] | None = (
-            dc.AvoidHairpins(),
-        ),
+        extra_constraints: Sequence[dc.Specification] | None = None,
         cpu: int = 1,
     ):
         """
@@ -134,22 +133,9 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         else:
             self.specifications = []
 
-        # quantitative specifications added to optimization (not enforced as strict constraints)
-        self.quant_specifications = []
-
-        if max_homopolymer_length is not None:
-            for nuc in ["A", "C", "G", "T"]:
-                # add 1 to length as max_homopolymer_length is maximum *acceptable* length
-                self.specifications.append(
-                    dc.AvoidPattern(dc.HomopolymerPattern(nuc, max_homopolymer_length + 1))
-                )
-
-        if max_repeat_length is not None:
-            # note this will not be confined to a specific location and will also consider
-            # upstream_dna and downstream_dna
-            self.quant_specifications.append(
-                dc.AvoidPattern(dc.RepeatedKmerPattern(2, max_repeat_length + 1))
-            )
+        self.max_homopolymer_length = max_homopolymer_length
+        self.max_repeat_length = max_repeat_length
+        self.avoid_hairpins = avoid_hairpins
 
         if (gc_min is None and gc_max is not None) or (gc_min is not None and gc_max is None):
             raise ValueError(
@@ -162,9 +148,9 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                     "GC content specification must be 0 <= gc_min < gc_max <= 1"
                 )
 
-            self.specifications.append(
-                dc.EnforceGCContent(mini=gc_min, maxi=gc_max, window=gc_window)
-            )
+        self.gc_min = gc_min
+        self.gc_max = gc_max
+        self.gc_window = gc_window
 
         if avoid_sites is not None:
             for site in avoid_sites:
@@ -235,6 +221,7 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         seq_dna_start = len(upstream_dna)
         seq_dna_end = len(upstream_dna) + len(seq_dna)
         seq_dna_loc = (seq_dna_start, seq_dna_end)
+        seq_dna_loc_both_strands = (*seq_dna_loc, 0)
 
         # fix codons based on reference sequence if specified
         fixed_codon_constraints = []
@@ -320,8 +307,42 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                 # match pattern on both strands (0) in optimized region, "localized" function in code indicates
                 # this takes partially overlapping matches into account as well
                 seq_constraints.append(
-                    dc.AvoidPattern(dc.EnzymeSitePattern(site), location=(*seq_dna_loc, 0))
+                    dc.AvoidPattern(dc.EnzymeSitePattern(site), location=seq_dna_loc_both_strands)
                 )
+
+        if self.max_homopolymer_length is not None:
+            for nuc in ["A", "C", "G", "T"]:
+                # add 1 to length as max_homopolymer_length is maximum *acceptable* length
+                seq_constraints.append(
+                    dc.AvoidPattern(
+                        dc.HomopolymerPattern(nuc, self.max_homopolymer_length + 1),
+                        location=seq_dna_loc_both_strands
+                    )
+                )
+
+        if self.max_repeat_length is not None:
+            seq_constraints.append(
+                dc.AvoidPattern(
+                    dc.RepeatedKmerPattern(2, self.max_repeat_length + 1),
+                    location=seq_dna_loc_both_strands
+                )
+            )
+
+        if self.avoid_hairpins:
+            seq_constraints.append(
+                dc.AvoidHairpins(location=seq_dna_loc_both_strands)
+            )
+
+        # restraints
+        quant_specifications = []
+
+        # both min/max or neither specified
+        if self.gc_min is not None and self.gc_max is not None:
+            quant_specifications.append(
+                dc.EnforceGCContent(
+                    mini=self.gc_min, maxi=self.gc_max, window=self.gc_window, location=seq_dna_loc_both_strands
+                )
+            )
 
         problem = dc.DnaOptimizationProblem(
             sequence=full_dna,
@@ -330,7 +351,7 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                 codon_usage_table=self.codon_table,
                 method=self.method,
                 location=seq_dna_loc,
-            )] + self.quant_specifications,
+            )] + quant_specifications,
             logger=None
         )
 
@@ -438,10 +459,10 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         # if not, warn the user (this may however be a valid input if trying to insert
         # into a larger ORF)
         if not any([upstream_dna.endswith(codon) for codon in self.start_codons]):
-            logger.warning("upstream_dna does not contain a start codon. Is this intentional?")
+            logger.warning("upstream_dna does not end with a start codon. Is this intentional?")
 
         if not any([downstream_dna.startswith(codon) for codon in self.stop_codons]):
-            logger.warning("downstream_dna does not contain a stop codon. Is this intentional?")
+            logger.warning("downstream_dna does not start with a stop codon. Is this intentional?")
 
         # validate provided instances
         [
