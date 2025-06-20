@@ -163,18 +163,14 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                 dc.EnforceGCContent(mini=gc_min, maxi=gc_max, window=gc_window)
             )
 
-        if avoid_sites is not None and len(avoid_sites) > 0:
+        if avoid_sites is not None:
             for site in avoid_sites:
                 if site not in rest_dict:
                     raise ValueError(
                         f"Restriction site {site} not available through biopython rest_dict"
                     )
 
-                # explicitly specify we match to both strands for clarity even though defaults
-                # to "both" internally
-                self.specifications.append(
-                    dc.AvoidPattern(dc.EnzymeSitePattern(site), strand="both")
-                )
+        self.avoid_sites = avoid_sites
 
         # Number of CPUs to use for parallelization
         if not cpu >= 1:
@@ -313,6 +309,16 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
                 location=(seq_dna_end, len(full_dna)),
             )
         ]
+
+        # apply restriction enzyme site constraints only to optimized sequence, as these sites
+        # may by design occur in the upstream/downstream sequences
+        if self.avoid_sites is not None:
+            for site in self.avoid_sites:
+                # match pattern on both strands (0) in optimized region, "localized" function in code indicates
+                # this takes partially overlapping matches into account as well
+                seq_constraints.append(
+                    dc.AvoidPattern(dc.EnzymeSitePattern(site), location=(*seq_dna_loc, 0))
+                )
 
         problem = dc.DnaOptimizationProblem(
             sequence=full_dna,
