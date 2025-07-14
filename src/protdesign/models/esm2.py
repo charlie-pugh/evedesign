@@ -12,7 +12,7 @@ from protdesign.model import (
 )
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.utils import model_param_context
-from protdesign.types import DeviceType, StatusCallback, BatchSize, Status
+from protdesign.types import DeviceType, StatusCallback, BatchSize
 from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
 
 try:
@@ -71,7 +71,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         self.model_name = model_name
         self.model_dir_path = Path(
-            model_dir_path) if model_dir_path is not None else None
+            model_dir_path
+        ) if model_dir_path is not None else None
         self.keep_model_after_build = keep_model_after_build
         self.keep_model_after_pred = True
         self.device = device
@@ -462,7 +463,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                 # Tokenize and create masked input
                 inputs = self.tokenizer(
-                    instance_seq, return_tensors="pt").to(self.device)
+                    instance_seq, return_tensors="pt"
+                ).to(self.device)
                 masked_inputs = inputs.copy()
 
                 # Mask the position we want to predict
@@ -477,7 +479,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                     # Convert logits to log probabilities for the masked position
                     pos_log_probs = torch.log_softmax(
-                        masked_logits[token_idx], dim=-1)
+                        masked_logits[token_idx], dim=-1
+                    )
 
                     # Score each possible substitution
                     mut_scores = {}
@@ -512,7 +515,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 if status_callback:
                     progress = (len(mutation_effects) / len(positions)) * 100
                     status_callback(
-                        Status.RUNNING, progress, f"Processing position {pos}: {progress:.1f}% complete")
+                        "running", progress, f"Processing position {pos}: {progress:.1f}% complete"
+                    )
 
         # Convert to dataframe with proper index format
         df = pd.DataFrame(mutation_effects)
@@ -554,14 +558,16 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 # Process positions in batches
                 for batch_start in range(0, len(position_list), self.batch_size):
                     batch_end = min(
-                        batch_start + self.batch_size, len(position_list))
+                        batch_start + self.batch_size, len(position_list)
+                    )
                     batch_positions = position_list[batch_start:batch_end]
 
                     if status_callback:
                         # First 50% for position processing
                         progress = (batch_start / len(position_list)) * 50
                         status_callback(
-                            Status.RUNNING, progress, f"Computing masked probabilities batch {batch_start//self.batch_size + 1}")
+                            "running", progress, f"Computing masked probabilities batch {batch_start//self.batch_size + 1}"
+                        )
 
                     # Create masked sequences for this batch
                     masked_seqs = []
@@ -585,8 +591,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                     for batch_idx, pos_idx in enumerate(batch_positions):
                         # Find mask token position in this sequence
                         mask_token_id = self.tokenizer.mask_token_id
-                        mask_positions = (batch_inputs.input_ids[batch_idx] == mask_token_id).nonzero(
-                            as_tuple=True)[0]
+                        mask_positions = (batch_inputs.input_ids[batch_idx] == mask_token_id).nonzero(  # noqa
+                            as_tuple=True
+                        )[0]
 
                         if len(mask_positions) > 0:
                             mask_pos = mask_positions[0]
@@ -603,9 +610,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 if status_callback:
                     # Second 50% for mutant scoring
                     progress = 50 + ((i + 1) / len(mutants)) * 50
-                    from protdesign.types import Status
-                    status_callback(Status.RUNNING, progress,
-                                    f"Scoring mutant {i + 1}/{len(mutants)}")
+                    status_callback(
+                        "running", progress, f"Scoring mutant {i + 1}/{len(mutants)}"
+                    )
 
                 total_score = 0.0
 
@@ -683,7 +690,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 if status_callback:
                     progress = (batch_start / len(seqs)) * 100
                     status_callback(
-                        Status.RUNNING, progress, f"Processing batch {batch_start//self.batch_size + 1}")
+                        "running", progress, f"Processing batch {batch_start//self.batch_size + 1}"
+                    )
 
                 # Create masked sequences for this batch
                 masked_seqs = []
@@ -708,12 +716,13 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                     # Process each sequence in the batch
                     for batch_idx, (orig_idx, pos, entity) in enumerate(
-                            zip(batch_indices, batch_positions, batch_entities)
+                        zip(batch_indices, batch_positions, batch_entities)
                     ):
                         # Find the position of the mask token in this sequence
                         mask_token_id = self.tokenizer.mask_token_id
-                        mask_positions = (inputs.input_ids[batch_idx] == mask_token_id).nonzero(
-                            as_tuple=True)[0]
+                        mask_positions = (inputs.input_ids[batch_idx] == mask_token_id).nonzero(  # noqa
+                            as_tuple=True
+                        )[0]
 
                         if len(mask_positions) == 0:
                             raise ValueError(
