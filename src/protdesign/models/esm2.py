@@ -70,7 +70,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             )
 
         self.model_name = model_name
-        self.model_dir_path = Path(model_dir_path) if model_dir_path is not None else None
+        self.model_dir_path = Path(
+            model_dir_path
+        ) if model_dir_path is not None else None
         self.keep_model_after_build = keep_model_after_build
         self.keep_model_after_pred = True
         self.device = device
@@ -421,7 +423,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         status_callback: StatusCallback | None = None
     ) -> pd.DataFrame:
         """
-        Perform a single mutation scan for the given instance using the Wildtype marginal probability approach
+        Perform a single mutation scan for the given instance using the Masked marginal probability approach
         """
         self.ready_or_raise()
         self._validate_instances([instance])
@@ -451,29 +453,34 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             mutation_effects = []
 
-            # Prepare reference sequence with tokenizer
-            inputs = self.tokenizer(
-                instance_seq, return_tensors="pt").to(self.device)
+            # For each position to scan
+            for pos in positions:
+                pos_idx = pos - target.first_index
+                wt_aa = instance_seq[pos_idx]
 
-            # Calculate reference probabilities with a single forward pass
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                ref_logits = outputs.logits[0]
+                # Adjust for tokenizer offsets (assuming 1-to-1 mapping + 1 for start token)
+                token_idx = pos_idx + 1
 
-                # Convert logits to log probabilities
-                ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
+                # Tokenize and create masked input
+                inputs = self.tokenizer(
+                    instance_seq, return_tensors="pt"
+                ).to(self.device)
+                masked_inputs = inputs.copy()
 
-                # For each position to scan
-                for pos in positions:
-                    pos_idx = pos - target.first_index
-                    wt_aa = instance_seq[pos_idx]
+                # Mask the position we want to predict
+                # Get mask token id from tokenizer
+                mask_token_id = self.tokenizer.mask_token_id
+                masked_inputs['input_ids'][0, token_idx] = mask_token_id
 
-                    # Adjust for tokenizer offsets (assuming 1-to-1 mapping + 1 for start token)
+                # Forward pass with masked input
+                with torch.no_grad():
+                    outputs = self.model(**masked_inputs)
+                    masked_logits = outputs.logits[0]
 
-                    token_idx = pos_idx + 1
-
-                    # Extract log probabilities for all amino acids at this position
-                    pos_log_probs = ref_log_probs[token_idx]
+                    # Convert logits to log probabilities for the masked position
+                    pos_log_probs = torch.log_softmax(
+                        masked_logits[token_idx], dim=-1
+                    )
 
                     # Score each possible substitution
                     mut_scores = {}
@@ -490,8 +497,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         aa_token = self.tokenizer.convert_tokens_to_ids(aa)
                         wt_token = self.tokenizer.convert_tokens_to_ids(wt_aa)
 
-                        # For wildtype marginal probability, calculate:
-                        # -log(p(mut_aa)) + log(p(wt_aa))
+                        # For masked marginal probability, calculate:
+                        # log(p(mut_aa | masked_context)) - log(p(wt_aa | masked_context))
                         score_diff = (pos_log_probs[aa_token].item() -
                                       pos_log_probs[wt_token].item())
 
@@ -503,6 +510,13 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         'ref': wt_aa,
                         **mut_scores
                     })
+
+                # Update status callback if provided
+                if status_callback:
+                    progress = (len(mutation_effects) / len(positions)) * 100
+                    status_callback(
+                        "running", progress, f"Processing position {pos}: {progress:.1f}% complete"
+                    )
 
         # Convert to dataframe with proper index format
         df = pd.DataFrame(mutation_effects)
@@ -529,45 +543,102 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         instance_seq = "".join(instance_seq)
 
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            # Score reference sequence with a single forward pass
-            inputs = self.tokenizer(
-                instance_seq, return_tensors="pt"
-            ).to(self.device)
+            # Get all unique positions that will be mutated
+            mutated_positions = set()
+            for mutant in mutants:
+                for sub in mutant:
+                    pos_idx = sub.pos - target.first_index
+                    mutated_positions.add(pos_idx)
+
+            # Pre-compute masked probabilities for each position that will be mutated
+            position_log_probs = {}
+            position_list = list(mutated_positions)
 
             with torch.no_grad():
-                outputs = self.model(**inputs)
-                ref_logits = outputs.logits[0]
-                ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
+                # Process positions in batches
+                for batch_start in range(0, len(position_list), self.batch_size):
+                    batch_end = min(
+                        batch_start + self.batch_size, len(position_list)
+                    )
+                    batch_positions = position_list[batch_start:batch_end]
 
-                # Calculate scores for all mutants using the reference probabilities
-                mutant_scores = []
-                for mutant in mutants:
-                    total_score = 0.0
+                    if status_callback:
+                        # First 50% for position processing
+                        progress = (batch_start / len(position_list)) * 50
+                        status_callback(
+                            "running", progress, f"Computing masked probabilities batch {batch_start//self.batch_size + 1}"
+                        )
 
-                    for sub in mutant:
-                        pos_idx = sub.pos - target.first_index
-                        wt_aa = instance_seq[pos_idx]
-                        mut_aa = sub.to
+                    # Create masked sequences for this batch
+                    masked_seqs = []
+                    for pos_idx in batch_positions:
+                        masked_seq = list(instance_seq)
+                        masked_seq[pos_idx] = self.tokenizer.mask_token
+                        masked_seqs.append("".join(masked_seq))
 
-                        if wt_aa == mut_aa:
-                            continue  # No change in score for unchanged positions
+                    # Tokenize batch
+                    batch_inputs = self.tokenizer(
+                        masked_seqs,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True
+                    ).to(self.device)
 
-                        # Adjust for tokenizer offsets
-                        token_pos = pos_idx + 1  # +1 for start token
+                    # Single forward pass for batch
+                    outputs = self.model(**batch_inputs)
 
-                        # Get token IDs
-                        wt_token = self.tokenizer.convert_tokens_to_ids(wt_aa)
-                        mut_token = self.tokenizer.convert_tokens_to_ids(
-                            mut_aa)
+                    # Extract probabilities for each position in the batch
+                    for batch_idx, pos_idx in enumerate(batch_positions):
+                        # Find mask token position in this sequence
+                        mask_token_id = self.tokenizer.mask_token_id
+                        mask_positions = (batch_inputs.input_ids[batch_idx] == mask_token_id).nonzero(  # noqa
+                            as_tuple=True
+                        )[0]
 
-                        # Calculate score difference for this mutation
-                        wt_log_prob = ref_log_probs[token_pos, wt_token].item()
-                        mut_log_prob = ref_log_probs[token_pos, mut_token].item()
+                        if len(mask_positions) > 0:
+                            mask_pos = mask_positions[0]
+                            logits = outputs.logits[batch_idx, mask_pos]
+                            log_probs = torch.log_softmax(logits, dim=-1)
+                            position_log_probs[pos_idx] = log_probs
+                        else:
+                            raise ValueError(
+                                f"Mask token not found for position {pos_idx}")
 
-                        score_diff = (mut_log_prob - wt_log_prob)
-                        total_score += score_diff
+            # Calculate scores for all mutants using the pre-computed masked probabilities
+            mutant_scores = []
+            for i, mutant in enumerate(mutants):
+                if status_callback:
+                    # Second 50% for mutant scoring
+                    progress = 50 + ((i + 1) / len(mutants)) * 50
+                    status_callback(
+                        "running", progress, f"Scoring mutant {i + 1}/{len(mutants)}"
+                    )
 
-                    mutant_scores.append(total_score)
+                total_score = 0.0
+
+                for sub in mutant:
+                    pos_idx = sub.pos - target.first_index
+                    wt_aa = instance_seq[pos_idx]
+                    mut_aa = sub.to
+
+                    if wt_aa == mut_aa:
+                        continue  # No change in score for unchanged positions
+
+                    # Get token IDs
+                    wt_token = self.tokenizer.convert_tokens_to_ids(wt_aa)
+                    mut_token = self.tokenizer.convert_tokens_to_ids(mut_aa)
+
+                    # Get the pre-computed log probabilities for this position
+                    log_probs = position_log_probs[pos_idx]
+
+                    # Calculate score difference for this mutation
+                    wt_log_prob = log_probs[wt_token].item()
+                    mut_log_prob = log_probs[mut_token].item()
+
+                    score_diff = (mut_log_prob - wt_log_prob)
+                    total_score += score_diff
+
+                mutant_scores.append(total_score)
 
         return np.array(mutant_scores)
 
@@ -580,7 +651,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     ) -> pd.DataFrame:
         """
         Score conditional probabilities for specified positions in the sequences
-        with batching for efficiency
+        using masked-marginals approach with batching for efficiency
         """
         self.ready_or_raise()
         self._validate_instances(instances)
@@ -608,35 +679,63 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
             conditionals_list = []
 
-            # Process in batches
+            # Process in batches for efficiency
             for batch_start in range(0, len(seqs), self.batch_size):
-                batch_end = min(
-                    batch_start + self.batch_size, len(seqs)
-                )
+                batch_end = min(batch_start + self.batch_size, len(seqs))
                 batch_seqs = seqs[batch_start:batch_end]
                 batch_positions = positions[batch_start:batch_end]
-                batch_indices = list(range(batch_start, batch_end))
                 batch_entities = entities[batch_start:batch_end]
+                batch_indices = list(range(batch_start, batch_end))
 
-                # Prepare batch data with tokenizer
+                if status_callback:
+                    progress = (batch_start / len(seqs)) * 100
+                    status_callback(
+                        "running", progress, f"Processing batch {batch_start//self.batch_size + 1}"
+                    )
+
+                # Create masked sequences for this batch
+                masked_seqs = []
+                for seq, pos in zip(batch_seqs, batch_positions):
+                    pos_idx = pos - target.first_index
+                    seq_list = list(seq)
+                    seq_list[pos_idx] = self.tokenizer.mask_token
+                    masked_seqs.append("".join(seq_list))
+
+                # Tokenize all masked sequences in the batch
                 inputs = self.tokenizer(
-                    batch_seqs, return_tensors="pt", padding=True
+                    masked_seqs,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True
                 ).to(self.device)
 
                 with torch.no_grad():
-                    # Forward pass for the entire batch
+                    # Single forward pass for the entire batch
                     outputs = self.model(**inputs)
                     logits = outputs.logits
 
                     # Process each sequence in the batch
                     for batch_idx, (orig_idx, pos, entity) in enumerate(
-                            zip(batch_indices, batch_positions, batch_entities)
+                        zip(batch_indices, batch_positions, batch_entities)
                     ):
-                        pos_idx = pos - target.first_index
+                        # Find the position of the mask token in this sequence
+                        mask_token_id = self.tokenizer.mask_token_id
+                        mask_positions = (inputs.input_ids[batch_idx] == mask_token_id).nonzero(  # noqa
+                            as_tuple=True
+                        )[0]
 
-                        # Get logits for this position (adjust for tokenizer offsets)
-                        token_idx = pos_idx + 1  # +1 for start token
-                        pos_logits = logits[batch_idx, token_idx]
+                        if len(mask_positions) == 0:
+                            raise ValueError(
+                                f"Mask token not found in sequence {orig_idx}")
+
+                        # Take first mask position
+                        mask_pos = mask_positions[0]
+
+                        # Get logits for the masked position
+                        pos_logits = logits[batch_idx, mask_pos]
+
+                        # Apply log softmax to get log probabilities
+                        log_probs = torch.log_softmax(pos_logits, dim=-1)
 
                         # Convert to amino acid probabilities
                         aa_probs = {}
@@ -644,8 +743,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                             if aa == '-':  # Skip gap character
                                 aa_probs[aa] = 0.0
                             else:
-                                aa_token = self.tokenizer.convert_tokens_to_ids(aa)
-                                aa_probs[aa] = pos_logits[aa_token].item()
+                                aa_token_id = self.tokenizer.convert_tokens_to_ids(
+                                    aa)
+                                aa_probs[aa] = log_probs[aa_token_id].item()
 
                         # Store results
                         conditionals_list.append({
@@ -724,7 +824,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         seq_len = len(self.tokenizer.encode(sequences[i])) - 2
 
                         # Store the embedding (excluding the first token which is the start token)
-                        new_entity.embedding = hidden_states[i, 1:seq_len+1].cpu().numpy()
+                        new_entity.embedding = hidden_states[i,
+                                                             1:seq_len+1].cpu().numpy()
                         # Replace the entity instance in copied system instance
                         new_instance.data = [new_entity]
 
