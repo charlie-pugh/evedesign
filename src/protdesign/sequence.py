@@ -1,11 +1,15 @@
 """
 Biopolymer sequence functionality (protein sequences etc.)
 """
+from string import ascii_lowercase
 from typing import Any, List, Literal, Self, TextIO, Tuple
 from collections import abc
 from protdesign.constants import MASK
 from protdesign.types import BioPolymer, RepSequence
 from protdesign.utils import shorten
+
+
+REMOVE_INSERTIONS_TRANSLATION = str.maketrans("", "", ascii_lowercase)
 
 
 class Sequence:
@@ -80,6 +84,38 @@ class Sequence:
             id=serialized_seq.get("id"),
             key=serialized_seq.get("key"),
             type=serialized_seq.get("type"),
+        )
+
+    def remove_insertions(self) -> Self:
+        """
+        Return updated version of sequence with any insertions (lowercase letters)
+        removed
+
+        Returns
+        -------
+        Updated sequence without insertions
+        """
+        return type(self)(
+            seq=self.seq.translate(REMOVE_INSERTIONS_TRANSLATION),
+            id=self.id_,
+            key=self.key,
+            type=self.type_,
+        )
+
+    def dealign(self) -> Self:
+        """
+        Remove alignment information from sequence (removing gaps,
+        converting insert positions to uppercase letters)
+
+        Returns
+        -------
+        Dealigned sequence
+        """
+        return type(self)(
+            seq=self.seq.replace("-", "").upper(),
+            id=self.id_,
+            key=self.key,
+            type=self.type_,
         )
 
 

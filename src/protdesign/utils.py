@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from collections import defaultdict
 from typing import Callable, Sequence, TypeVar, Mapping
 import numpy as np
 from protdesign.types import StatusCallback
@@ -93,3 +94,36 @@ def map_array(x: np.ndarray, map_: Mapping) -> np.ndarray:
     return np.vectorize(
         map_.__getitem__
     )(x)
+
+def index_map(options: list[any], default_option: any = None, default_value: int | None = None):
+    """
+    Create mapping from a list of options to integer indices (typically used with map_array above)
+
+    Parameters
+    ----------
+    options
+        Discrete list of hashable options (e.g. strings)
+    default_option
+        If specified, return the index associated with this option by default if mapping something that is not
+        contained in options. Takes precendence over default_value.
+    default_value
+        If specified, return this number as default if mapping something that is not
+        contained in options. Will be overriden by default_option if also specified.
+
+    Returns
+    -------
+
+    """
+    mapping = {
+        symbol: idx for idx, symbol in enumerate(options)
+    }
+
+    if default_option is None and default_value is None:
+        return mapping
+    else:
+        if default_option is not None:
+            default = mapping[default_option]
+        else:
+            default = default_value
+
+        return defaultdict(lambda: default, mapping)
