@@ -1,4 +1,4 @@
-from typing import Literal, Callable, Any, Dict, TypedDict, NotRequired
+from typing import Literal, Callable, Any, TypedDict, NotRequired
 import numpy as np
 
 BioPolymers = {"protein", "dna", "rna"}
@@ -29,6 +29,11 @@ class Metadata(TypedDict):
     scores: NotRequired[list[Score]]
     design_chain: NotRequired[DesignChain]
     seqspace_projection: NotRequired[list[float]]
+
+
+class SequenceMetadata(TypedDict):
+    seqspace_projection: NotRequired[list[float]]
+    # TODO: add taxonomy information once exact data structure is clear
 
 
 # status, progress (optional), message (optional)

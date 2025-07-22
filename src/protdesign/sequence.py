@@ -5,7 +5,7 @@ from string import ascii_lowercase
 from typing import Any, List, Literal, Self, TextIO, Tuple
 from collections import abc
 from protdesign.constants import MASK
-from protdesign.types import BioPolymer, RepSequence
+from protdesign.types import BioPolymer, RepSequence, SequenceMetadata
 from protdesign.utils import shorten
 
 
@@ -25,6 +25,7 @@ class Sequence:
         id: str | None = None,  # noqa
         key: str | None = None,
         type: BioPolymer = "protein",  # noqa
+        metadata: SequenceMetadata | None = None,
     ):
         """
         Create new sequence object
@@ -39,11 +40,14 @@ class Sequence:
             Key for matching sequence to other resources (e.g. paired alignment)
         type
             Type of biopolymer sequence (protein, rna, dna, ...)
+        metadata
+            Optional sequence metadata (embeddings, taxonomy, ...)
         """
         self.seq = seq
         self.id_ = id
         self.key = key
         self.type_ = type
+        self.metadata = metadata
 
     def __repr__(self) -> str:
         return (
@@ -63,6 +67,7 @@ class Sequence:
             "id": self.id_,
             "key": self.key,
             "type": self.type_,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -84,6 +89,7 @@ class Sequence:
             id=serialized_seq.get("id"),
             key=serialized_seq.get("key"),
             type=serialized_seq.get("type"),
+            metadata=serialized_seq.get("metadata")
         )
 
     def remove_insertions(self) -> Self:
@@ -100,6 +106,7 @@ class Sequence:
             id=self.id_,
             key=self.key,
             type=self.type_,
+            metadata=self.metadata.copy() if self.metadata is not None else None
         )
 
     def dealign(self) -> Self:
@@ -116,6 +123,7 @@ class Sequence:
             id=self.id_,
             key=self.key,
             type=self.type_,
+            metadata=self.metadata.copy() if self.metadata is not None else None
         )
 
 

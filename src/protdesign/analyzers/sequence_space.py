@@ -172,7 +172,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
         instances
             Instances from which sequences will be collected
         entities
-            Index of entities for which sequences will be collected
+            Indices of entities for which sequences will be collected
         require_aligned
             If True, requires that all instance and system sequences are aligned (same number of match states)
 
@@ -243,11 +243,12 @@ class SequenceSpaceProjection(Analyzer, ABC):
         # return assembled sequences per entity
         return all_seqs
 
-    def _add_projections(
+    def add_projections(
         self,
-        system,
-        instances,
-        projections
+        system: System,
+        instances: Sequence[SystemInstance],
+        entities: list[int],
+        projections: np.ndarray,
     ) -> tuple[System, Sequence[SystemInstance]]:
         """
         Add projections as metadata to system and instances
@@ -258,6 +259,8 @@ class SequenceSpaceProjection(Analyzer, ABC):
             System to which analysis results will be attached
         instances
             Instances to which analysis results will be attached
+        entities:
+            Indices of entities for which sequences will be collected
         projections
             Projections that will be attached to system and instances
 
@@ -284,9 +287,19 @@ class SequenceSpaceProjection(Analyzer, ABC):
 
             inst.metadata[SEQSPACE_PROJECTION_COMPONENT_KEY] = instance_projections[idx, :].tolist()
 
-        updated_system = system  # TODO: perform copy
+        # deep copy of system, then attach metadata
+        updated_system = system.copy()
         if system_projections is not None:
-            print(system_projections.shape) # TODO: add projection
+            # for now, only single entity projection if using system sequences
+            assert len(entities) == 1
+
+            for idx, seq in enumerate(
+                    updated_system[entities[0]].sequences.seqs
+            ):
+                if seq.metadata is None:
+                    seq.metadata = {}
+
+                seq.metadata[SEQSPACE_PROJECTION_COMPONENT_KEY] = system_projections[idx, :].tolist()
 
         return updated_system, updated_instances
 
@@ -369,7 +382,7 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         system: System,
         instances: Sequence[SystemInstance],
         entity: int | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
         """
         Perform sequence space projection analysis, returning results directly
         (e.g. for interactive analysis)
@@ -410,13 +423,13 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
             system, instances, entities, require_aligned=True
         )
 
-        # compute distance matirx
+        # compute distance matrix
         dist_matrix = self._distance_matrix(system, sequences)
 
         # perform projection
         projections = self._project(dist_matrix)
 
-        return dist_matrix, projections
+        return dist_matrix, projections, entities
 
     def analyze(
         self,
@@ -443,13 +456,13 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         (ii) SystemInstances
         """
         # validate entities, in particular fixed length requirement for this class
-        dist_matrix, projections = self.distances_and_projection(
+        dist_matrix, projections, entities = self.distances_and_projection(
             system, instances, entity
         )
 
         # add projection to shallow copy of system and instances
-        return self._add_projections(
-            system, instances, projections
+        return self.add_projections(
+            system, instances, entities, projections
         )
 
 
@@ -480,6 +493,7 @@ class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
             num_components=num_components,
             include_system_sequences=include_system_sequences,
         )
+
         self.mds_kwargs = mds_kwargs
 
     def _project(self, dist_matrix: np.ndarray):
@@ -524,13 +538,14 @@ class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):
         """
         if not self.available:
             raise ValueError(
-                "umap package is not available, please install"
+                "umap package is not available, please install first"
             )
 
         super().__init__(
             num_components=num_components,
             include_system_sequences=include_system_sequences,
         )
+
         self.umap_kwargs = umap_kwargs
 
     def _project(self, dist_matrix: np.ndarray):

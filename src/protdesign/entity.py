@@ -3,6 +3,7 @@ Specification of components of molecular design system (proteins, nucleic acids,
 """
 from collections import UserList
 from collections.abc import Sequence
+from copy import deepcopy
 from io import StringIO
 from typing import Mapping, NamedTuple, Self, Any
 import numpy as np
@@ -633,6 +634,16 @@ class System(UserList[Entity]):
         return cls([
             Entity.deserialize(entity) for entity in serialized_system
         ])
+
+    def copy(self) -> Self:
+        """
+        Create deep copy (for simplicity, usually system parts will not use too many resources) of system
+
+        Returns
+        -------
+        Deep copy of system
+        """
+        return deepcopy(self)
 
     def valid_instance(
         self,
