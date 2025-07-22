@@ -15,13 +15,11 @@ except ImportError:
     UMAP_AVAILABLE = False
 
 from protdesign.entity import System, SystemInstance
-from protdesign.types import EntityType
+from protdesign.types import EntityType, SEQSPACE_PROJECTION_COMPONENT_KEY
 from protdesign.utils import str_to_np_char_view, map_array, index_map
 
 # each element is (entity, list of sequences, number of system sequences at end of list)
 CollectedSequences = list[tuple[int, list[str], int]]
-
-SEQSPACE_PROJECTION_COMPONENT_KEY = "sequence_space_projection"
 
 
 @jit(nopython=True, parallel=True)
