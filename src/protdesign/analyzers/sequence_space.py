@@ -435,6 +435,7 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         self,
         system: System,
         instances: Sequence[SystemInstance],
+        data: None = None,
         entity: int | None = None
     ) -> tuple[System, Sequence[SystemInstance]]:
         """
@@ -446,6 +447,8 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
             System for which instances are provided
         instances
             Instances for which codon-optimized DNA sequences should be created
+        data
+            Not used, must be None
         entity
             Index of protein entity for which DNA sequence should be created
 
@@ -455,6 +458,11 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         (i) System (only updated if include_system_sequences is True)
         (ii) SystemInstances
         """
+        if data is not None:
+            raise ValueError(
+                "data argument must be None"
+            )
+
         # validate entities, in particular fixed length requirement for this class
         dist_matrix, projections, entities = self.distances_and_projection(
             system, instances, entity

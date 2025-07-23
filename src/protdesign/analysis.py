@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Any, Sequence
 from protdesign.entity import System, SystemInstance
 
 
@@ -14,6 +14,7 @@ class Analyzer(ABC):
         self,
         system: System,
         instances: Sequence[SystemInstance],
+        data: Any,
         entity: int | None = None,
     ) -> tuple[System, Sequence[SystemInstance]]:
         """
@@ -26,6 +27,8 @@ class Analyzer(ABC):
             System for which instances are provided
         instances
             Instances for which analysis should be performed
+        data
+            Arbitrary additional data specific to analysis that is not a descriptive property of system
         entity
             Index of entity that analysis should be applied to (if None, use all entities)
 
