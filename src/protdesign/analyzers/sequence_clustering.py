@@ -7,6 +7,7 @@ from pathlib import Path
 def cluster_sequences_mmseqs(
     sequences: list[str],
     target_num_clusters: int,
+    num_iterations: int = 10,
     priorities: list[float] | None = None,
     mmseqs_path: str = "mmseqs"
 ) -> tuple[list[int], list[int]]:
@@ -19,6 +20,9 @@ def cluster_sequences_mmseqs(
         Corresponds to what is supplied to shell script as input.fasta
     target_num_clusters
         Target number of clusters
+    num_iterations
+        Maximum number of binary search splits to get as close to target_num_clusters
+        as possible
     priorities
         Corresponds to priority.tsv; in same order as sequence list
     mmseqs_path
@@ -61,7 +65,7 @@ def cluster_sequences_mmseqs(
         best_diff = math.inf
         best_resdir = ""
 
-        for i in range(10):
+        for i in range(num_iterations):
             thr = round((low + high)/2, 2)
             thr_str = f"{thr:.2f}"
             resdir  = f"{base_res}_{thr_str.replace('.', '')}"
@@ -89,7 +93,7 @@ def cluster_sequences_mmseqs(
                 best_diff = diff
                 best_resdir = resdir
 
-                if diff <= target_num_clusters*0.01:
+                if diff <= target_num_clusters * 0.01:
                     break
 
             # Adjust search window
