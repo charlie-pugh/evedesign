@@ -33,7 +33,8 @@ class Metadata(TypedDict):
 
 class SequenceMetadata(TypedDict):
     seqspace_projection: NotRequired[list[float]]
-    # TODO: add taxonomy information once exact data structure is clear
+    taxonomy_id: NotRequired[int]
+    taxonomy_lineage: NotRequired[str]
 
 
 # status, progress (optional), message (optional)
