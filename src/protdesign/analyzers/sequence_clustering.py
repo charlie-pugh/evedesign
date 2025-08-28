@@ -55,14 +55,17 @@ def cluster_sequences_mmseqs(
         # Create MMseqs DB
         db = tempdir / "sequences.db"
         base_res  = tempdir / "res"
-        subprocess.run([mmseqs_path, "createdb", str(fasta), str(db)],   
-                       capture_output=True
-                       )
+        subprocess.run(
+            [mmseqs_path, "createdb", str(fasta), str(db)],
+            capture_output=True
+        )
         
         # Binary search on --min-seq-id
         low = 0.00
         high = 0.99
         best_diff = math.inf
+        best_thr = 0.0
+        best_count = 0
         best_resdir = ""
 
         for i in range(num_iterations):
@@ -77,7 +80,8 @@ def cluster_sequences_mmseqs(
                 resdir, 
                 str(tempdir),
                 "--min-seq-id", str(thr),
-                "--seq-id-mode", "2",
+                "--cluster-mode", "2", # chooses longest sequence in cluster as rep
+                "--cov-mode", "1", # enforces larger coverage of member sequences
                 "-c", "0.90",
             ]
             if priorities:
@@ -89,7 +93,11 @@ def cluster_sequences_mmseqs(
             count = sum(1 for _ in open(f"{resdir}.index", "rb"))
             diff  = abs(count - target_num_clusters)
 
+            # print(f"    → {count} clusters (target {target_num_clusters}; diff {diff} , best_diff {best_diff})")
+
             if diff < best_diff:
+                best_thr = thr
+                best_count = count
                 best_diff = diff
                 best_resdir = resdir
 
@@ -101,6 +109,8 @@ def cluster_sequences_mmseqs(
                 high = thr
             else:
                 low = thr
+
+        # print(f"==> Best: thr={best_thr} → {best_count} clusters")
 
         # Save best result to final directory
         subprocess.run([mmseqs_path, "mvdb", best_resdir, base_res], capture_output=True)
