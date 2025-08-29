@@ -2,11 +2,15 @@
 Functionality for reducing design dimensionality to analyze relationships between generated and natural sequences
 """
 from abc import ABC, abstractmethod
-from typing import Sequence
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Sequence, Literal
 import numpy as np
 from numba import prange, jit
-from protdesign.analysis import Analyzer
 from sklearn.manifold import MDS
+from protdesign.analysis import Analyzer
+from protdesign.analyzers.sequence_clustering import filter_sequences_mmseqs
 
 try:
     from umap import UMAP  # noqa
@@ -81,6 +85,128 @@ def hamming_distance_no_gaps(matrix, exclude_value):
             dist_matrix[j, i] = dist_norm
 
     return dist_matrix
+
+
+@jit(nopython=True, parallel=True)
+def hamming_distance_no_gaps_ref_vs_comp(matrix_ref, matrix_comp, exclude_value):
+    """
+    Calculate pairwise sequence distance NxM matrix between a reference (N entries)
+    and a comparison set (M entries) of sequences
+
+    The function will by default use the available number of threads
+    (as returned by numba.get_num_threads()). If a different number should
+    be used, the caller is responsible to set the number of threads with
+    numba.set_num_threads
+
+    Parameters
+    ----------
+    matrix_ref : np.array
+        N x L matrix containing N sequences of length L.
+        Matrix must be mapped to range(0, num_symbols)
+    matrix_comp : np.array
+        M x L matrix containing N sequences of length L.
+        Matrix must be mapped to range(0, num_symbols)
+    exclude_value : int
+        Value >= 0 in matrix that will be excluded from identity calculation, e.g. gap or lowercase character.
+        Set to -1 to enable legacy behaviour num_cluster_members_legacy which includes gaps in identity calculation.
+
+    Returns
+    -------
+    np.array
+        NxM distance matrix normalized to range 0 to 1
+    """
+    N, L = matrix_ref.shape  # noqa
+    M, L_comp = matrix_comp.shape  # noqa
+
+    if L != L_comp:
+        raise ValueError(
+            f"Sequences have differing lengths between reference and comparison set {L}vs {L_comp}"
+        )
+
+    # minimal cluster size is 1 (self) but for parallelization we set the self-hit below inside the loop
+    # and initialize to zero here
+    dist_matrix = np.zeros((N, M))
+
+    # compare all pairs of sequences; we cannot assume symmetry of the resulting matrix here due to exclusion of
+    # gaps (this is also convenient for parallelizing the outer loop); no speedup from using a separate function
+    # with regular range(N) in single-thread case so can always use this function
+
+    for i in prange(N):
+        # compare to all other sequences
+        for j in range(0, M):
+            # differences
+            dist = 0
+
+            # total number of pairs compared
+            pairs = 0
+
+            # compare all positions
+            for k in range(L):
+                if matrix_ref[i, k] != exclude_value and matrix_comp[j, k] != exclude_value:
+                    pairs += 1
+                    if matrix_ref[i, k] != matrix_comp[j, k]:
+                        dist += 1
+
+            # avoid potential division by zero
+            if pairs == 0:
+                pairs = 1
+
+            dist_norm = dist / pairs
+            dist_matrix[i, j] = dist_norm
+
+    return dist_matrix
+
+
+def distance_matrix_mmseqs_ref_vs_comp(
+    ref_sequences: list[str],
+    comp_sequences: list[str],
+    mmseqs_path: str = "mmseqs"
+) -> np.ndarray:
+    def write_fasta_dealigned(path: Path, seqs: list[str]):
+        with path.open("w") as f:
+            for i, sequence in enumerate(seqs):
+                f.write(
+                    f">{i}\n{sequence.replace('-', '').upper()}\n"
+                )
+
+    # 1) compute distance matrix of landmark_sequences x sequences
+    with tempfile.TemporaryDirectory() as tempdir:
+        tempdir = Path(tempdir)
+
+        # Write sequences to a temporary FASTA file
+        query_fa = tempdir / "ref_sequences.fasta"
+        target_fa = tempdir / "comp_sequences.fasta"
+        write_fasta_dealigned(query_fa, ref_sequences)
+        write_fasta_dealigned(target_fa, comp_sequences)
+
+        # MMseqs easy-search
+        res_tsv = tempdir / "search.tsv"
+        cmd = [
+            mmseqs_path,
+            "easy-search",
+            str(query_fa),
+            str(target_fa),
+            str(res_tsv),
+            str(tempdir),
+            "--prefilter-mode", "2",
+            "--search-type", "1",
+            "--seq-id-mode", "2",
+            "-e", "inf",
+            "--format-output", "query,target,pident"]
+        subprocess.run(
+            cmd,
+            capture_output=True
+        )
+
+        # Compute distance matrix
+        d_matrix = np.ones((len(ref_sequences), len(comp_sequences)), dtype=np.float32)
+        with res_tsv.open() as f:
+            for line in f:
+                q, t, pident = line.rstrip().split("\t")
+                pid = float(pident)
+                d_matrix[int(q), int(t)] = 1.0 - (pid / 100.0)
+
+        return d_matrix
 
 
 class SequenceSpaceProjection(Analyzer, ABC):
@@ -203,7 +329,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
                 # if requiring alignment, remove dealigned positions (otherwise will rarely find an MSA
                 # that could be handled)
                 system_seqs = [
-                    (entry.remove_insertions().seq if require_aligned else  entry.dealign().seq)
+                    (entry.remove_insertions().seq if require_aligned else entry.dealign().seq)
                     for entry in system.data[entity].sequences.seqs
                 ]
             else:
@@ -303,6 +429,76 @@ class SequenceSpaceProjection(Analyzer, ABC):
 
         return updated_system, updated_instances
 
+    @abstractmethod
+    def distances_and_projection(
+        self,
+        system: System,
+        instances: Sequence[SystemInstance],
+        entity: int | None = None
+    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
+        """
+        Perform sequence space projection analysis, returning results directly
+        (e.g. for interactive analysis)
+
+        Parameters
+        ----------
+        system
+            System for which instances are provided
+        instances
+            Instances for which codon-optimized DNA sequences should be created
+        entity
+            Index of protein entity for which DNA sequence should be created
+
+        Returns
+        -------
+        Tuple containing main results from analysis:
+        (i) Distance matrix
+        (ii) Projection of shape num_sequences x num_components; system sequences will be first
+        """
+        pass
+
+    def analyze(
+        self,
+        system: System,
+        instances: Sequence[SystemInstance],
+        data: None = None,
+        entity: int | None = None
+    ) -> tuple[System, Sequence[SystemInstance]]:
+        """
+        Perform sequence space projection analysis
+
+        Parameters
+        ----------
+        system
+            System for which instances are provided
+        instances
+            Instances for which codon-optimized DNA sequences should be created
+        data
+            Not used, must be None
+        entity
+            Index of protein entity for which DNA sequence should be created
+
+        Returns
+        -------
+        Tuple containing results from sequence space analysis in
+        (i) System (only updated if include_system_sequences is True)
+        (ii) SystemInstances
+        """
+        if data is not None:
+            raise ValueError(
+                "data argument must be None"
+            )
+
+        # validate entities, in particular fixed length requirement for this class
+        dist_matrix, projections, entities = self.distances_and_projection(
+            system, instances, entity
+        )
+
+        # add projection to shallow copy of system and instances
+        return self.add_projections(
+            system, instances, entities, projections
+        )
+
 
 class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
     """
@@ -374,7 +570,10 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         return dist_matrix
 
     @abstractmethod
-    def _project(self, dist_matrix: np.ndarray):
+    def _project(
+        self,
+        dist_matrix: np.ndarray[tuple[int, int], float],
+    ) -> np.ndarray[tuple[int, int], float]:
         pass
 
     def distances_and_projection(
@@ -383,25 +582,6 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         instances: Sequence[SystemInstance],
         entity: int | None = None
     ) -> tuple[np.ndarray, np.ndarray, list[int]]:
-        """
-        Perform sequence space projection analysis, returning results directly
-        (e.g. for interactive analysis)
-
-        Parameters
-        ----------
-        system
-            System for which instances are provided
-        instances
-            Instances for which codon-optimized DNA sequences should be created
-        entity
-            Index of protein entity for which DNA sequence should be created
-
-        Returns
-        -------
-        Tuple containing main results from analysis:
-        (i) Distance matrix
-        (ii) Projection of shape num_sequences x num_components; system sequences will be first
-        """
         # validate entities, in particular fixed length requirement for this class
         [
             system.valid_instance(
@@ -430,48 +610,6 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         projections = self._project(dist_matrix)
 
         return dist_matrix, projections, entities
-
-    def analyze(
-        self,
-        system: System,
-        instances: Sequence[SystemInstance],
-        data: None = None,
-        entity: int | None = None
-    ) -> tuple[System, Sequence[SystemInstance]]:
-        """
-        Perform sequence space projection analysis
-
-        Parameters
-        ----------
-        system
-            System for which instances are provided
-        instances
-            Instances for which codon-optimized DNA sequences should be created
-        data
-            Not used, must be None
-        entity
-            Index of protein entity for which DNA sequence should be created
-
-        Returns
-        -------
-        Tuple containing results from sequence space analysis in
-        (i) System (only updated if include_system_sequences is True)
-        (ii) SystemInstances
-        """
-        if data is not None:
-            raise ValueError(
-                "data argument must be None"
-            )
-
-        # validate entities, in particular fixed length requirement for this class
-        dist_matrix, projections, entities = self.distances_and_projection(
-            system, instances, entity
-        )
-
-        # add projection to shallow copy of system and instances
-        return self.add_projections(
-            system, instances, entities, projections
-        )
 
 
 class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
@@ -504,7 +642,10 @@ class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
 
         self.mds_kwargs = mds_kwargs
 
-    def _project(self, dist_matrix: np.ndarray):
+    def _project(
+        self,
+        dist_matrix: np.ndarray[tuple[int, int], float]
+    ) -> np.ndarray[tuple[int, int], float]:
         if self.mds_kwargs is None:
             params = {
                 "normalized_stress": "auto",
@@ -556,7 +697,10 @@ class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):
 
         self.umap_kwargs = umap_kwargs
 
-    def _project(self, dist_matrix: np.ndarray):
+    def _project(
+            self,
+            dist_matrix: np.ndarray[tuple[int, int], float]
+    ) -> np.ndarray[tuple[int, int], float]:
         if self.umap_kwargs is None:
             params = {
                 # TODO: investigate sensible defaults
@@ -573,3 +717,301 @@ class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):
         )
 
         return embedding.fit_transform(dist_matrix)
+
+
+class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
+    def __init__(
+        self,
+        num_components: int = 2,
+        include_system_sequences: bool = True,
+        num_landmarks: int = 100,
+        landmark_source: Literal["all", "system", "instances"] = "all",
+        landmark_selection_mode: Literal["random", "mmseqs"] = "random",
+        distance_matrix_mode: Literal["aligned", "mmseqs"] = "aligned",
+        mds_kwargs: dict | None = None,
+        mmseqs_path: str = "mmseqs",
+    ):
+        """
+        Initialize new sequence space projector using approximative multidimensional scaling (MDS)
+
+        Parameters
+        ----------
+        num_components
+            Number of components to project sequences to (typically 2)
+        include_system_sequences
+            If True, include sequences from system for analyzing designs in context of
+            available sequence information
+        num_landmarks
+            Number of landmark points to use for approximation
+        landmark_source
+            Specify whether landmark points should be selected from system + entities ("all"),
+            just from system sequences("system") to project designs to natural sequence space,
+            or just on designs ("instances"). "system" requires include_system_sequences to be True.
+        landmark_selection_mode
+            Method to choose landmark points at random or by clustering.
+            "mmseqs" requires MMseqs to be installed and uses clustering.
+        distance_matrix_mode
+            Method to compute distance matrix. "mmseqs" requires MMseqs to be installed
+            and allows (potentially unaligned) sequences of varying length whereas
+            "aligned" uses internal code and requires sequences to be of same length.
+        mds_kwargs
+            Keyword arguments forwarded to constructor of sklearn.manifold.MDS
+        mmseqs_path
+            Path to MMseqs executable, default assumes MMseqs is on the PATH.
+        """
+        self.num_landmarks = num_landmarks
+
+        if landmark_source == "system" and not include_system_sequences:
+            raise ValueError(
+                "landmark_source == 'system' only valid if include_system_sequences is True"
+            )
+
+        self.landmark_source = landmark_source
+        self.landmark_selection_mode = landmark_selection_mode
+        self.distance_matrix_mode = distance_matrix_mode
+        self._mmseqs_required = landmark_selection_mode == "mmseqs" or distance_matrix_mode == "mmseqs"
+        self._fixed_length_required = distance_matrix_mode == "aligned"
+        self.mmseqs_path = mmseqs_path
+
+        acceptable_entity_types: list[EntityType]
+        if self._mmseqs_required:
+            acceptable_entity_types = ["protein"]
+        else:
+            acceptable_entity_types = ["protein", "dna", "rna"]
+
+        super().__init__(
+            num_components=num_components,
+            include_system_sequences=include_system_sequences,
+            acceptable_entity_types=acceptable_entity_types
+        )
+
+        self.mds_kwargs = mds_kwargs
+
+    def _select_landmarks(self, sequences: CollectedSequences) -> np.ndarray[tuple[int], int]:
+        """
+        Select landmark sequences depending on mode
+
+        Parameters
+        ----------
+        sequences
+            Sequences from system (may not be present) and instances
+
+        Returns
+        -------
+        Array of indices in sequences that were chosen as landmarks
+        """
+        entity_idx, entity_sequences, num_system = sequences[0]
+        num_total = len(entity_sequences)
+
+        # in case of random selection, we do not need to look at actual sequences,
+        # just use indices (if system sequences present, we know for now we only have single entity)
+        if self.landmark_source == "all":
+            low = 0
+            high = num_total
+        elif self.landmark_source == "system":
+            assert num_system > 0, "System must have at least one sequence"
+            low = 0
+            high = num_system
+        elif self.landmark_source == "instances":
+            low = num_system + 1
+            high = num_total
+        else:
+            raise ValueError("Invalid selection")
+
+        # make sure we do not choose more landmarks as specified datapoints
+        num_landmarks_valid = min(self.num_landmarks, high - low)
+
+        if self.landmark_selection_mode == "random":
+            landmarks = np.random.default_rng().choice(
+                np.arange(low, high), size=num_landmarks_valid, replace=False
+            )
+        elif self.landmark_selection_mode == "mmseqs":
+            # we only have a single entity right now so can use sequences from above without merging
+            # across entities; adjust target number of sequences by number of brackets
+            # brackets = [0.2, 0.4, 0.6, 0.8, 1.0]
+            brackets = [0, 1]
+            landmarks = filter_sequences_mmseqs(
+                entity_sequences[low:high],
+                target_num_sequences=int(num_landmarks_valid / (len(brackets) - 1)),
+                brackets=brackets,
+                mmseqs_path=self.mmseqs_path
+            )
+        else:
+            raise ValueError("Invalid mode")
+
+        return landmarks
+
+    def _distance_matrix(
+        self,
+        system: System,
+        collected_sequences: CollectedSequences,
+        landmarks: np.ndarray[tuple[int], int],
+        default_value: int = -1
+    ) -> np.ndarray[tuple[int, int], float]:
+        """
+        Compute distance matrix from set of instance/system sequences
+        (potentially for multiple entities)
+
+        Parameters
+        ----------
+        system
+            System for which sequences are analyzed
+        collected_sequences
+            Extracted rep sequences for all entities
+        landmarks:
+            Indices of landmark sequences among collected sequences
+        default_value
+            Default value to map gaps/non-standard symbols to
+
+        Returns
+        -------
+        Distance matrix of shape len(collected_sequences) x num_components
+        """
+        if self.distance_matrix_mode == "aligned":
+            # map sequences for each entity to integer array for numba computation
+            entity_arrays = [
+                map_array(
+                    str_to_np_char_view(seqs),
+                    # do not map gaps so we can easily exclude with same value in numba calculation
+                    index_map(system[entity].alphabet(include_gap=False), default_value=default_value),
+                )
+                for (entity, seqs, _) in collected_sequences
+            ]
+
+            # merge array together across entities
+            array_merged = np.concatenate(entity_arrays + entity_arrays, axis=1)
+
+            # compute distance matrix with numba
+            dist_matrix = hamming_distance_no_gaps_ref_vs_comp(
+                array_merged[landmarks, :], array_merged, default_value
+            )
+        elif self.distance_matrix_mode == "mmseqs":
+            # for now only single entity supported
+            _, entity_sequences, _ = collected_sequences[0]
+            landmarks_set = set(landmarks)
+            landmark_sequences = [
+                seq for idx, seq in enumerate(entity_sequences) if idx in landmarks_set
+            ]
+
+            # sequences will be dealigned and converted to uppercase inside this function again if needed
+            dist_matrix = distance_matrix_mmseqs_ref_vs_comp(
+                ref_sequences=landmark_sequences,
+                comp_sequences=entity_sequences,
+                mmseqs_path=self.mmseqs_path
+            )
+
+            # symmetrize
+            dist_matrix_lm_sym = 0.5 * ( dist_matrix[:, landmarks] + dist_matrix[:, landmarks].T)
+            np.fill_diagonal(dist_matrix_lm_sym, 0.0)
+            dist_matrix[:, landmarks] = dist_matrix_lm_sym
+        else:
+            raise ValueError("Invalid mode")
+
+        return dist_matrix
+
+    def _project(
+        self,
+        dist_matrix: np.ndarray[tuple[int, int], float],
+        landmarks: np.ndarray[tuple[int], int]
+    ) -> np.ndarray:
+        if self.mds_kwargs is None:
+            params = {
+                "normalized_stress": "auto"
+            }
+        else:
+            params = self.mds_kwargs
+
+        # following https://github.com/debbiemarkslab/sequenceMDS
+        embedding = MDS(
+            n_components=self.num_components,
+            dissimilarity="precomputed",
+            **params,
+        )
+
+        num_landmarks, num_points = dist_matrix.shape
+        all_coords = np.zeros((num_points, self.num_components))
+
+        # project landmarks via MDS
+        landmark_proj = embedding.fit_transform(dist_matrix[:, landmarks])
+
+        # assign these coordinates directly
+        all_coords[landmarks, :] = landmark_proj[:, :]
+
+        # project non-landmarks using inverse distance weighting (note this
+        # slightly different from original MDS with ues triangulation)
+        landmarks_set = set(landmarks)
+        for j in range(num_points):
+            if j not in landmarks_set:
+                distances = dist_matrix[:, j]  # distances from all landmarks to point j
+                weights = 1.0 / (distances + 1e-10)
+                weights = weights / weights.sum()
+                all_coords[j, :] = np.average(landmark_proj, weights=weights, axis=0)
+
+        return all_coords
+
+    def distances_and_projection(
+        self,
+        system: System,
+        instances: Sequence[SystemInstance],
+        entity: int | None = None
+    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
+        """
+        Perform sequence space projection analysis, returning results directly
+        (e.g. for interactive analysis)
+
+        Parameters
+        ----------
+        system
+            System for which instances are provided
+        instances
+            Instances for which codon-optimized DNA sequences should be created
+        entity
+            Index of protein entity for which DNA sequence should be created
+
+        Returns
+        -------
+        Tuple containing main results from analysis:
+        (i) Distance matrix
+        (ii) Projection of shape num_sequences x num_components; system sequences will be first
+        """
+        [
+            system.valid_instance(
+                instance,
+                validate_reps=True,
+                fixed_length=self._fixed_length_required,
+                allow_deletions=True,
+                raise_invalid=True,
+            ) for instance in instances
+        ]
+
+        # determine selected entities (for regular MDS, can do all types of biopolymers);
+        # this will also check if entity types are valid (can only do protein for MMseqs)
+        entities = self._select_entities(
+            system, entity
+        )
+
+        if self._mmseqs_required and len(entities) > 1:
+            raise ValueError(
+                "mmseqs mode can currently only handle single entity"
+            )
+
+        # assemble instance data as needed, also verify they are aligned for all methods but landmark_mds_mmseqs;
+        # note we also need aligned sequences for MMseqs landmark selection for stable clustering performance
+        require_aligned = self.landmark_selection_mode != "random" or self.distance_matrix_mode != "mmseqs"
+        sequences = self._collect_sequences(
+            system,
+            instances,
+            entities,
+            require_aligned=require_aligned
+        )
+
+        # select landmark points (depending on specified mode)
+        landmarks = self._select_landmarks(sequences)
+
+        # compute distance matrix
+        dist_matrix = self._distance_matrix(system, sequences, landmarks)
+
+        # perform projection of landmark points
+        projections = self._project(dist_matrix, landmarks)
+
+        return dist_matrix, projections, entities

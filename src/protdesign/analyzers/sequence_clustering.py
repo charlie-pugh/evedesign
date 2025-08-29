@@ -1,7 +1,9 @@
 """
 Tools for clustering designs on sequence/structure/embedding level
 """
-import subprocess, tempfile, math
+import subprocess
+import tempfile
+import math
 from pathlib import Path
 from typing import Sequence
 
