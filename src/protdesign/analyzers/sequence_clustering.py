@@ -3,6 +3,7 @@ Tools for clustering designs on sequence/structure/embedding level
 """
 import subprocess, tempfile, math
 from pathlib import Path
+from typing import Sequence
 
 def cluster_sequences_mmseqs(
     sequences: list[str],
@@ -154,3 +155,60 @@ def cluster_sequences_mmseqs(
     )
 
     return rep_indices, cluster_assignments
+
+
+def filter_sequences_mmseqs(
+    sequences: list[str],
+    target_num_sequences: int,
+    brackets: Sequence[float]=(0.2, 0.4, 0.6, 0.8, 1.0),
+    mmseqs_path: str = "mmseqs"
+):
+    """
+    Reduce sequences down to a specified number of clusters with MMseqs filtera3m command
+
+    Parameters
+    ----------
+    sequences
+        Input sequences, must be aligned in a3m format
+    target_num_sequences
+        Target number of most diverse sequences (note the exact number returned may differ)
+        per bracket.
+    brackets:
+        Reduce diversity of output MSAs using min.seq. identity with query sequences (--qid parameter)
+    mmseqs_path
+        Path to mmseqs binary (optional, defaults to assuming mmseqs is on $PATH)
+    """
+    with tempfile.TemporaryDirectory() as tempdir:
+        tempdir = Path(tempdir)
+
+        # Write sequences to a temporary FASTA file
+        input_ali = tempdir / "input.a3m"
+
+        with open(input_ali, "w") as f:
+            for i, sequence in enumerate(sequences):
+                f.write(f">{i}\n{sequence}\n")
+
+        output_ali = tempdir / "output.a3m"
+
+        cmd = [
+            mmseqs_path,
+            "filtera3m",
+            str(input_ali),
+            str(output_ali),
+            "--diff", str(target_num_sequences),
+            "--qsc", "0",
+            "--qid", ",".join([str(thr) for thr in brackets])
+
+        ]
+
+        subprocess.run(
+            cmd, capture_output=True
+        )
+
+        # parse output
+        with output_ali.open() as f:
+            filtered_ids = [
+                int(line[1:]) for line in f if line.startswith(">")
+            ]
+
+    return filtered_ids
