@@ -11,7 +11,7 @@ from loguru import logger
 from protdesign.constants import GAP
 from protdesign.model import Generator, ConditionalMutationScorer, Scorer
 from protdesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
-from protdesign.types import StatusCallback
+from protdesign.types import StatusCallback, CHAIN_COMPONENT_KEY, SCORE_COMPONENT_KEY
 from protdesign.utils import status_progress, ensure_sequence, map_array
 
 ScanOrder = Literal[
@@ -40,8 +40,6 @@ _FROM = "from"
 _TO = "to"
 _SCORE_DIFF = "score_diff"
 _TEMPERATURE = "temperature"
-
-SCORE_COMPONENT_KEY = "scores"
 
 
 class GibbsSampler(Generator):
@@ -710,7 +708,7 @@ class GibbsSampler(Generator):
                 # compute temperature-scaled score difference to current token
                 score_diff = (
                     scores_scaled[design_idx_all, sampled_token_idx] - scores_scaled[design_idx_all, current_token_idx]
-                )
+                ).numpy()
 
                 # update sample matrix and instances for next step
                 assert len(design_idx_all) == len(step_ent) == len(step_pos) == len(sampled_tokens)
@@ -750,11 +748,13 @@ class GibbsSampler(Generator):
         if updates is not None:
             for design_idx in range(num_designs):
                 instances[design_idx].metadata = {
-                    "init": {
-                        entity_idx: "".join(initial_samples_joined[entity_idx][design_idx])
-                        for entity_idx in entities
-                    },
-                    "chain": updates[:, design_idx].tolist()
+                    CHAIN_COMPONENT_KEY: {
+                        "init": {
+                            entity_idx: "".join(initial_samples_joined[entity_idx][design_idx])
+                            for entity_idx in entities
+                        },
+                        "chain": updates[:, design_idx].tolist()
+                    }
                 }
 
         # score final designs (modifying in place)
