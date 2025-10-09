@@ -23,7 +23,7 @@ from protdesign.types import EntityType, SEQSPACE_PROJECTION_COMPONENT_KEY
 from protdesign.utils import str_to_np_char_view, map_array, index_map
 
 # each element is (entity, list of sequences, number of system sequences at end of list)
-CollectedSequences = list[tuple[int, list[str], int]]
+CollectedSequences = list[tuple[int, list[str], list[int]]]
 
 
 @jit(nopython=True, parallel=True)
@@ -42,7 +42,7 @@ def hamming_distance_no_gaps(matrix, exclude_value):
         N x L matrix containing N sequences of length L.
         Matrix must be mapped to range(0, num_symbols)
     exclude_value : int
-        Value >= 0 in matrix that will be excluded from identity calculation, e.g. gap or lowercase character.
+        Value >= 0 in matrix that will be exclud_ed from identity calculation, e.g. gap or lowercase character.
         Set to -1 to enable legacy behaviour num_cluster_members_legacy which includes gaps in identity calculation.
 
     Returns
@@ -221,6 +221,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
         acceptable_entity_types: list[EntityType],
         num_components: int = 2,
         include_system_sequences: bool = True,
+        system_sequence_fragment_filter: float | None = 0.7
     ):
         """
         Create new MDS-based sequence space projector
@@ -233,10 +234,16 @@ class SequenceSpaceProjection(Analyzer, ABC):
             Number of components to project sequences down to
         include_system_sequences
             If true, include system sequences besides designed sequences
+        system_sequence_fragment_filter
+            Only keep system sequences that have a non-gap symbol aligned to
+            the target sequence for at least the given fraction of positions.
+            Will be ignored if system sequences are not aligned; use None to
+            disable filtering.
         """
         self.num_components = num_components
         self.include_system_sequences = include_system_sequences
         self.acceptable_entity_types = acceptable_entity_types
+        self.system_sequence_fragment_filter = system_sequence_fragment_filter
 
     def _select_entities(
         self,
@@ -318,22 +325,29 @@ class SequenceSpaceProjection(Analyzer, ABC):
                 raise ValueError(
                     "System sequences must be aligned for analysis"
                 )
-        else:
-            pass
 
         # assemble sequences on per-entity basis; this allows us to look at entity-specific information
         # like alphabets when performing actual computation
         all_seqs = []
         for entity in entities:
-            if self.include_system_sequences and system.data[entity].sequences is not None:
+            cur_entity_seqs = system.data[entity].sequences
+            if self.include_system_sequences and cur_entity_seqs is not None:
                 # if requiring alignment, remove dealigned positions (otherwise will rarely find an MSA
                 # that could be handled)
-                system_seqs = [
-                    (entry.remove_insertions().seq if require_aligned else entry.dealign().seq)
-                    for entry in system.data[entity].sequences.seqs
-                ]
+                system_seqs = {
+                    i: (entry.remove_insertions().seq if require_aligned else entry.dealign().seq)
+                    for i, entry
+                    in enumerate(cur_entity_seqs.seqs)
+                    if (
+                        self.system_sequence_fragment_filter is None or
+                        not cur_entity_seqs.aligned or
+                        len(entry.remove_insertions().dealign().seq) >= (
+                            len(system[entity].rep) * self.system_sequence_fragment_filter
+                        )
+                    )
+                }
             else:
-                system_seqs = []
+                system_seqs = {}
 
             # ensure all instances have a defined rep
             if any([
@@ -350,7 +364,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
             ]
 
             # if requiring alignment, need to verify all sequences now have same length
-            merged_seqs = system_seqs + instance_seqs
+            merged_seqs = list(system_seqs.values()) + instance_seqs
 
             if require_aligned:
                 seq_lengths = {
@@ -363,7 +377,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
                     )
 
             all_seqs.append((
-                entity, merged_seqs, len(system_seqs)
+                entity, merged_seqs, list(system_seqs.keys())
             ))
 
         # return assembled sequences per entity
@@ -375,6 +389,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
         instances: Sequence[SystemInstance],
         entities: list[int],
         projections: np.ndarray,
+        sequences: CollectedSequences
     ) -> tuple[System, Sequence[SystemInstance]]:
         """
         Add projections as metadata to system and instances
@@ -389,6 +404,9 @@ class SequenceSpaceProjection(Analyzer, ABC):
             Indices of entities for which sequences will be collected
         projections
             Projections that will be attached to system and instances
+        sequences
+            Per-entity collection of sequences used to compute the projection
+            (including indices of system sequences that were used)
 
         Returns
         -------
@@ -419,13 +437,18 @@ class SequenceSpaceProjection(Analyzer, ABC):
             # for now, only single entity projection if using system sequences
             assert len(entities) == 1
 
-            for idx, seq in enumerate(
-                updated_system[entities[0]].sequences.seqs
-            ):
+            # get indices of system sequences (may have been filtered)
+            _, _, system_seq_indices = sequences[0]
+
+            # lengths must match
+            assert len(system_projections) == len(system_seq_indices)
+
+            for (seq_idx, proj) in zip(system_seq_indices, system_projections):
+                seq = updated_system[entities[0]].sequences.seqs[seq_idx]
                 if seq.metadata is None:
                     seq.metadata = {}
 
-                seq.metadata[SEQSPACE_PROJECTION_COMPONENT_KEY] = system_projections[idx, :].tolist()
+                seq.metadata[SEQSPACE_PROJECTION_COMPONENT_KEY] = proj.tolist()
 
         return updated_system, updated_instances
 
@@ -435,7 +458,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
         system: System,
         instances: Sequence[SystemInstance],
         entity: int | None = None
-    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    ) -> tuple[np.ndarray, np.ndarray, list[int], CollectedSequences]:
         """
         Perform sequence space projection analysis, returning results directly
         (e.g. for interactive analysis)
@@ -456,6 +479,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
         (i) Distance matrix
         (ii) Projection of shape num_sequences x num_components; system sequences will be first
         (iii) Selected entities
+        (iv) Collected sequences
         """
         pass
 
@@ -493,13 +517,13 @@ class SequenceSpaceProjection(Analyzer, ABC):
             )
 
         # validate entities, in particular fixed length requirement for this class
-        dist_matrix, projections, entities = self.distances_and_projection(
+        dist_matrix, projections, entities, sequences = self.distances_and_projection(  # noqa
             system, instances, entity
         )
 
         # add projection to shallow copy of system and instances
         return self.add_projections(
-            system, instances, entities, projections
+            system, instances, entities, projections, sequences
         )
 
 
@@ -512,6 +536,7 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         self,
         num_components: int = 2,
         include_system_sequences: bool = True,
+        system_sequence_fragment_filter: float | None = 0.7
     ):
         """
         Initialize new sequence space projector
@@ -523,11 +548,17 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         include_system_sequences
             If True, include sequences from system for analyzing designs in context of
             available sequence information
+        system_sequence_fragment_filter
+            Only keep system sequences that have a non-gap symbol aligned to
+            the target sequence for at least the given fraction of positions.
+            Will be ignored if system sequences are not aligned; use None to
+            disable filtering.
         """
         super().__init__(
             acceptable_entity_types=["protein", "dna", "rna"],
             num_components=num_components,
             include_system_sequences=include_system_sequences,
+            system_sequence_fragment_filter=system_sequence_fragment_filter
         )
 
     @classmethod
@@ -584,7 +615,7 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         system: System,
         instances: Sequence[SystemInstance],
         entity: int | None = None
-    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    ) -> tuple[np.ndarray, np.ndarray, list[int], CollectedSequences]:
         # validate entities, in particular fixed length requirement for this class
         [
             system.valid_instance(
@@ -612,7 +643,7 @@ class SequenceSpaceProjectionAligned(SequenceSpaceProjection):
         # perform projection
         projections = self._project(dist_matrix)
 
-        return dist_matrix, projections, entities
+        return dist_matrix, projections, entities, sequences
 
 
 class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
@@ -623,6 +654,7 @@ class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
         self,
         num_components: int = 2,
         include_system_sequences: bool = True,
+        system_sequence_fragment_filter: float | None = 0.7,
         mds_kwargs: dict | None = None
     ):
         """
@@ -635,12 +667,18 @@ class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
         include_system_sequences
             If True, include sequences from system for analyzing designs in context of
             available sequence information
+        system_sequence_fragment_filter
+            Only keep system sequences that have a non-gap symbol aligned to
+            the target sequence for at least the given fraction of positions.
+            Will be ignored if system sequences are not aligned; use None to
+            disable filtering.
         mds_kwargs
             Keyword arguments forwarded to constructor of sklearn.manifold.MDS
         """
         super().__init__(
             num_components=num_components,
             include_system_sequences=include_system_sequences,
+            system_sequence_fragment_filter=system_sequence_fragment_filter,
         )
 
         self.mds_kwargs = mds_kwargs
@@ -673,6 +711,7 @@ class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):
         self,
         num_components: int = 2,
         include_system_sequences: bool = True,
+        system_sequence_fragment_filter: float | None = 0.7,
         umap_kwargs: dict | None = None
     ):
         """
@@ -685,6 +724,11 @@ class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):
         include_system_sequences
             If True, include sequences from system for analyzing designs in context of
             available sequence information
+        system_sequence_fragment_filter
+            Only keep system sequences that have a non-gap symbol aligned to
+            the target sequence for at least the given fraction of positions.
+            Will be ignored if system sequences are not aligned; use None to
+            disable filtering.
         umap_kwargs
             Keyword arguments forwarded to constructor of umap.UMAP
         """
@@ -696,23 +740,24 @@ class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):
         super().__init__(
             num_components=num_components,
             include_system_sequences=include_system_sequences,
+            system_sequence_fragment_filter=system_sequence_fragment_filter
         )
 
         self.umap_kwargs = umap_kwargs
 
     def _project(
-            self,
-            dist_matrix: np.ndarray[tuple[int, int], float]
+        self,
+        dist_matrix: np.ndarray[tuple[int, int], float]
     ) -> np.ndarray[tuple[int, int], float]:
         if self.umap_kwargs is None:
             params = {
-                # TODO: investigate sensible defaults
-                "n_neighbors": 50
+                # pronounce global structure
+                "n_neighbors": 20,
+                "min_dist": 0.5,
             }
         else:
             params = self.umap_kwargs
 
-        # following https://github.com/debbiemarkslab/sequenceMDS
         embedding = UMAP(
             n_components=self.num_components,
             metric="precomputed",
@@ -727,6 +772,7 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         self,
         num_components: int = 2,
         include_system_sequences: bool = True,
+        system_sequence_fragment_filter: float | None = 0.7,
         num_landmarks: int = 100,
         landmark_source: Literal["all", "system", "instances"] = "all",
         landmark_selection_mode: Literal["random", "mmseqs"] = "random",
@@ -785,7 +831,8 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         super().__init__(
             num_components=num_components,
             include_system_sequences=include_system_sequences,
-            acceptable_entity_types=acceptable_entity_types
+            acceptable_entity_types=acceptable_entity_types,
+            system_sequence_fragment_filter=system_sequence_fragment_filter
         )
 
         self.mds_kwargs = mds_kwargs
@@ -803,7 +850,8 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         -------
         Array of indices in sequences that were chosen as landmarks
         """
-        entity_idx, entity_sequences, num_system = sequences[0]
+        entity_idx, entity_sequences, system_indices = sequences[0]
+        num_system = len(system_indices)
         num_total = len(entity_sequences)
 
         # in case of random selection, we do not need to look at actual sequences,
@@ -957,7 +1005,7 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         system: System,
         instances: Sequence[SystemInstance],
         entity: int | None = None
-    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    ) -> tuple[np.ndarray, np.ndarray, list[int], CollectedSequences]:
         """
         Perform sequence space projection analysis, returning results directly
         (e.g. for interactive analysis)
@@ -977,6 +1025,8 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         Tuple containing main results from analysis:
         (i) Distance matrix
         (ii) Projection of shape num_sequences x num_components; system sequences will be first
+        (iii) Selected entities
+        (iv) Collected sequences
         """
         [
             system.valid_instance(
@@ -1018,4 +1068,4 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         # perform projection of landmark points
         projections = self._project(dist_matrix, landmarks)
 
-        return dist_matrix, projections, entities
+        return dist_matrix, projections, entities, sequences
