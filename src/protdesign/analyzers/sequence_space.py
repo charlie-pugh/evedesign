@@ -420,7 +420,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
             assert len(entities) == 1
 
             for idx, seq in enumerate(
-                    updated_system[entities[0]].sequences.seqs
+                updated_system[entities[0]].sequences.seqs
             ):
                 if seq.metadata is None:
                     seq.metadata = {}
@@ -445,15 +445,17 @@ class SequenceSpaceProjection(Analyzer, ABC):
         system
             System for which instances are provided
         instances
-            Instances for which codon-optimized DNA sequences should be created
+            Instances for which projections should be computed
         entity
-            Index of protein entity for which DNA sequence should be created
+            Index of entity based on which projections should be computed
+            (if None, use all applicable entities)
 
         Returns
         -------
         Tuple containing main results from analysis:
         (i) Distance matrix
         (ii) Projection of shape num_sequences x num_components; system sequences will be first
+        (iii) Selected entities
         """
         pass
 
@@ -472,11 +474,12 @@ class SequenceSpaceProjection(Analyzer, ABC):
         system
             System for which instances are provided
         instances
-            Instances for which codon-optimized DNA sequences should be created
+            Instances for which projections should be computed
         data
             Not used, must be None
         entity
-            Index of protein entity for which DNA sequence should be created
+            Index of entity based on which projections should be computed
+            (if None, use all applicable entities)
 
         Returns
         -------
@@ -964,9 +967,10 @@ class SequenceSpaceLandmarkMDS(SequenceSpaceProjection):
         system
             System for which instances are provided
         instances
-            Instances for which codon-optimized DNA sequences should be created
+            Instances for which projections should be computed
         entity
-            Index of protein entity for which DNA sequence should be created
+            Index of entity based on which projections should be computed
+            (if None, use all applicable entities)
 
         Returns
         -------
