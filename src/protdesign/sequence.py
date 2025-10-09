@@ -4,7 +4,7 @@ Biopolymer sequence functionality (protein sequences etc.)
 from string import ascii_lowercase
 from typing import Any, List, Literal, Self, TextIO, Tuple
 from collections import abc
-from protdesign.constants import MASK
+from protdesign.constants import MASK, GAP
 from protdesign.types import BioPolymer, RepSequence, SequenceMetadata
 from protdesign.utils import shorten
 
@@ -119,7 +119,7 @@ class Sequence:
         Dealigned sequence
         """
         return type(self)(
-            seq=self.seq.replace("-", "").upper(),
+            seq=self.seq.replace(GAP, "").upper(),
             id=self.id_,
             key=self.key,
             type=self.type_,
