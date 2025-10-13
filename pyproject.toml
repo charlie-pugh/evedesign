@@ -26,6 +26,7 @@ dependencies = ["numpy", "pandas", "torch", "loguru", "biotite", "biopython", "d
 [project.optional-dependencies]
 evmutation2 = ["picasso_model"]
 esm2 = ["transformers"]
+umap = ["umap-learn"]
 
 [project.urls]
 Documentation = "https://github.com/thomashopf/protdesign#readme"
