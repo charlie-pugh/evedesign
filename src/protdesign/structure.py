@@ -430,8 +430,8 @@ class Structure:
         Loaded structure
         """
         # fetch as bCIF by default for quicker fetching/loading
-        pdb_data = rcsb.fetch(pdb_id, format="bcif")
-        return cls(pdb_data, format="bcif")
+        pdb_data = rcsb.fetch(pdb_id, format="cif")
+        return cls(pdb_data, format="cif")
 
     def assemblies(self) -> dict[str, str | None]:
         """
