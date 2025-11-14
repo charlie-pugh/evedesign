@@ -8,7 +8,7 @@ from loguru import logger
 import torch
 
 from protdesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
+    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
 )
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.utils import model_param_context
@@ -22,7 +22,7 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
+class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
     Wrapper class around ESM2 model
     """
