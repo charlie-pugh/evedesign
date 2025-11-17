@@ -520,14 +520,15 @@ class SystemInstance(UserList[EntityInstance]):
 
     def copy(self) -> Self:
         """
-        Create a shallow copy of the system instance
+        Create a shallow copy of the system instance, making
+        shallow copies of each contained entity instance as well.
 
         Returns
         -------
         Shallow copy
         """
         return type(self)(
-            entity_instances=self.data.copy(),
+            entity_instances=[ei.copy() for ei in self.data],
             score=self.score,
             confidence=self.confidence,
             metadata=self.metadata.copy() if self.metadata is not None else None,
