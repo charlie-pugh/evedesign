@@ -11,7 +11,7 @@ from loguru import logger
 import torch
 
 from protdesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
+    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
 )
 from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from protdesign.constants import MASK
@@ -25,12 +25,13 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator):
+class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
     Wrapper class around EVmutation2/picasso model
     """
     available = IMPORT_AVAILABLE
     name: str = "EVmutation2"
+    citation_string: str = "unpublished"
 
     # core properties
     requires_target: bool = True
@@ -324,7 +325,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         ]
 
     @contextmanager
-    def _reps_on_device(self, keep: bool = True) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _reps_on_device(self, keep: bool = True):
         """
         Helper to move all necessary information to target device
         when calling inference methods
@@ -472,11 +473,15 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
         return instances_with_score
 
-    def score(
+    def _score_embed(
         self,
         instances: Sequence[SystemInstance],
-        status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        status_callback: StatusCallback | None = None,  # noqa
+        return_embeddings: bool = False,
+    ) -> tuple[
+        np.ndarray[tuple[int], np.dtype[float]],
+        np.ndarray[tuple[int, int, int, int, int], np.dtype[float]] | None,
+    ]:
         self.ready_or_raise()
 
         # validate sequences
@@ -492,7 +497,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
                 "".join(instance[0].rep) for instance in instances
             ]
 
-            scores = self.model.decoder.score_full_probability(
+            ret = self.model.decoder.score_full_probability(
                 str_instances,
                 single=self._single_rep_on_device,
                 pairwise=self._pair_rep_on_device,
@@ -500,7 +505,14 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
                 batch_size=self.decoder_batch_size,
                 num_samples=self.decoder_num_full_samples,
                 share_decoding_order_across_encodings=self.decoder_share_order_across_encodings,
+                return_embeddings=return_embeddings
             )
+
+            if return_embeddings:
+                scores, embeddings = ret
+            else:
+                scores = ret
+                embeddings = None
 
         # average the logits across encoder and decoder samples,
         # and make sure aggregated dataframe it is sorted by sequence index
@@ -511,7 +523,44 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         assert len(scores_agg) == len(instances), "Length of scores does not length of instances"
 
         # return as numpy vector
-        return scores_agg["score"].values
+        return scores_agg["score"].values, embeddings
+
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None,
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        return self._score_embed(
+            instances, status_callback, return_embeddings=False
+        )[0]
+
+    def transform(
+        self,
+        instances: Sequence[SystemInstance],
+        entity: int | None = None,
+        status_callback: StatusCallback | None = None
+    ) -> List[SystemInstance]:
+        entity = 0 if entity is None else entity
+        if entity != 0:
+            raise ValueError("Model can only handle one single entity")
+
+        scores, embeddings =  self._score_embed(
+            instances, status_callback, return_embeddings=True
+        )
+
+        # average embeddings across different encoder/decoder runs
+        embeddings_agg = embeddings.mean(axis=(1, 2))
+
+        # perform shallow copy of instances and entity instances inside
+        instances_transformed = [
+            inst.copy() for inst in instances
+        ]
+
+        for i, inst in enumerate(instances_transformed):
+            inst.score = scores[i]
+            inst[0].embedding = embeddings_agg[i]
+
+        return instances_transformed
 
     def single_mutation_scan(
         self,
