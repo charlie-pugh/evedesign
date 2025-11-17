@@ -31,6 +31,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
     """
     available = True
     name: str = "LinearSeqDistRestraint"
+    citation_string: str = "unpublished"
 
     requires_heavy_build: bool = False
     requires_gpu: bool = False

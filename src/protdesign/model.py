@@ -4,7 +4,7 @@ from typing import List, Self, Tuple, Sequence, Any
 import numpy as np
 import pandas as pd
 from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
-from protdesign.types import StatusCallback
+from protdesign.types import StatusCallback, ModelStats
 
 
 class _Core(ABC):
@@ -501,6 +501,12 @@ class BaseModel(_Core):
 
     @property
     @abstractmethod
+    # citation string for method
+    def citation_string(self) -> str:
+        pass
+
+    @property
+    @abstractmethod
     # whether model has long-running build step (e.g. EVE VAE)
     def requires_heavy_build(self) -> bool:
         pass
@@ -672,3 +678,14 @@ class BaseModel(_Core):
         """
         pass
 
+    def stats(self) -> ModelStats | None:
+        """
+        Return summary statistics from model building (cross-validation performance etc.).
+
+        Default behaviour is to not return statistics
+
+        Returns
+        -------
+        Model-dependent statistics
+        """
+        return None

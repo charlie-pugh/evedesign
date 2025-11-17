@@ -36,6 +36,11 @@ class SequenceMetadata(TypedDict):
     taxonomy_id: NotRequired[int]
     taxonomy_lineage: NotRequired[str]
 
+class ModelStats(TypedDict):
+    spearman: NotRequired[float]
+    pearson: NotRequired[float]
+    y: NotRequired[list[float]]
+    y_hat: NotRequired[list[float]]
 
 # status, progress (optional), message (optional)
 Status = Literal["running", "done", "failed"]
