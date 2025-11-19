@@ -655,6 +655,7 @@ class System(UserList[Entity]):
         self,
         instance: SystemInstance,
         validate_reps: bool = True,
+        validate_embeddings: bool = True,
         fixed_length: bool = True,
         allow_deletions: bool = False,
         raise_invalid: bool = False,
@@ -671,6 +672,8 @@ class System(UserList[Entity]):
             (only sensible for fixed-length models and biopolymers)
         validate_reps
             If True, verify if sequence representations are comprised of valid amino acids/nucleotides
+        validate_embeddings
+            If True, verify if specified sequence embeddings are valid (correct shape)
         allow_deletions
             If True, allow deletions (coded by gap symbols) to be present in representation
         raise_invalid
@@ -724,6 +727,20 @@ class System(UserList[Entity]):
                                 # do not continue with comparison if we have at least one invalid structure
                                 if not valid:
                                     break
+
+                if validate_embeddings and entity_instance.embedding is not None:
+                    # check if embedding is a per-entity vector or per-position matrix
+                    emb_shape = entity_instance.embedding.shape
+                    valid = valid and len(emb_shape) in (1, 2)
+
+                    # if matrix, length must match entity instance rep (if latter is specified),
+                    # and also must match entity rep if fixed length is required
+                    if len(emb_shape) == 2:
+                        if entity_instance.rep is not None:
+                            valid = valid and emb_shape[0] == len(entity_instance.rep)
+
+                        if fixed_length and entity.rep is not None:
+                            valid = valid and emb_shape[0] == len(entity.rep)
 
         if not valid and raise_invalid:
             raise ValueError("Provided instance is not valid for biomolecular system")

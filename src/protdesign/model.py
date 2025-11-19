@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import List, Self, Tuple, Sequence, Any
 import numpy as np
 import pandas as pd
+from protdesign.dataset import LabeledInstanceDataset
 from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
 from protdesign.types import StatusCallback, ModelStats
 
@@ -689,3 +690,32 @@ class BaseModel(_Core):
         Model-dependent statistics
         """
         return None
+
+
+class SupervisedBaseModel(BaseModel):
+    @abstractmethod
+    def build(
+        self,
+        system: System,
+        data: LabeledInstanceDataset,
+        status_callback: StatusCallback | None = None,
+    ) -> Self:
+        """
+        Cf documentation for BaseModel, except that model receives
+        a set of labeled instances as data for (semi-)supervised model training.
+
+        Parameters
+        ----------
+        system
+            Molecular system to be modelled
+        data
+            Labeled instance dataset
+        status_callback
+            Callback function to receive progress updates
+
+        Returns
+        -------
+        self
+            Reference to the instance for method chaining
+        """
+        pass

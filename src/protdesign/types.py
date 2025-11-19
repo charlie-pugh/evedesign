@@ -37,10 +37,16 @@ class SequenceMetadata(TypedDict):
     taxonomy_lineage: NotRequired[str]
 
 class ModelStats(TypedDict):
-    spearman: NotRequired[float]
-    pearson: NotRequired[float]
-    y: NotRequired[list[float]]
-    y_hat: NotRequired[list[float]]
+    y_true: NotRequired[list[float]]
+    y_pred: NotRequired[list[float]]
+
+    # list of scores to keep full information from cross validation
+    spearman: NotRequired[list[float]]
+
+    # R^2 is not necessarily squared pearson if something else than a linear model was used
+    # for fitting so record both
+    pearson: NotRequired[list[float]]
+    r2: NotRequired[list[float]]
 
 # status, progress (optional), message (optional)
 Status = Literal["running", "done", "failed"]
