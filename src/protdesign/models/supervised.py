@@ -5,7 +5,8 @@ from typing import Any, Sequence, Literal
 import numpy as np
 from protdesign.dataset import LabeledInstanceDataset
 from protdesign.entity import System, SystemInstance
-from protdesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel
+from protdesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
+    ConditionalMutationScorer
 from protdesign.types import StatusCallback, ModelStats
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import r2_score, make_scorer
@@ -25,8 +26,7 @@ pearson_scorer = make_scorer(
 )
 
 
-# TODO: add MutationScorer, ConditionalMutationScorer base classes to get default implementations
-class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer):
+class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     """
     Supervised property prediction from pooled molecular embeddings. Can stack any
     scikit-learn-compatible predictors that implement fit() and predict()
@@ -438,7 +438,3 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer):
         return self.predictor.predict(
             x_pred
         )
-
-    # TODO: other mutation scoring methods - inherit default implementations from base class; need to implement
-    #  note we can't call specialized methods as we typically need transform() (unless not using any embeddings)
-    # TODO: only can call these methods if embedder is present - verify and call super()

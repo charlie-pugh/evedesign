@@ -2,7 +2,7 @@
 Wrapper class around EVmutation2/picasso model
 """
 from os import PathLike
-from typing import Self, Tuple, Sequence, List
+from typing import Self, Sequence
 from contextlib import contextmanager
 
 import numpy as np
@@ -148,7 +148,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         return self._system
 
     @classmethod
-    def can_model(cls, system: System, data: None=None) -> Tuple[bool, str]:
+    def can_model(cls, system: System, data: None=None) -> tuple[bool, str]:
         if data is not None:
             return False, "Model does not support data parameter (must be None)"
 
@@ -295,35 +295,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # return self to allow method chaining
         return self
 
-    def positions(
-        self,
-        instance: SystemInstance | None = None,
-    ) -> List[Tuple[int, int]]:
-        self.ready_or_raise()
-
-        # implementation here is very simple: we model all positions of exactly one target
-        # protein sequence of fixed length (i.e. can ignore the passed instance);
-        # none of the positions along the sequence are excluded so we can simply enumerate starting from first_index
-        target = self.system[0]
-        return [
-            (0, pos) for pos, _ in enumerate(target.rep, start=target.first_index)
-        ]
-
-    def _validate_instances(
-        self,
-        instances: Sequence[SystemInstance],
-    ) -> None:
-        # validate instance sequences; must all have the same length
-        [
-            self.system.valid_instance(
-                instance,
-                validate_reps=True,
-                fixed_length=True,
-                allow_deletions=True,
-                raise_invalid=True,
-            ) for instance in instances
-        ]
-
     @contextmanager
     def _reps_on_device(self, keep: bool = True):
         """
@@ -373,7 +344,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         temperature: float = 1.0,
         deletions: bool = False,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> list[SystemInstance]:
         """
         TODO: support min_p sampling parameter eventually
         """
@@ -539,7 +510,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         instances: Sequence[SystemInstance],
         entity: int | None = None,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> list[SystemInstance]:
         entity = 0 if entity is None else entity
         if entity != 0:
             raise ValueError("Model can only handle one single entity")

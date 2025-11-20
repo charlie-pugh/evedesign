@@ -3,7 +3,7 @@ Sequence generation with Gibbs sampling.
 
 Implementation assumes fixed length of sequences (no inserts, deletions can be sampled if part of alphabet).
 """
-from typing import Sequence, Literal, Callable, Tuple, List
+from typing import Sequence, Literal, Callable
 import numpy as np
 import pandas as pd
 import torch
@@ -208,7 +208,7 @@ class GibbsSampler(Generator):
     def positions(
         self,
         instance: SystemInstance | None = None,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         # ignore instance specification due to restriction to fixed-length design
         # in the implementation provided by this class
         return sorted(self.shared_pos)
@@ -218,7 +218,7 @@ class GibbsSampler(Generator):
         entities: Sequence[int] | None,
         fixed_pos: EntityPosList | None,
         deletions: bool,
-    ) -> Tuple[list[int], list[str], list[Tuple[int, int]]]:
+    ) -> tuple[list[int], list[str], list[tuple[int, int]]]:
         """
         Helper method to verify specified entities and fixed positions, and compute
         list of positions in entities that are used for design
@@ -303,8 +303,8 @@ class GibbsSampler(Generator):
         num_designs: int,
         entities: list[int],
         deletions: bool,
-        pos_to_design: list[Tuple[int, int]],
-    ) -> Tuple[np.ndarray, dict[int, int], dict[int, int], np.ndarray, np.ndarray]:
+        pos_to_design: list[tuple[int, int]],
+    ) -> tuple[np.ndarray, dict[int, int], dict[int, int], np.ndarray, np.ndarray]:
         """
         Initialize samples based on system and random sampling
 
@@ -451,7 +451,7 @@ class GibbsSampler(Generator):
         entity_to_len: dict[int, int],
         entity_to_array_idx: dict[int, int],
         updated_entities: np.ndarray[int] | None,
-    ) -> Tuple[list[SystemInstance], dict[int, np.ndarray]]:
+    ) -> tuple[list[SystemInstance], dict[int, np.ndarray]]:
         """
         Helper method to initialize or update samples from
         current state of sample array

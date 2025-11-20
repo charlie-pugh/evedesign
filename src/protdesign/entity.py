@@ -36,7 +36,8 @@ Mutation = NamedTuple(
 
 """
 Mutant is comprised of one or more mutations; note that all individual mutations are relative to the
-sequence *before* applying any of the mutations (e.g. before any numbering shifts due to insertions)
+sequence *before* applying any of the mutations (e.g. before any numbering shifts due to insertions).
+Multiple insertions are concatenated together in the order of specification in the sequence.
 """
 Mutant = Sequence[Mutation]
 
@@ -747,6 +748,67 @@ class System(UserList[Entity]):
 
         return valid
 
+    def _entity_to_pos_and_subs(
+        self,
+        instance: SystemInstance,
+        deletions: bool = False,
+        insertions: bool = False,
+    ) -> tuple[
+        dict[int, dict[int, str]],
+        dict[int, list[str]],
+        dict[int, set[int]]
+    ]:
+        """
+        Helper method to determine mutable positions and available mutations in system
+
+        Parameters
+        ----------
+        instance
+            System instance to check against; assuming this has been previously validated with valid_instance().
+        deletions
+            If True, consider gap symbol a valid substitution coding for a deletion at the given position
+        insertions
+            If True, allow insertions (coded as lowercase symbol returned by Entity.alphabet())
+
+        Returns
+        -------
+        entity_to_pos
+            Mapping from entity to valid positions to ref symbol at that position
+        entity_to_valid_subs
+            Mapping from entity to valid substitutions for that entity
+        entity_to_ins_pos
+            Mapping from entity to all positions where an insertion can be made
+        """
+        # create mapping of valid position and reference symbol in each biopolymer entity instance with defined
+        # sequence and first_index
+        entity_to_pos = {
+            entity_idx: {
+                pos: str(ref_symbol) for (pos, ref_symbol) in enumerate(
+                    instance[entity_idx].rep, start=entity.first_index
+                )
+            } for entity_idx, entity in enumerate(self.data)
+            # note: defined_sequence() is too strict of a check here as it required rep to be defined
+            if entity.type_ in BioPolymers and entity.first_index is not None
+        }
+
+        # also record possible positions for insertion including N-terminal of first_index
+        entity_to_ins_pos: dict[int, set[int]]
+        if insertions:
+            entity_to_ins_pos = {
+                entity_idx: (set(pos) | {min(pos) - 1}) for entity_idx, pos in entity_to_pos.items()
+            }
+        else:
+            entity_to_ins_pos = {
+                entity_idx: set() for entity_idx, pos in entity_to_pos.items()
+            }
+
+        entity_to_valid_subs = {
+            entity_idx: entity.alphabet(include_gap=deletions, include_inserts=insertions)
+            for entity_idx, entity in enumerate(self.data)
+        }
+
+        return entity_to_pos, entity_to_valid_subs, entity_to_ins_pos
+
     def valid_mutants(
         self,
         instance: SystemInstance,
@@ -777,32 +839,15 @@ class System(UserList[Entity]):
             True if all mutants are valid, False otherwise
         invalid_subs
             Tuple of mutant indies and invalid mutations in these mutants (empty if all mutants are valid)
+
         """
-        # create mapping of valid position and reference symbol in each biopolymer entity instance with defined
-        # sequence and first_index
-        entity_to_pos = {
-            entity_idx: {
-                pos: ref_symbol for (pos, ref_symbol) in enumerate(
-                    instance[entity_idx].rep, start=entity.first_index
-                )
-            } for entity_idx, entity in enumerate(self.data)
-            # note: defined_sequence() is too strict of a check here as it required rep to be defined
-            if entity.type_ in BioPolymers and entity.first_index is not None
-        }
+        entity_to_pos, entity_to_valid_subs, entity_to_ins_pos = self._entity_to_pos_and_subs(
+            instance, deletions=deletions, insertions=insertions
+        )
 
-        # also record possible positions for insertion including N-terminal of first_index
-        if insertions:
-            entity_to_ins_pos = {
-                entity_idx: (set(pos) | {min(pos) - 1}) for entity_idx, pos in entity_to_pos.items()
-            }
-        else:
-            entity_to_ins_pos = {
-                entity_idx: {} for entity_idx, pos in entity_to_pos.items()
-            }
-
+        # turn into set for more efficient lookup in loop
         entity_to_valid_subs = {
-            entity_idx: set(entity.alphabet(include_gap=deletions, include_inserts=insertions))
-            for entity_idx, entity in enumerate(self.data)
+            entity: set(subs) for entity, subs in entity_to_valid_subs.items()
         }
 
         invalid_subs = [
@@ -821,7 +866,7 @@ class System(UserList[Entity]):
                 subs.ref != "" and (
                     (subs.pos not in entity_to_pos[subs.entity]) or
                     (subs.ref != entity_to_pos[subs.entity][subs.pos]) or
-                    (subs.to.lower() == subs.to)
+                    (subs.to.upper() != subs.to)
                 )
             )
         ]
@@ -832,6 +877,50 @@ class System(UserList[Entity]):
             raise ValueError(f"Invalid mutants: {invalid_subs}")
 
         return valid, invalid_subs
+
+    def single_mutants(
+        self,
+        instance: SystemInstance,
+        deletions: bool = False,
+        insertions: bool = False,
+    ) -> list[Mutant]:
+        """
+        Enumerate all possible single mutants for a given instance
+
+        Parameters
+        ----------
+        instance
+            Instance to mutate (assumed to be validated)
+        deletions
+            If True, include deletions for each position as mutant
+        insertions
+            If True, include insertions for each position as mutants
+
+        Returns
+        -------
+        List of single mutants
+        """
+        entity_to_pos, entity_to_valid_subs, entity_to_ins_pos = self._entity_to_pos_and_subs(
+            instance, deletions=deletions, insertions=insertions
+        )
+
+        # build mutations (including self mutation)
+        mutants = [
+            [
+                Mutation(
+                    entity=entity,
+                    pos=pos,
+                    to=subs,
+                    ref=("" if subs != subs.upper() else entity_to_pos[entity][pos])
+                )
+            ]
+            for entity in entity_to_pos
+            for pos in set(entity_to_pos[entity]) | entity_to_ins_pos[entity]
+            for subs in entity_to_valid_subs[entity]
+            if subs != subs.upper() or pos in entity_to_pos[entity]
+        ]
+
+        return mutants
 
     def apply_instance(
         self,
@@ -916,8 +1005,46 @@ class System(UserList[Entity]):
         Mutated versions of instance (one per mutant). Will have same
         length as mutants parameter
         """
-        # TODO: implement this
-        raise NotImplementedError()
+        # shallow copy system instance and entity instance
+        instances = [
+            instance.copy() for _ in range(len(mutants))
+        ]
+
+        # apply mutations for each mutant instance, align to instances copied above with instance_idx
+        for instance_idx, mutant in enumerate(mutants):
+            # create editable new copies of entities modified by mutation (assumed to be editable and correct
+            # based on prior validation)
+            mutated_entities = set(
+                mutation.entity for mutation in mutant
+            )
+
+            entity_to_rep = {
+                entity_idx: list(
+                    map(str, instances[instance_idx][entity_idx].rep)
+                ) for entity_idx in mutated_entities
+            }
+
+            # sort mutations in mutant by descending positions, this will allow us to apply
+            # any insertions without breaking position indexing;
+            # as insertions are made after substitution/deletion with the same position, do
+            # not need to worry about their relative ordering
+            mutant_sorted = sorted(
+                mutant, key=lambda m: (m.entity, m.pos)
+            )
+
+            # iterate mutations and update
+            for mutation in reversed(mutant_sorted):
+                pos_adj = mutation.pos - self.data[mutation.entity].first_index
+                if mutation.ref != "":
+                    entity_to_rep[mutation.entity][pos_adj] = mutation.to
+                else:
+                    entity_to_rep[mutation.entity].insert(pos_adj + 1, mutation.to)
+
+            # reassign updated reps to current instance
+            for entity_idx, rep in entity_to_rep.items():
+                instances[instance_idx][entity_idx].rep = np.array(rep, dtype="U1")
+
+        return instances
 
 
 class Protein(Entity):

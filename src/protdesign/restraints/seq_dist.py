@@ -1,12 +1,12 @@
 """
 Restraining generated sequence distance to reference sequences
 """
-from typing import Tuple, Self, List, Sequence
+from typing import Self, Sequence
 
 import numpy as np
 import pandas as pd
 
-from protdesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer
+from protdesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer, MutationScorer
 from protdesign.entity import Entity, System, SystemInstance
 from protdesign.types import StatusCallback
 from protdesign.utils import str_to_np_char_view, map_array
@@ -15,7 +15,7 @@ from protdesign.constants import GAP
 EntityToReferenceSeqs = dict[int, list[str]]
 
 
-class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
+class LinearSeqDistRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     """
     Linear distance restraint between generated sequences and a set of reference sequences.
     For simplicity, assumes all compared sequences (i.e. on a per-entity basis) have the same
@@ -90,7 +90,7 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
         cls,
         system: System,
         data: EntityToReferenceSeqs,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         # core requirements: we need at least one restrained biopolymer sequence,
         # and length of all sequences per entity must agree with reference sequence
 
@@ -176,36 +176,6 @@ class LinearSeqDistRestraint(BaseModel, Scorer, ConditionalMutationScorer):
             raise ValueError("Invalid symbol in reference sequences") from e
 
         return self
-
-    def positions(
-        self,
-        instance: SystemInstance | None = None,
-    ) -> List[Tuple[int, int]]:
-        self.ready_or_raise()
-
-        # restraint is able to model all positions in biopolymer sequence
-        # (even if not constrained, we return all of them and score as neutral if mutated)
-        return [
-            (entity_idx, pos)
-            for entity_idx, entity in enumerate(self._system)
-            if entity.defined_sequence()
-            for pos, _ in enumerate(entity.rep, start=entity.first_index)
-        ]
-
-    def _validate_instances(
-        self,
-        instances: Sequence[SystemInstance],
-    ) -> None:
-        # validate instance sequences; must all have the same length
-        [
-            self.system.valid_instance(
-                instance,
-                validate_reps=True,
-                fixed_length=True,
-                allow_deletions=True,
-                raise_invalid=True
-            ) for instance in instances
-        ]
 
     def score(
         self,

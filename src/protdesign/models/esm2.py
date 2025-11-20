@@ -1,5 +1,5 @@
 from os import PathLike
-from typing import Self, Tuple, Sequence, List
+from typing import Self, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -115,7 +115,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         return self._system
 
     @classmethod
-    def can_model(cls, system: System, data: None = None) -> Tuple[bool, str]:
+    def can_model(cls, system: System, data: None = None) -> tuple[bool, str]:
         if data is not None:
             return False, "Model does not support data parameter (must be None)"
 
@@ -224,14 +224,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return self
 
-    def positions(
-        self,
-        instance: SystemInstance | None = None,
-    ) -> List[Tuple[int, int]]:
-        self.ready_or_raise()
-        target = self.system[0]
-        return [(0, pos) for pos, _ in enumerate(target.rep, start=target.first_index)]
-
     def _validate_instances(
         self,
         instances: Sequence[SystemInstance],
@@ -265,7 +257,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature: float = 1.0,
         deletions: bool = False,
         status_callback: StatusCallback | None = None,
-    ) -> List[SystemInstance]:
+    ) -> list[SystemInstance]:
         """
         Generate protein sequences using the ESM2 model with the GibbsSampler
 
@@ -767,7 +759,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         instances: Sequence[SystemInstance],
         entity: int | None = None,
         status_callback: StatusCallback | None = None   # noqa
-    ) -> List[SystemInstance]:
+    ) -> list[SystemInstance]:
         """
         Transform system instances by adding embeddings from the ESM2 model
         """
