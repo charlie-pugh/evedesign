@@ -4,7 +4,7 @@ from typing import Self, Sequence, Any
 import numpy as np
 import pandas as pd
 from protdesign.dataset import LabeledInstanceDataset
-from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
+from protdesign.entity import System, SystemInstance, Entity, EntityPosList, Mutant
 from protdesign.types import StatusCallback, ModelStats, BioPolymers
 
 
@@ -476,7 +476,20 @@ class MutationScorer(_Core, ABC):
             [mutant[0] for mutant in mutants], names=["entity", "pos", "ref", "to"]
         )
 
-        return series.unstack(level="to")
+        # make sure column index (symbols) has right order
+        all_entities = set(series.index.get_level_values("entity"))
+        merged_alphabet = Entity.merge_alphabet_symbols([
+            self.system[entity_idx].alphabet(
+                include_gap=self.handles_deletions,
+                include_inserts=self.handles_insertions,
+            ) for entity_idx in all_entities
+        ])
+
+        return series.unstack(
+            level="to"
+        ).reindex(
+            merged_alphabet, axis=1
+        )
 
     def score_mutants(
         self,
