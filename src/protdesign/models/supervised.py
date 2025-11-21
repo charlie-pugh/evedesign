@@ -236,6 +236,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
                     self.system.valid_instance(
                         instance,
                         validate_reps=True,
+                        require_reps=False,  # TODO: we do need this *if* scoring mutations
                         validate_embeddings=True,
                         fixed_length=False,
                         allow_deletions=True,
@@ -247,10 +248,12 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
 
             # extract embeddings and verify they are complete; implementation right now
             # assumes single entity case... need to define a strategy for assembling multiple
-            # entities either by pooling or stacking pooled vectors
-            embeddings = np.array([
+            # entities either by pooling or stacking pooled vector;
+            # note: not creating a numpy array on outer dimension as length of embeddings in position
+            # dimension may vary
+            embeddings = [
                 inst[0].embedding for inst in instances_t if inst[0].embedding is not None
-            ])
+            ]
 
             # check embedding completeness
             if len(embeddings) != len(instances_t):
@@ -280,11 +283,15 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
             # use nan versions of functions to allow blanking out other positions
             if list(embedding_shapes)[0] == 2:
                 if self.pooling_strategy == "mean":
-                    embeddings = np.nanmean(embeddings, axis=1)
+                    pooling_func = np.nanmean
                 elif self.pooling_strategy == "max":
-                    embeddings = np.nanmax(embeddings, axis=1)
+                    pooling_func = np.nanmax
                 else:
                     raise ValueError("Invalid pooling strategy")
+
+                embeddings = np.array(
+                    [pooling_func(emb, axis=0) for emb in embeddings]
+                )
         else:
             embeddings = np.zeros((len(instances_t), 0))
 
