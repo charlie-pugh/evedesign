@@ -234,6 +234,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             self.system.valid_instance(
                 instance,
                 validate_reps=True,
+                require_reps=True,
                 fixed_length=False,
                 allow_deletions=False,
                 raise_invalid=True,

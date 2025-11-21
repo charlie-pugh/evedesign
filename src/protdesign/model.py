@@ -4,7 +4,7 @@ from typing import Self, Sequence, Any
 import numpy as np
 import pandas as pd
 from protdesign.dataset import LabeledInstanceDataset
-from protdesign.entity import System, SystemInstance, Entity, EntityPosList, Mutant
+from protdesign.entity import System, SystemInstance, Entity, EntityPosList, Mutant, Mutation
 from protdesign.types import StatusCallback, ModelStats, BioPolymers
 
 
@@ -187,13 +187,14 @@ class _Core(ABC):
 
     def _validate_instances(
         self,
-        instances: Sequence[SystemInstance],
+        instances: Sequence[SystemInstance]
     ) -> None:
         [
             self.system.valid_instance(
                 instance,
                 validate_reps=True,
-                fixed_length=self.handles_insertions,
+                require_reps=True,
+                fixed_length=self.requires_fixed_length,
                 allow_deletions=self.handles_deletions,
                 raise_invalid=True,
             ) for instance in instances
@@ -208,7 +209,7 @@ class Generator(_Core):
     TODO: check whether it makes sense to add more designs parameters shared
      across most methods here, or whether it is better to add additional parameters
      to individual methods (with default arguments) based on the functionality
-     of each method
+     of each method, or whether these should all go into System specification
     """
     @abstractmethod
     def generate(
@@ -368,8 +369,90 @@ class ConditionalMutationScorer(_Core, ABC):
         -------
         Dataframe with raw logit scores (seq x symbols);
         """
-        # TODO: add default implementation
-        pass
+        if not isinstance(self, Scorer):
+            raise NotImplementedError(
+                "Model does not implemented Scorer interface, cannot use this default implementation"
+            )
+
+        if hasattr(self, "ready_or_raise"):
+            self.ready_or_raise()
+
+        if not len(instances) == len(entities) == len(positions):
+            raise ValueError(
+                "Sequences for instances, entities and positions must all have same length"
+            )
+
+        # validate instance sequences with specific requirements for this class
+        self._validate_instances(instances)
+
+        # validate entities / positions
+        self.valid_positions(
+            positions=positions, entities=entities, raise_invalid=True
+        )
+
+        # accumulate mutated instances for scoring, and accumulate index information for easy dataframe construction
+        all_instances = []
+        all_mutants = []
+        instance_indices = []
+        all_refs = []
+
+        for instance_idx, (instance, entity, position) in enumerate(zip(instances, entities, positions)):
+            # get alphabet for current entity in instance
+            alphabet = self.system[entity].alphabet(
+                include_inserts=self.handles_insertions, include_gap=self.handles_deletions
+            )
+
+            # assemble all single mutations for the current triplet (subject to entity type)
+            pos_norm = position - self.system[entity].first_index
+            cur_ref = str(instance[entity].rep[pos_norm])
+            all_refs.append(cur_ref)
+
+            mutants = [
+                [
+                    Mutation(
+                        entity=entity, pos=position, ref=cur_ref, to=to
+                    )
+                ] for to in alphabet
+            ]
+
+            # create mutated instances (this includes self-mutant for normalization as well)
+            all_mutants += mutants
+            all_instances += self.system.mutate(instance, mutants)
+            instance_indices += [instance_idx] * len(mutants)
+
+        # pass through scoring method (note we could also use score_mutants per instance above
+        # if MutationScorer interface implemented but for now default to this simpler solution)
+        scores = self.score(all_instances, status_callback)
+
+        merged_alphabet = Entity.merge_alphabet_symbols([
+            self.system[entity_idx].alphabet(
+                include_gap=self.handles_deletions,
+                include_inserts=self.handles_insertions,
+            ) for entity_idx in set(entities)
+        ])
+
+        # assemble into dataframe
+        series = pd.Series(scores)
+        series.index = pd.MultiIndex.from_tuples(
+            ((instance_idx, mutant[0].entity, mutant[0].pos, mutant[0].to)
+            for (instance_idx, mutant)
+            in zip(instance_indices, all_mutants)),
+            names=["instance", "entity", "pos", "to"]
+        )
+
+        df = (series.unstack(
+            level="to"
+        ).reindex(
+            merged_alphabet, axis=1)
+        )
+
+        # apply row-wise normalization to reference (even if not strictly needed according to specification)
+        assert len(all_refs) == len(df)
+        ref_scores = np.array([
+            row[ref_symbol] for ref_symbol, (idx, row) in zip(all_refs, df.iterrows())
+        ])
+
+        return df.sub(ref_scores, axis=0)
 
 
 class MutationScorer(_Core, ABC):

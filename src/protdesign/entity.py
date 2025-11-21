@@ -656,6 +656,7 @@ class System(UserList[Entity]):
         self,
         instance: SystemInstance,
         validate_reps: bool = True,
+        require_reps: bool = False,
         validate_embeddings: bool = True,
         fixed_length: bool = True,
         allow_deletions: bool = False,
@@ -672,7 +673,9 @@ class System(UserList[Entity]):
             If True, require that length of instance sequence matches the system entity representation length
             (only sensible for fixed-length models and biopolymers)
         validate_reps
-            If True, verify if sequence representations are comprised of valid amino acids/nucleotides
+            If True, verify if *specified* sequence representations are comprised of valid amino acids/nucleotides
+        require_reps
+            If True, ensure that all reps are specified/not None and valid (stricter than validate_reps)
         validate_embeddings
             If True, verify if specified sequence embeddings are valid (correct shape)
         allow_deletions
@@ -697,7 +700,7 @@ class System(UserList[Entity]):
                          )
                     )
 
-                if validate_reps and entity_instance.rep is not None:
+                if (validate_reps and entity_instance.rep is not None) or require_reps:
                     is_valid_seq, _ = entity_instance.rep is not None and valid_sequence(
                         entity_instance.rep,
                         entity.alphabet(

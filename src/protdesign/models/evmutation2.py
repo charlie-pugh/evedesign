@@ -690,7 +690,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         instances: Sequence[SystemInstance],
         entities: Sequence[int],
         positions: Sequence[int],
-        status_callback: StatusCallback | None = None
+        status_callback: StatusCallback | None = None  # noqa
     ) -> pd.DataFrame:
         self.ready_or_raise()
 
@@ -737,7 +737,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         ).mean().reindex(
             target.alphabet(include_gap=True), axis=1
         )
-        conditionals.index.names =["instance", "pos"]
+        conditionals.index.names = ["instance", "pos"]
 
         # add entity 0 to index, then move instance index to outermost level
         conditionals = pd.concat(
