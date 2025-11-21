@@ -74,6 +74,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         embedder: Transformer | None,
         predictor: Any | str,
         predictor_kwargs: dict[str, Any] | None = None,
+        override_embedder_for_training: bool = False,
         use_scores: bool = True,
         use_embeddings: bool = True,
         pooling: Literal["mean", "max"] = "mean",
@@ -94,12 +95,18 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         embedder
             Molecular model to use for computing embeddings/scores on the fly
             (if None, will use values available on supplied instances for build() and score(); in this mode,
-            mutation scoring methods cannot be used)
+            mutation scoring methods cannot be used). Also note override_embedder_for_training for multi-system
+            training of models.
         predictor
             Scikit-learn regressor instance or model name string as available through
             sklearn.utils.all_estimators(type_filter="regressor")
         predictor_kwargs
             Constructor parameters to use if predictor is a string (will be ignored if predictor is a model instance)
+        override_embedder_for_training
+            If True, use embeddings/score on instances, even if embedder is specified. This allows to train
+            a model on a dataset with instances from multiple systems (e.g. stability measurements for many different
+            proteins). The embedder will still be used at prediction time to allow mutation prediction methods
+            to be used.
         use_scores
             If True, include instance score as a model feature (will raise an error if scores are absent and
             cannot be computed with embedder)
@@ -151,6 +158,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
 
         # note: embedder needs to be built already built outside by convention if a BaseModel
         self.embedder = embedder
+        self.override_embedder_for_training = override_embedder_for_training
         self.use_scores = use_scores
         self.use_embeddings = use_embeddings
         self.pooling_strategy = pooling
@@ -158,6 +166,13 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         self.cv_folds = cv_folds
         self.random_state = random_state
         self.n_jobs = n_jobs
+
+        # update class variables on instance as these will be used by mixin scoring function defaults
+        if self.embedder is not None:
+            self.handles_insertions = embedder.handles_insertions
+            self.handles_deletions = embedder.handles_deletions
+            self.requires_fixed_length = embedder.requires_fixed_length
+            self.requires_target = embedder.requires_target
 
         # performance statistics
         self._y_true = None
@@ -216,6 +231,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
     def _transform_and_validate_instances(
         self,
         instances: Sequence[SystemInstance],
+        override_embedder: bool,
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
         # start with instances as they are as transformed instances, will add to these as needed further down
@@ -224,7 +240,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         if self.use_embeddings:
             # compute embeddings on the fly and replace instances if we have the model explicitly specified;
             # pass status_callback through as this is mostly heavy part of the computation
-            if self.embedder is not None:
+            if self.embedder is not None and not override_embedder:
                 # in this case, we leave instance validation to the embedder
                 instances_t = self.embedder.transform(
                     instances, entity=None, status_callback=status_callback
@@ -236,15 +252,13 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
                     self.system.valid_instance(
                         instance,
                         validate_reps=True,
-                        require_reps=False,  # TODO: we do need this *if* scoring mutations
+                        require_reps=False,
                         validate_embeddings=True,
                         fixed_length=False,
                         allow_deletions=True,
                         raise_invalid=True,
                     ) for instance in instances_t
                 ]
-
-                # instances_t = instances
 
             # extract embeddings and verify they are complete; implementation right now
             # assumes single entity case... need to define a strategy for assembling multiple
@@ -305,7 +319,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
             # handle missing scores
             if len(scores) != len(instances_t):
                 # if we have an embedder, we can recompute
-                if self.embedder is not None and isinstance(self.embedder, Scorer):
+                if self.embedder is not None and isinstance(self.embedder, Scorer) and not override_embedder:
                     scores = self.embedder.score(instances)
                 else:
                     raise ValueError(
@@ -348,14 +362,14 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
 
         # training set
         x_train = self._transform_and_validate_instances(
-            data.train_instances, status_callback
+            data.train_instances, self.override_embedder_for_training, status_callback
         )
         y_train = np.array(data.train_values)
 
         # explicitly specified test set, if available, do not use cross-validation for performance estimation
         if data.test_instances is not None:
             x_test = self._transform_and_validate_instances(
-                data.test_instances, status_callback
+                data.test_instances, self.override_embedder_for_training, status_callback
             )
             y_test = np.array(data.test_values)
         else:
@@ -439,7 +453,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         self.ready_or_raise()
 
         x_pred = self._transform_and_validate_instances(
-            instances, status_callback
+            instances, override_embedder=False, status_callback=status_callback
         )
 
         return self.predictor.predict(
