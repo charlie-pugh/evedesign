@@ -3,7 +3,7 @@ Supervised regression models trained on top of embeddings and/or scores from zer
 """
 from typing import Any, Sequence, Literal
 import numpy as np
-from protdesign.dataset import LabeledInstanceDataset
+from protdesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
 from protdesign.entity import System, SystemInstance
 from protdesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
@@ -74,6 +74,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         embedder: Transformer | None,
         predictor: Any | str,
         predictor_kwargs: dict[str, Any] | None = None,
+        target_name: str | None = None,
         override_embedder_for_training: bool = False,
         use_scores: bool = True,
         use_embeddings: bool = True,
@@ -102,6 +103,9 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
             sklearn.utils.all_estimators(type_filter="regressor")
         predictor_kwargs
             Constructor parameters to use if predictor is a string (will be ignored if predictor is a model instance)
+        target_name
+            Name of target series in LabeledInstanceDataset to retrieve. If the dataset only contains a single series,
+            it can be extracted as a default by setting this parameter to None (an exception will be raised otherwise)
         override_embedder_for_training
             If True, use embeddings/score on instances, even if embedder is specified. This allows to train
             a model on a dataset with instances from multiple systems (e.g. stability measurements for many different
@@ -159,6 +163,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
         # note: embedder needs to be built already built outside by convention if a BaseModel
         self.embedder = embedder
         self.override_embedder_for_training = override_embedder_for_training
+        self.target_name = target_name
         self.use_scores = use_scores
         self.use_embeddings = use_embeddings
         self.pooling_strategy = pooling
@@ -340,7 +345,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
     def build(
         self,
         system: System,
-        data: LabeledInstanceDataset,
+        data: LabeledInstanceTrainTestDataset,
         status_callback: StatusCallback | None = None
     ):
         # verify if we can model the system
@@ -355,23 +360,32 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
             )
 
         if ((isinstance(self.predictor, GridSearchCV) or isinstance(self.predictor, RandomizedSearchCV)) and
-                data.test_instances is None):
+                data.test_set is None):
             raise ValueError(
                 "Must specify explicit test set for crossvalidation-based parameter search methods"
             )
 
+        # retrieve target series, do not use missing values
+        train_instances, train_values = data.training_set.select(
+            self.target_name, drop_missing=True
+        )
+
         # training set
         x_train = self._transform_and_validate_instances(
-            data.train_instances, self.override_embedder_for_training, status_callback
+            train_instances, self.override_embedder_for_training, status_callback
         )
-        y_train = np.array(data.train_values)
+        y_train = np.array(train_values)
 
         # explicitly specified test set, if available, do not use cross-validation for performance estimation
-        if data.test_instances is not None:
-            x_test = self._transform_and_validate_instances(
-                data.test_instances, self.override_embedder_for_training, status_callback
+        if data.test_set is not None:
+            test_instances, test_values = data.test_set.select(
+                self.target_name, drop_missing=True
             )
-            y_test = np.array(data.test_values)
+
+            x_test = self._transform_and_validate_instances(
+                test_instances, self.override_embedder_for_training, status_callback
+            )
+            y_test = np.array(test_values)
         else:
             x_test = None
             y_test = None
