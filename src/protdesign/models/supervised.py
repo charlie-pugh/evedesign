@@ -51,7 +51,7 @@ class SklearnRegressorOnEmbeddings(SupervisedBaseModel, Scorer, MutationScorer, 
     """
     available = True
     name: str = "Supervised predictor on sequence embeddings"
-    citation_string: str = "unpublished"
+    citation_strings: list[str] = ["unpublished"]  # TODO: update
 
     # core properties
     requires_target: bool = False

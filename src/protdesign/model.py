@@ -718,8 +718,8 @@ class BaseModel(_Core):
 
     @property
     @abstractmethod
-    # citation string for method
-    def citation_string(self) -> str:
+    # citation strings for method
+    def citation_strings(self) -> list[str]:
         pass
 
     @property
