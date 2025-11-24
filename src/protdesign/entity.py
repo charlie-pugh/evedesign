@@ -652,6 +652,22 @@ class System(UserList[Entity]):
         """
         return deepcopy(self)
 
+    @classmethod
+    def from_structure(cls, structure_model: Model) -> Self:
+        """
+        Build a system from entities in a protein 3D structure
+
+        Parameters
+        ----------
+        structure_model
+            Input structure (all chains present in structure will be used)
+
+        Returns
+        -------
+        System corresponding to entities in structure
+        """
+        raise NotImplementedError()
+
     def valid_instance(
         self,
         instance: SystemInstance,
