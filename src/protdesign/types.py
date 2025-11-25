@@ -36,17 +36,16 @@ class SequenceMetadata(TypedDict):
     taxonomy_id: NotRequired[int]
     taxonomy_lineage: NotRequired[str]
 
+EvaluationScoreName = Literal[
+    "r2", "pearson", "spearman", "rocauc", "mcc", "average_precision"
+]
+
 class ModelStats(TypedDict):
     y_true: NotRequired[list[float]]
     y_pred: NotRequired[list[float]]
 
-    # list of scores to keep full information from cross validation
-    spearman: NotRequired[list[float]]
-
-    # R^2 is not necessarily squared pearson if something else than a linear model was used
-    # for fitting so record both
-    pearson: NotRequired[list[float]]
-    r2: NotRequired[list[float]]
+    # different types of evaluation scores
+    scores: NotRequired[dict[EvaluationScoreName, list[float]]]
 
 # status, progress (optional), message (optional)
 Status = Literal["running", "done", "failed"]

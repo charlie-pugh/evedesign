@@ -28,7 +28,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     """
     available = IMPORT_AVAILABLE
     name: str = "ESM2"
-    citation_strings: list[str] = ["doi:10.1126/science.ade2574"]
+    citations: list[str] = ["doi:10.1126/science.ade2574"]
 
     # core properties
     requires_target: bool = True

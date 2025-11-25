@@ -652,9 +652,9 @@ class Transformer(_Core):
 
     Note: Implementations must verify that all relevant input attributes on instances are specified
 
-    Note: implementations may also set the "score" attribute on the SystemInstance to simultaneously
+    Note: implementations should also set the "score" attribute on the SystemInstance to simultaneously
      score and transform instances for increased computational efficiency (e.g. compute likelihood
-     score and embed).
+     score and embed) if it is able to compute both at the same time
 
     Note: Implementation must not mutate the provided instance list (references to embeddings and structures
      can be reused for efficiency when copying, i.e. a shallow copy of SystemInstance and EntityInstance objects
@@ -719,7 +719,7 @@ class BaseModel(_Core):
     @property
     @abstractmethod
     # citation strings for method
-    def citation_strings(self) -> list[str]:
+    def citations(self) -> list[str]:
         pass
 
     @property
