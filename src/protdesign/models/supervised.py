@@ -14,7 +14,7 @@ from protdesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestD
 from protdesign.entity import System, SystemInstance
 from protdesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
-from protdesign.types import StatusCallback, ModelStats
+from protdesign.types import StatusCallback, ModelStats, BioPolymers
 
 spearman_score = lambda y_true, y_pred: spearmanr(y_true, y_pred).correlation
 pearson_score = lambda y_true, y_pred: pearsonr(y_true, y_pred).correlation
@@ -26,18 +26,16 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     scikit-learn-compatible predictors that implement fit() and predict()
     methods, including pipelines
 
-    Note that passed in data must be pre-transformed (higher values for more functional/fit
-    sequences and lower values for less functional/fit sequences), ideally on a log-like scale;
+    Currently only uses embeddings for biopolymers. Multi-entity systems are supported, but all embeddings
+    must have same feature dimensionality.
+
+    Note that passed in data must be pre-transformed to fit with framework conventions (higher values for more
+    functional/fit sequences and lower values for less functional/fit sequences), ideally on a log-like scale;
     e.g. log-transformed read ratios vs WT
 
-    High-priority future feature additions:
-    - Handle multi-entity systems (need to implement strategy for combining different
-      entity embeddings, either by pooling or stacking; need to handle potentially different feature
-      vector dimensions)
-    - Implement non-random splitting strategies to get more meaningful estimates of performance
+    Note: Possible extensions/updates in future
+    - Implement non-random splitting strategies to get more meaningful estimates of performance?
     - Refactor out reusable functionality (e.g. feature vector creation) so it can be reused for other models
-
-    Lower-priority future feature additions:
     - Multi-output learning (but need to think about how to integrate with score() with expects scalar per instance,
       but main purpose would be able to regress out other variables anyways, e.g. stability from activity)
     """
@@ -256,8 +254,12 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
 
     @classmethod
     def can_model(cls, system: System, data: LabeledInstanceDataset) -> tuple[bool, str]:
-        if len(system) != 1:
-            return False, "Can currently only handle single-component systems"
+        biopolymer_entities = [
+            entity for entity in system if entity.type_ in BioPolymers
+        ]
+
+        if len(biopolymer_entities) == 0:
+            return False, "Can only handle systems with at least one biopolymer entity"
 
         if data is None:
             return False, "Labelled instance must be supplied for building model"
@@ -284,9 +286,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                 instances_t = self.embedder.transform(
                     instances, entity=None, status_callback=status_callback
                 )
-
-                # store if embedder added scores as well (this is implementation convention)
-                embedder_added_scores = isinstance(self.embedder, Scorer)
             else:
                 # perform instance validation; this does not imply all instances actually have an embedding
                 # so must check this as well
@@ -296,29 +295,44 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                         validate_reps=True,
                         require_reps=False,
                         validate_embeddings=True,
-                        fixed_length=False,
-                        allow_deletions=True,
+                        fixed_length=self.requires_fixed_length,
+                        allow_deletions=self.handles_deletions,
                         raise_invalid=True,
                     ) for instance in instances_t
                 ]
 
             # extract embeddings and verify they are complete; implementation right now
-            # assumes single entity case... need to define a strategy for assembling multiple
-            # entities either by pooling or stacking pooled vector;
+            # assumes that multi-entity embeddings for biopolymers have all the same feature dimensionality;
             # note: not creating a numpy array on outer dimension as length of embeddings in position
-            # dimension may vary
+            # dimension may vary before pooling
+            embeddings_in_parts = [
+                [
+                    inst[entity_idx].embedding
+                    for entity_idx, entity in enumerate(self.system)
+                    if entity.type_ in BioPolymers
+                ] for inst in instances_t
+            ]
+
+
+            # make sure embeddings are defined for all entity instances in each system instance,
+            # and that they all have the same feature dimensionality
             embeddings = [
-                inst[0].embedding for inst in instances_t if inst[0].embedding is not None
+                np.concatenate(instance_parts, axis=0)
+                for instance_parts in embeddings_in_parts
+                if not any([part is None for part in instance_parts])  # all embeddings specified
+                and len(set([part.shape[-1] for part in instance_parts])) == 1  # all have same feature dimensionality
             ]
 
             # check embedding completeness
             if len(embeddings) != len(instances_t):
                 raise ValueError(
-                    "All instances must have an embedding if use_embeddings is True. "
-                    "Precompute or specify a model to compute on the fly."
+                    "All instances must have valid embeddings if use_embeddings is True. "
+                    "Precompute or specify a model to compute on the fly. "
+                    "If embeddings are specified, check all biopolymer entities have an embedding, and all have "
+                    "same feature dimensionality."
                 )
 
-            # check embeddings all have same dimensionality (vector or matrix)
+            # check embeddings all have same dimensionality (vector or matrix) across instances
             embedding_shapes = {
                 len(emb.shape) for emb in embeddings
             }
