@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.base import ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import r2_score, make_scorer, average_precision_score, roc_auc_score, matthews_corrcoef
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, cross_validate, cross_val_predict, KFold
+from sklearn.model_selection import cross_validate, cross_val_predict, KFold, StratifiedKFold
 from sklearn.utils import all_estimators
 from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
@@ -122,7 +122,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
             that embeddings have the same length/number of positions across all instances.
         cv_folds
             Number of cross-validation folds to use during model training, if no explicit test dataset is supplied
-            to build()
+            to build(). Will use StratifiedKFold CV for classifiers and regular KFold CV for regressors.
         random_state
             Number to initialize random state of CV fold splitting (note: will not be applied to predictor, this
             needs to be done during instance construction or using predictor_kwargs if predictor string is supplied)
@@ -151,8 +151,10 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
 
             self.predictor = predictor
 
+        self._is_classifier = isinstance(self.predictor, ClassifierMixin)
+
         # set evaluation scores depending if we have a classifier or regressor
-        if isinstance(self.predictor, ClassifierMixin):
+        if self._is_classifier:
             self._eval_scores = {
                 "rocauc": roc_auc_score,
                 "average_precision": average_precision_score,
@@ -400,13 +402,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                 "system does not agree to embedder or scorer"
             )
 
-        # TODO: update this
-        if ((isinstance(self.predictor, GridSearchCV) or isinstance(self.predictor, RandomizedSearchCV)) and
-                data.test_set is None):
-            raise ValueError(
-                "Must specify explicit test set for crossvalidation-based parameter search methods"
-            )
-
         # retrieve target series, do not use missing values
         train_instances, train_values = data.training_set.select(
             self.target_name, drop_missing=True
@@ -435,8 +430,14 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         if x_test is None:
             # estimate performance with cross validation
 
+            # follow sklearn and use stratified k-fold CV for classifiers, standard k-fold otherwise
+            if self._is_classifier:
+                k_fold_cls = StratifiedKFold
+            else:
+                k_fold_cls = KFold
+
             # shuffle dataset, default for cross_validate is shuffle=False
-            k_fold = KFold(
+            k_fold = k_fold_cls(
                 n_splits=self.cv_folds, shuffle=True, random_state=self.random_state
             )
 
