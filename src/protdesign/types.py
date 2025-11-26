@@ -36,6 +36,16 @@ class SequenceMetadata(TypedDict):
     taxonomy_id: NotRequired[int]
     taxonomy_lineage: NotRequired[str]
 
+EvaluationScoreName = Literal[
+    "r2", "pearson", "spearman", "rocauc", "mcc", "average_precision"
+]
+
+class ModelStats(TypedDict):
+    y_true: NotRequired[list[float]]
+    y_pred: NotRequired[list[float]]
+
+    # different types of evaluation scores
+    scores: NotRequired[dict[EvaluationScoreName, list[float]]]
 
 # status, progress (optional), message (optional)
 Status = Literal["running", "done", "failed"]

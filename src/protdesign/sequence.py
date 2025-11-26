@@ -2,7 +2,7 @@
 Biopolymer sequence functionality (protein sequences etc.)
 """
 from string import ascii_lowercase
-from typing import Any, List, Literal, Self, TextIO, Tuple
+from typing import Any, Literal, Self, TextIO
 from collections import abc
 from protdesign.constants import MASK, GAP
 from protdesign.types import BioPolymer, RepSequence, SequenceMetadata
@@ -140,7 +140,7 @@ class Sequences:
         seqs: abc.Sequence[Sequence],
         aligned: bool = False,
         type: BioPolymer = "protein",  # noqa
-        weights: List[float] | None = None,
+        weights: list[float] | None = None,
         format: Literal["a3m", "a2m", "fasta"] | None = None,  # noqa
     ):
         self.seqs = seqs
@@ -235,7 +235,7 @@ def valid_sequence(
     seq: str | RepSequence,
     alphabet: list[str],
     allow_mask: bool = False,
-) -> Tuple[bool, List[Tuple[int, str]]]:
+) -> tuple[bool, list[tuple[int, str]]]:
     """
     Check if a given sequence is valid according to some alphabet
 

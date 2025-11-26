@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Self, Tuple, Sequence, Any
+from typing import Self, Sequence, Any
 import numpy as np
 import pandas as pd
-from protdesign.entity import System, SystemInstance, EntityPosList, Mutant
-from protdesign.types import StatusCallback
+from protdesign.dataset import LabeledInstanceDataset
+from protdesign.entity import System, SystemInstance, Entity, EntityPosList, Mutant, Mutation
+from protdesign.types import StatusCallback, ModelStats, BioPolymers
 
 
 class _Core(ABC):
@@ -70,14 +71,16 @@ class _Core(ABC):
     def supports_gpu_parallel(self) -> bool:
         pass
 
-    @abstractmethod
     def positions(
         self,
         instance: SystemInstance | None,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """
         Return list of all available modelled positions per entity *instance* that are explicitly
         captured by the model
+
+        This method is a default implementation that returns all biopolymer positions in different
+        entities; if a method is not able to handle all positions, it must overwrite this method.
 
         Notes:
         1. Positions that are not modelled (e.g. excluded positions for EVmutation) should not
@@ -87,8 +90,8 @@ class _Core(ABC):
          as entity representation positions. These models can opt to set the instance argument to
          a default value of None.
 
-        3. Models able to handle insertions should also return first_index - 1 coding for
-         an N-terminal insertion (but must not model substitution effects for this position)
+        3. Models able to handle insertions should *not* return first_index - 1 coding; the ability
+         to handle this position for insertions is implied by self.handles_insertions
 
         4. Returned positions should be ordered in ascending order
          by i) entity index, ii) position index in entity
@@ -97,7 +100,29 @@ class _Core(ABC):
         -------
         List of position tuples (entity_idx, position)
         """
-        pass
+        if self.system is None:
+            raise ValueError(
+                "No system present on model"
+            )
+
+        if instance is None:
+            source = self.system
+        else:
+            source = instance
+
+        return [
+            (entity_idx, pos)
+            for entity_idx, entity in enumerate(self.system)
+            for pos, _ in enumerate(
+                source[entity_idx].rep,
+                start=entity.first_index
+            )
+            if (
+                entity.type_ in BioPolymers and
+                entity.first_index is not None and
+                source[entity_idx].rep is not None
+            )
+        ]
 
     def valid_positions(
         self,
@@ -105,7 +130,7 @@ class _Core(ABC):
         instance: SystemInstance | None = None,
         entities: int | Sequence[int] = 0,
         raise_invalid: bool = False,
-    ) -> List[tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """
         Helper method to verify if a list of positions for a given entity instance in system is valid
         (via positions()).
@@ -160,6 +185,21 @@ class _Core(ABC):
 
         return valid_pos
 
+    def _validate_instances(
+        self,
+        instances: Sequence[SystemInstance]
+    ) -> None:
+        [
+            self.system.valid_instance(
+                instance,
+                validate_reps=True,
+                require_reps=True,
+                fixed_length=self.requires_fixed_length,
+                allow_deletions=self.handles_deletions,
+                raise_invalid=True,
+            ) for instance in instances
+        ]
+
 
 class Generator(_Core):
     """
@@ -169,7 +209,7 @@ class Generator(_Core):
     TODO: check whether it makes sense to add more designs parameters shared
      across most methods here, or whether it is better to add additional parameters
      to individual methods (with default arguments) based on the functionality
-     of each method
+     of each method, or whether these should all go into System specification
     """
     @abstractmethod
     def generate(
@@ -180,7 +220,7 @@ class Generator(_Core):
         temperature: float = 1.0,
         deletions: bool = False,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> list[SystemInstance]:
         """
         Sample new sequences from generative model
 
@@ -258,13 +298,20 @@ class Scorer(_Core):
         pass
 
 
-class ConditionalMutationScorer(_Core):
+class ConditionalMutationScorer(_Core, ABC):
     """
     Interface implemented by classes that can compute conditional probabilities
     P(x_i | x_\i) to be used e.g. for Gibbs sampling even if not
     able to compute full P(x_1, ..., x_n)
+
+    This class also serves as a mixin to provide a default implementation using the Scorer scorer() method
+    *if* available (which may not be always the case if the method only allows relative scoring to a target);
+    note that this default implementation should be overwritten with custom implementations that are either
+    more accurate or more efficient if possible by exploiting the special structure of the problem
+    (e.g. computing all substitutions in one forward pass of the model, or conditioning the prediction on all
+    known positions in order-invariant autoregressive models; check the EVmutation2 implementation as a
+    reference example)
     """
-    @abstractmethod
     def score_conditional(
         self,
         instances: Sequence[SystemInstance],
@@ -322,14 +369,104 @@ class ConditionalMutationScorer(_Core):
         -------
         Dataframe with raw logit scores (seq x symbols);
         """
-        pass
+        if not isinstance(self, Scorer):
+            raise NotImplementedError(
+                "Model does not implemented Scorer interface, cannot use this default implementation"
+            )
+
+        if hasattr(self, "ready_or_raise"):
+            self.ready_or_raise()
+
+        if not len(instances) == len(entities) == len(positions):
+            raise ValueError(
+                "Sequences for instances, entities and positions must all have same length"
+            )
+
+        # validate instance sequences with specific requirements for this class
+        self._validate_instances(instances)
+
+        # validate entities / positions
+        self.valid_positions(
+            positions=positions, entities=entities, raise_invalid=True
+        )
+
+        # accumulate mutated instances for scoring, and accumulate index information for easy dataframe construction
+        all_instances = []
+        all_mutants = []
+        instance_indices = []
+        all_refs = []
+
+        for instance_idx, (instance, entity, position) in enumerate(zip(instances, entities, positions)):
+            # get alphabet for current entity in instance
+            alphabet = self.system[entity].alphabet(
+                include_inserts=self.handles_insertions, include_gap=self.handles_deletions
+            )
+
+            # assemble all single mutations for the current triplet (subject to entity type)
+            pos_norm = position - self.system[entity].first_index
+            cur_ref = str(instance[entity].rep[pos_norm])
+            all_refs.append(cur_ref)
+
+            mutants = [
+                [
+                    Mutation(
+                        entity=entity, pos=position, ref=cur_ref, to=to
+                    )
+                ] for to in alphabet
+            ]
+
+            # create mutated instances (this includes self-mutant for normalization as well)
+            all_mutants += mutants
+            all_instances += self.system.mutate(instance, mutants)
+            instance_indices += [instance_idx] * len(mutants)
+
+        # pass through scoring method (note we could also use score_mutants per instance above
+        # if MutationScorer interface implemented but for now default to this simpler solution)
+        scores = self.score(all_instances, status_callback)
+
+        merged_alphabet = Entity.merge_alphabet_symbols([
+            self.system[entity_idx].alphabet(
+                include_gap=self.handles_deletions,
+                include_inserts=self.handles_insertions,
+            ) for entity_idx in set(entities)
+        ])
+
+        # assemble into dataframe
+        series = pd.Series(scores)
+        series.index = pd.MultiIndex.from_tuples(
+            ((instance_idx, mutant[0].entity, mutant[0].pos, mutant[0].to)
+            for (instance_idx, mutant)
+            in zip(instance_indices, all_mutants)),
+            names=["instance", "entity", "pos", "to"]
+        )
+
+        df = (series.unstack(
+            level="to"
+        ).reindex(
+            merged_alphabet, axis=1)
+        )
+
+        # apply row-wise normalization to reference (even if not strictly needed according to specification)
+        assert len(all_refs) == len(df)
+        ref_scores = np.array([
+            row[ref_symbol] for ref_symbol, (idx, row) in zip(all_refs, df.iterrows())
+        ])
+
+        return df.sub(ref_scores, axis=0)
 
 
-class MutationScorer(_Core):
+class MutationScorer(_Core, ABC):
     """
     Interface for methods that allow to score mutations to an instance
+
+    This class also serves as a mixin to provide a default implementation using the Scorer scorer() method
+    *if* available (which may not be always the case if the method only allows relative scoring to a target);
+    note that this default implementation should be overwritten with custom implementations that are either
+    more accurate or more efficient if possible by exploiting the special structure of the problem
+    (e.g. computing all substitutions in one forward pass of the model, or conditioning the prediction on all
+    known positions in order-invariant autoregressive models; check the EVmutation2 implementation as a
+    reference example)
     """
-    @abstractmethod
     def single_mutation_scan(
         self,
         instance: SystemInstance,
@@ -383,9 +520,60 @@ class MutationScorer(_Core):
         Columns must be in same order as returned by Entity.alphabet(); missing predictions must
         be coded by np.nan.
         """
-        pass
+        if positions is not None:
+            if entity is None:
+                raise ValueError(
+                    "Parameter entity must be explicitly specified if using parameter positions"
+                )
+            else:
+                self.valid_positions(positions, instance, entity, raise_invalid=True)
 
-    @abstractmethod
+        if entity is not None and not 0 <= entity < len(self.system):
+            raise ValueError(
+                "Invalid entity selection"
+            )
+
+        # create list of all single mutants (all positions)
+        mutants = self.system.single_mutants(
+            instance, deletions=self.handles_deletions, insertions=self.handles_insertions
+        )
+
+        # filter mutant list by entity/position if specified
+        if entity is not None or positions is not None:
+            mutants = [
+                mutant for mutant in mutants
+                if mutant[0].entity == entity and (positions is None or mutant[0].pos in positions)
+            ]
+
+        # compute scores through score_mutants - might already be a more efficient custom implementation
+        # than score() (which itself can fallback on score() if not implemented); note these
+        # scores will already be normalized to target so no need to normalize here
+        scores = self.score_mutants(
+            instance, mutants, status_callback
+        )
+
+        # build into dataframe and return
+        series = pd.Series(scores)
+
+        series.index = pd.MultiIndex.from_tuples(
+            [mutant[0] for mutant in mutants], names=["entity", "pos", "ref", "to"]
+        )
+
+        # make sure column index (symbols) has right order
+        all_entities = set(series.index.get_level_values("entity"))
+        merged_alphabet = Entity.merge_alphabet_symbols([
+            self.system[entity_idx].alphabet(
+                include_gap=self.handles_deletions,
+                include_inserts=self.handles_insertions,
+            ) for entity_idx in all_entities
+        ])
+
+        return series.unstack(
+            level="to"
+        ).reindex(
+            merged_alphabet, axis=1
+        )
+
     def score_mutants(
         self,
         instance: SystemInstance,
@@ -422,7 +610,36 @@ class MutationScorer(_Core):
         -------
         1D array of scores, guaranteed to be in the same order as mutants list
         """
-        pass
+        if not isinstance(self, Scorer):
+            raise NotImplementedError(
+                "Model does not implemented Scorer interface, cannot use this default implementation"
+            )
+
+        if hasattr(self, "ready_or_raise"):
+            self.ready_or_raise()
+
+        # check instance against molecular system
+        self._validate_instances([instance])
+
+        # validate mutants
+        self.system.valid_mutants(
+            instance,
+            mutants,
+            deletions=self.handles_deletions,
+            insertions=self.handles_insertions,
+            raise_invalid=True
+        )
+
+        # create mutants, add target to compute score for relative normalization
+        instances = [instance] + self.system.mutate(instance, mutants)
+
+        # score instances
+        scores = self.score(instances, status_callback)
+
+        # normalize scores to target instance, remove target from list
+        scores_norm = scores[1:] - scores[0]
+
+        return scores_norm
 
 
 class Transformer(_Core):
@@ -435,9 +652,9 @@ class Transformer(_Core):
 
     Note: Implementations must verify that all relevant input attributes on instances are specified
 
-    Note: implementations may also set the "score" attribute on the SystemInstance to simultaneously
+    Note: implementations should also set the "score" attribute on the SystemInstance to simultaneously
      score and transform instances for increased computational efficiency (e.g. compute likelihood
-     score and embed).
+     score and embed) if it is able to compute both at the same time
 
     Note: Implementation must not mutate the provided instance list (references to embeddings and structures
      can be reused for efficiency when copying, i.e. a shallow copy of SystemInstance and EntityInstance objects
@@ -452,7 +669,7 @@ class Transformer(_Core):
         instances: Sequence[SystemInstance],
         entity: int | None = None,
         status_callback: StatusCallback | None = None
-    ) -> List[SystemInstance]:
+    ) -> list[SystemInstance]:
         """
         Transform system instances from one representation to another
 
@@ -501,6 +718,12 @@ class BaseModel(_Core):
 
     @property
     @abstractmethod
+    # citation strings for method
+    def citations(self) -> list[str]:
+        pass
+
+    @property
+    @abstractmethod
     # whether model has long-running build step (e.g. EVE VAE)
     def requires_heavy_build(self) -> bool:
         pass
@@ -543,7 +766,7 @@ class BaseModel(_Core):
         cls,
         system: System,
         data: Any,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Check if the model is able to perform computations on the specified
         molecular system
@@ -672,3 +895,43 @@ class BaseModel(_Core):
         """
         pass
 
+    def stats(self) -> ModelStats | None:
+        """
+        Return summary statistics from model building (cross-validation performance etc.).
+
+        Default behaviour is to not return statistics
+
+        Returns
+        -------
+        Model-dependent statistics
+        """
+        return None
+
+
+class SupervisedBaseModel(BaseModel):
+    @abstractmethod
+    def build(
+        self,
+        system: System,
+        data: LabeledInstanceDataset,
+        status_callback: StatusCallback | None = None,
+    ) -> Self:
+        """
+        Cf documentation for BaseModel, except that model receives
+        a set of labeled instances as data for (semi-)supervised model training.
+
+        Parameters
+        ----------
+        system
+            Molecular system to be modelled
+        data
+            Labeled instance dataset
+        status_callback
+            Callback function to receive progress updates
+
+        Returns
+        -------
+        self
+            Reference to the instance for method chaining
+        """
+        pass
