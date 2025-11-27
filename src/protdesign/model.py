@@ -17,6 +17,12 @@ class _Core(ABC):
     """
     @property
     @abstractmethod
+    # citation strings for method
+    def citations(self) -> list[str]:
+        pass
+
+    @property
+    @abstractmethod
     # must return system modelled by the current instance, or None if not yet defined
     def system(self) -> System | None:
         pass
@@ -714,12 +720,6 @@ class BaseModel(_Core):
     @abstractmethod
     # plain-text name of method
     def name(self) -> str:
-        pass
-
-    @property
-    @abstractmethod
-    # citation strings for method
-    def citations(self) -> list[str]:
         pass
 
     @property

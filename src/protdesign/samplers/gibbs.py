@@ -67,6 +67,8 @@ class GibbsSampler(Generator):
     3. Current implementation can only sample entities of same type (protein or nucleotide entities only,
      but not combinations of types, e.g. design protein and nucleotide entities simultaneously)
     """
+    citations: list[str] = ["doi:10.1038/s41467-024-49119-x"]
+
     # core properties
     requires_target: bool = True
     requires_fixed_length: bool = True
