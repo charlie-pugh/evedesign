@@ -822,8 +822,8 @@ class System(UserList[Entity]):
             }
 
         entity_to_valid_subs = {
-            entity_idx: entity.alphabet(include_gap=deletions, include_inserts=insertions)
-            for entity_idx, entity in enumerate(self.data)
+            entity_idx: self.data[entity_idx].alphabet(include_gap=deletions, include_inserts=insertions)
+            for entity_idx in entity_to_pos
         }
 
         return entity_to_pos, entity_to_valid_subs, entity_to_ins_pos
