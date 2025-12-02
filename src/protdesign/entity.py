@@ -806,8 +806,8 @@ class System(UserList[Entity]):
                     instance[entity_idx].rep, start=entity.first_index
                 )
             } for entity_idx, entity in enumerate(self.data)
-            # note: defined_sequence() is too strict of a check here as it required rep to be defined
-            if entity.type_ in BioPolymers and entity.first_index is not None
+            # only iterate defined reps for biopolymer sequences
+            if entity.type_ in BioPolymers and entity.first_index is not None and instance[entity_idx].rep is not None
         }
 
         # also record possible positions for insertion including N-terminal of first_index
