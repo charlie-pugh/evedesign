@@ -806,8 +806,8 @@ class System(UserList[Entity]):
                     instance[entity_idx].rep, start=entity.first_index
                 )
             } for entity_idx, entity in enumerate(self.data)
-            # note: defined_sequence() is too strict of a check here as it required rep to be defined
-            if entity.type_ in BioPolymers and entity.first_index is not None
+            # only iterate defined reps for biopolymer sequences
+            if entity.type_ in BioPolymers and entity.first_index is not None and instance[entity_idx].rep is not None
         }
 
         # also record possible positions for insertion including N-terminal of first_index
@@ -822,8 +822,8 @@ class System(UserList[Entity]):
             }
 
         entity_to_valid_subs = {
-            entity_idx: entity.alphabet(include_gap=deletions, include_inserts=insertions)
-            for entity_idx, entity in enumerate(self.data)
+            entity_idx: self.data[entity_idx].alphabet(include_gap=deletions, include_inserts=insertions)
+            for entity_idx in entity_to_pos
         }
 
         return entity_to_pos, entity_to_valid_subs, entity_to_ins_pos

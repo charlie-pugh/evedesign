@@ -32,7 +32,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     # core properties
     requires_target: bool = True
-    requires_fixed_length: bool = True
+    requires_fixed_length: bool = False
     handles_deletions: bool = False
     handles_insertions: bool = False
     requires_gpu: bool = False
