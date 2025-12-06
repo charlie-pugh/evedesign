@@ -41,11 +41,11 @@ EvaluationScoreName = Literal[
 ]
 
 class ModelStats(TypedDict):
-    y_true: NotRequired[list[float]]
-    y_pred: NotRequired[list[float]]
+    y_true: NotRequired[np.ndarray]
+    y_pred: NotRequired[np.ndarray]
 
     # different types of evaluation scores
-    scores: NotRequired[dict[EvaluationScoreName, list[float]]]
+    scores: NotRequired[dict[EvaluationScoreName, np.ndarray]]
 
 # status, progress (optional), message (optional)
 Status = Literal["running", "done", "failed"]
