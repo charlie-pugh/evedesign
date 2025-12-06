@@ -14,7 +14,7 @@ from protdesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestD
 from protdesign.entity import System, SystemInstance
 from protdesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
-from protdesign.types import StatusCallback, ModelStats, BioPolymers
+from protdesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
 
 spearman_score = lambda y_true, y_pred: spearmanr(y_true, y_pred).correlation
 pearson_score = lambda y_true, y_pred: pearsonr(y_true, y_pred).correlation
@@ -71,6 +71,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         target_name: str | None = None,
         pooling: Literal["mean", "max"] | None = "mean",
         cv_folds: int | None = 5,
+        batch_size: BatchSize = 128,
         random_state: int = 42,
         n_jobs: int = -1,
     ):
@@ -121,6 +122,9 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         cv_folds
             Number of cross-validation folds to use during model training, if no explicit test dataset is supplied
             to build(). Will use StratifiedKFold CV for classifiers and regular KFold CV for regressors.
+        batch_size
+            Assemble X features in batches of this size. Helps to address out of memory errors as embedding memory
+            usage can become very large if predicting many instances at the same time
         random_state
             Number to initialize random state of CV fold splitting (note: will not be applied to predictor, this
             needs to be done during instance construction or using predictor_kwargs if predictor string is supplied)
@@ -187,6 +191,10 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         self.cv_folds = cv_folds
         self.random_state = random_state
         self.n_jobs = n_jobs
+
+        if batch_size == "auto":
+            raise NotImplementedError("Automatic batch_size not yet implemented")
+        self.batch_size = batch_size
 
         # update class variable defaults on instance as these will be used by mixin scoring function defaults
         if self.embedder is not None:
@@ -266,7 +274,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
 
         return True, ""
 
-    def _transform_and_validate_instances(
+    def _transform_and_validate_instances_batch(
         self,
         instances: Sequence[SystemInstance],
         override_models: bool,
@@ -397,6 +405,31 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         )
 
         return x
+
+    def _transform_and_validate_instances(
+        self,
+        instances: Sequence[SystemInstance],
+        override_models: bool,
+        status_callback: StatusCallback | None = None  # noqa
+    ) -> np.ndarray[tuple[int, int], np.dtype[float]]:
+        if self.batch_size is None:
+            batch_size = len(instances)
+        else:
+            batch_size = self.batch_size
+
+        all_x = []
+        for batch_start in range(0, len(instances), batch_size):
+            batch_instances = instances[batch_start:batch_start + batch_size]
+
+            x_batch = self._transform_and_validate_instances_batch(
+                batch_instances,
+                override_models=override_models,
+                # TODO: implement sensible way to handle status updates
+            )
+
+            all_x.append(x_batch)
+
+        return np.concatenate(all_x, axis=0)  # noqa
 
     def build(
         self,
