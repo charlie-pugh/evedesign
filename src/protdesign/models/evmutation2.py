@@ -392,7 +392,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         ):
             # sampling function expects number of designs to be a multiple of batch_size,
             # so adjust accordingly
-            if rem := num_designs % self.decoder_batch_size != 0:
+            if (rem := num_designs % self.decoder_batch_size) != 0:
                 num_designs_adj = num_designs + (self.decoder_batch_size - rem)
             else:
                 num_designs_adj = num_designs
