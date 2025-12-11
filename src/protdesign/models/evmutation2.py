@@ -59,6 +59,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         decoder_num_full_samples: int = 16,
         decoder_num_mutant_samples: int = 16,
         decoder_share_order_across_encodings: bool = True,
+        fix_full_decoding_order: bool = True,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
     ):
@@ -85,6 +86,10 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
             Number of sampled decoding orders when computing mutant scores
         decoder_share_order_across_encodings
             Reuse decoding order across multiple encodings (if more than 1 used)
+        fix_full_decoding_order
+            If True, keep the full sequence decoding orders created on the first
+            call to score_full_probability, to compute scores and embeddings in a comparable way
+            on subsequent calls to the function
         keep_model_after_build
             If True, keep model parameters asssociated to instance after build step
             to avoid reloading when scoring/generating. If serializing model, set to
@@ -116,6 +121,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         self.decoder_num_full_samples = decoder_num_full_samples
         self.decoder_num_mutant_samples = decoder_num_mutant_samples
         self.decoder_share_order_across_encodings = decoder_share_order_across_encodings
+        self.fix_full_decoding_order = fix_full_decoding_order
 
         if self.encoder_num_samples < 1 or self.decoder_num_full_samples < 1 or self.decoder_num_mutant_samples < 1:
             raise ValueError(
@@ -134,6 +140,8 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         # first for permanent association with object
         self.encoding = None
         self.pos_mask = None
+
+        self._fixed_decoding_order = None
 
         self._single_rep_on_device = None
         self._pair_rep_on_device = None
@@ -259,6 +267,9 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
         # also store position mask for prediction time
         self.pos_mask = input_features.pos_mask.cpu()
+
+        # reset decoding order in case it was previously set
+        self._fixed_decoding_order = None
 
         # context for loading (and possibly destroying model parameters)
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
@@ -476,14 +487,24 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
                 batch_size=self.decoder_batch_size,
                 num_samples=self.decoder_num_full_samples,
                 share_decoding_order_across_encodings=self.decoder_share_order_across_encodings,
-                return_embeddings=return_embeddings
+                return_embeddings=return_embeddings,
+                fixed_seq_order=self._fixed_decoding_order
             )
 
             if return_embeddings:
-                scores, embeddings = ret
+                scores, seq_order, embeddings = ret
             else:
-                scores = ret
+                scores, seq_order = ret
                 embeddings = None
+
+            # if keeping decoding order fixed, store it for use in future calls
+            # (otherwise will remain None and new decoding order will be used in future calls);
+            # reason why we store here rather than inside model itself is so we can save
+            # the decoding order when serializing this object
+            if self.fix_full_decoding_order:
+                # note above function passes order through unchanged if already set so
+                # can simply reassign here
+                self._fixed_decoding_order = seq_order
 
         # average the logits across encoder and decoder samples,
         # and make sure aggregated dataframe it is sorted by sequence index
