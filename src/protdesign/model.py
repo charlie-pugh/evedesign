@@ -391,10 +391,11 @@ class ConditionalMutationScorer(_Core, ABC):
         # validate instance sequences with specific requirements for this class
         self._validate_instances(instances)
 
-        # validate entities / positions
-        self.valid_positions(
-            positions=positions, entities=entities, raise_invalid=True
-        )
+        # validate entity / position per instance as we cannot assume fixed length here
+        for instance, entity, pos in zip(instances, entities, positions):
+            self.valid_positions(
+                positions=[pos], instance=instance, entities=[entity], raise_invalid=True
+            )
 
         # accumulate mutated instances for scoring, and accumulate index information for easy dataframe construction
         all_instances = []
