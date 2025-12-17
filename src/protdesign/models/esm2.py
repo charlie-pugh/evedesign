@@ -438,7 +438,9 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         # Validate positions
         if positions is not None:
-            self.valid_positions(positions, entities=0, raise_invalid=True)
+            self.valid_positions(
+                positions, instance=instance, entities=0, raise_invalid=True
+            )
         else:
             positions = list(
                 range(target.first_index, target.first_index + len(target.rep))
@@ -661,7 +663,10 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         # Validate positions
         target = self.system[0]
-        self.valid_positions(positions, entities=0, raise_invalid=True)
+        for instance, pos in zip(instances, positions):
+            self.valid_positions(
+                [pos], instance=instance, entities=0, raise_invalid=True
+            )
 
         # Convert sequences to strings if needed
         seqs = []
