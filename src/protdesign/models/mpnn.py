@@ -253,7 +253,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         positions = []
         for entity_idx, entity in enumerate(self.system):
             if entity.rep is not None:
-                for pos in range(len(entity.rep)):
+                first_idx = entity.first_index if entity.first_index is not None else 0
+                for pos in range(first_idx, first_idx + len(entity.rep)):
                     positions.append((entity_idx, pos))
         return positions
 
