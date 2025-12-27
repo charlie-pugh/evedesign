@@ -718,7 +718,22 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         # 1. Check model is ready
         self.ready_or_raise()
 
-        # 2. Extract sequences from instances and convert to PDB positions
+        # 2. Validate instance sequence lengths match the built system
+        for instance_idx, instance in enumerate(instances):
+            for entity_idx, (entity_instance, system_entity) in enumerate(zip(instance, self.system)):
+                if entity_instance.rep is not None and system_entity.rep is not None:
+                    # Get the sequence length
+                    entity_seq = ''.join(entity_instance.rep) if isinstance(
+                        entity_instance.rep, np.ndarray) else str(entity_instance.rep)
+                    expected_length = len(system_entity.rep)
+
+                    if len(entity_seq) != expected_length:
+                        raise ValueError(
+                            f"Instance {instance_idx}, entity {entity_idx} has length {len(entity_seq)}, "
+                            f"but system entity has length {expected_length}"
+                        )
+
+        # 3. Extract sequences from instances and convert to PDB positions
         sequences = []
         for instance in instances:
             # Reconstruct full PDB sequence (length = total PDB residues)
@@ -737,13 +752,13 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
             sequences.append(''.join(pdb_seq))
 
-        # 3. Score each sequence
+        # 4. Score each sequence
         scores = []
         with torch.no_grad():
             for seq_idx, seq in enumerate(sequences):
                 if status_callback:
-                    status_callback("running", seq_idx / len(sequences),
-                                    f"Scoring sequence {seq_idx + 1}/{len(sequences)}")
+                    status_callback(
+                        f"Scoring sequence {seq_idx + 1}/{len(sequences)}")
 
                 # Convert sequence to tensor
                 S_tensor = torch.tensor(
@@ -775,7 +790,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                 # Convert to positive log likelihood
                 scores.append(-loss.item())
 
-        # 4. Return as numpy array
+        # 5. Return as numpy array
         return np.array(scores)
 
     def __del__(self):
