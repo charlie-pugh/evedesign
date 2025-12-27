@@ -726,7 +726,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
             # Fill in the PDB sequence from entity sequences
             for entity_idx, entity_instance in enumerate(instance):
-                entity_seq = str(entity_instance.rep)
+                entity_seq = ''.join(entity_instance.rep) if isinstance(
+                    entity_instance.rep, np.ndarray) else str(entity_instance.rep)
 
                 # Map entity positions back to PDB positions
                 for pdb_pos, (mapped_entity_idx, entity_pos) in self.pdb_to_entity_mapping.items():
