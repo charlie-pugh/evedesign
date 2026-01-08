@@ -521,7 +521,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             status_callback: Optional callback for status updates
 
         Returns:
-            List of SystemInstance objects with optional scores
+            List of SystemInstance objects with scores and confidence
         """
         # 1. Check model is ready
         self.ready_or_raise()
@@ -604,60 +604,30 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         for design_idx in range(num_designs):
             entity_instances = []
 
-            # Calculate individual entity recoveries
             for entity_idx, (entity_id, length) in enumerate(self.entity_lengths):
                 generated_seq = separated_sequences[entity_idx][design_idx]
-
-                # For recovery calculation, only compare positions that exist in PDB
-                if self.system[entity_idx].rep is not None:
-                    native_entity_seq = str(self.system[entity_idx].rep)
-                    matches = sum(1 for i, (a, b) in enumerate(zip(native_entity_seq, generated_seq))
-                                  if a == b and b != 'X')
-                    non_missing = sum(1 for aa in generated_seq if aa != 'X')
-                    recovery = matches / non_missing if non_missing > 0 else 0.0
-                else:
-                    recovery = 0.0
 
                 # Create EntityInstance
                 entity_instance = EntityInstance(
                     rep=generated_seq
                 )
-
                 entity_instances.append(entity_instance)
 
-            # Calculate overall recovery
-            full_generated = "".join(str(inst.rep)
-                                     for inst in entity_instances)
-            full_native = "".join(
-                str(self.system[i].rep) for i in range(len(self.system)))
-            overall_matches = sum(1 for a, b in zip(full_native, full_generated)
-                                  if a == b and b != 'X')
-            overall_non_missing = sum(1 for aa in full_generated if aa != 'X')
-            overall_recovery = overall_matches / \
-                overall_non_missing if overall_non_missing > 0 else 0.0
-
-            # Create SystemInstance
+            # Create SystemInstance with None score/confidence (will be filled in next step)
             system_instance = SystemInstance(
                 entity_instances=entity_instances,
                 score=None,
-                confidence=None,
-                metadata={
-                    'design_id': design_idx,
-                    'overall_recovery': overall_recovery,
-                    'log_probability': None,
-                    'sampling_probabilities': None
-                }
+                confidence=None
             )
-
             system_instances.append(system_instance)
 
         # 10. Score the generated instances
         scores = self.score(system_instances, status_callback=status_callback)
 
-        # 11. Attach scores to instances
+        # 11. Attach scores and confidence to instances
         for instance, raw_score in zip(system_instances, scores):
             instance.score = raw_score
-            instance.metadata['log_probability'] = raw_score
+            instance.confidence = raw_score
 
         return system_instances
 
