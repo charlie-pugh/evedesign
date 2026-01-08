@@ -4,6 +4,8 @@ import tempfile
 import os
 from typing import List, Dict, Sequence, Tuple, Optional, Self
 from pathlib import Path
+import copy
+import biotite.structure.io.pdb as pdb
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources
@@ -265,6 +267,9 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         Returns:
             Tuple of (pdb_path, pdb_to_entity_mapping, entity_to_pdb_chains)
         """
+        import copy
+        import biotite.structure.io.pdb as pdb
+
         temp_fd, temp_path = tempfile.mkstemp(suffix='.pdb')
         os.close(temp_fd)
 
@@ -282,6 +287,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         # Track which entity each chain belongs to
         chain_to_entity = {}  # chain_id -> entity_idx
         entity_to_pdb_chains = {i: [] for i in range(len(system))}
+        pdb_to_entity_mapping = {}
 
         # Use single letter chain IDs: A, B, C, ..., Z, AA, AB, etc.
         def get_chain_id(chain_num: int) -> str:
@@ -295,106 +301,62 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                 return first + second
 
         chain_counter = 0
+        current_pdb_pos = 0
+        all_structures = []
 
-        with open(temp_path, 'w') as outfile:
-            for entity_idx, entity in enumerate(system):
-                if entity.structures and structure_key in entity.structures:
-                    entity_chains = entity.structures[structure_key]
-                    if not isinstance(entity_chains, list):
-                        entity_chains = [entity_chains]
+        for entity_idx, entity in enumerate(system):
+            if entity.structures and structure_key in entity.structures:
+                entity_chains = entity.structures[structure_key]
+                if not isinstance(entity_chains, list):
+                    entity_chains = [entity_chains]
 
-                    for chain_obj in entity_chains:
-                        # Assign new chain ID
-                        new_chain_id = get_chain_id(chain_counter)
-                        chain_to_entity[new_chain_id] = entity_idx
-                        entity_to_pdb_chains[entity_idx].append(new_chain_id)
+                for chain_obj in entity_chains:
+                    # Deep copy the structure to avoid modifying the original
+                    structure_copy = copy.deepcopy(chain_obj)
 
-                        # Write chain to PDB with modified chain ID
-                        if hasattr(chain_obj, 'to_pdb_string'):
-                            pdb_content = chain_obj.to_pdb_string()
-                            modified_content = self._replace_chain_id(
-                                pdb_content, new_chain_id)
-                            outfile.write(modified_content)
-                        elif hasattr(chain_obj, 'to_file'):
-                            # Write to temp file then read and modify
-                            temp_chain_fd, temp_chain_path = tempfile.mkstemp(
-                                suffix='.pdb')
-                            os.close(temp_chain_fd)
-                            try:
-                                chain_obj.to_file(
-                                    temp_chain_path, format="pdb")
-                                with open(temp_chain_path, 'r') as infile:
-                                    pdb_content = infile.read()
-                                    modified_content = self._replace_chain_id(
-                                        pdb_content, new_chain_id)
-                                    outfile.write(modified_content)
-                            finally:
-                                if os.path.exists(temp_chain_path):
-                                    os.unlink(temp_chain_path)
-                        else:
-                            raise NotImplementedError(
-                                "Cannot write PDB - Structure class missing to_file or to_pdb_string method")
+                    # Assign new chain ID
+                    new_chain_id = get_chain_id(chain_counter)
+                    chain_to_entity[new_chain_id] = entity_idx
+                    entity_to_pdb_chains[entity_idx].append(new_chain_id)
 
-                        chain_counter += 1
+                    # Access the underlying atom array (handle Model wrapper if present)
+                    if hasattr(structure_copy, 'atom_array'):
+                        atom_array = structure_copy.atom_array
+                    elif hasattr(structure_copy, 'array'):
+                        atom_array = structure_copy.array
+                    else:
+                        # Assume it's already an AtomArray
+                        atom_array = structure_copy
 
-            # Write END record
-            outfile.write("END\n")
+                    # Modify chain_id directly in the biotite structure array
+                    atom_array.chain_id[:] = new_chain_id
 
-        # Now parse the written PDB to build position mappings
-        pdb_to_entity_mapping = self._build_position_mapping(
-            temp_path, chain_to_entity
-        )
+                    # Build position mapping from CA atoms
+                    ca_mask = atom_array.atom_name == 'CA'
+                    ca_atoms = atom_array[ca_mask]
+
+                    entity_pos = 0
+                    for atom in ca_atoms:
+                        pdb_to_entity_mapping[current_pdb_pos] = (
+                            entity_idx, entity_pos)
+                        entity_pos += 1
+                        current_pdb_pos += 1
+
+                    all_structures.append(atom_array)
+                    chain_counter += 1
+
+        # Concatenate all structures and write to file
+        if all_structures:
+            combined_structure = all_structures[0]
+            for struct in all_structures[1:]:
+                combined_structure = combined_structure + struct
+
+            # Write to PDB file
+            pdb_file = pdb.PDBFile()
+            pdb.set_structure(pdb_file, combined_structure)
+            pdb_file.write(temp_path)
 
         return temp_path, pdb_to_entity_mapping, entity_to_pdb_chains
-
-    def _build_position_mapping(self, pdb_path: str, chain_to_entity: Dict[str, int]) -> Dict[int, Tuple[int, int]]:
-        """
-        Build mapping from PDB residue positions to entity positions by parsing the PDB file.
-
-        Args:
-            pdb_path: Path to PDB file
-            chain_to_entity: Mapping of chain_id -> entity_idx
-
-        Returns:
-            Dictionary mapping pdb_position -> (entity_idx, entity_position)
-        """
-        pdb_to_entity_mapping = {}
-
-        # Track position within each chain
-        chain_positions = {}  # chain_id -> current position counter
-
-        # Track overall PDB position
-        current_pdb_pos = 0
-        last_chain = None
-        last_resnum = None
-
-        with open(pdb_path, 'r') as f:
-            for line in f:
-                if line.startswith('ATOM') and line[12:16].strip() == 'CA':
-                    chain_id = line[21].strip()
-                    resnum = int(line[22:26].strip())
-
-                    # Initialize chain position counter if needed
-                    if chain_id not in chain_positions:
-                        chain_positions[chain_id] = 0
-
-                    # Check if this is a new residue (not just another atom)
-                    if chain_id != last_chain or resnum != last_resnum:
-                        # Get entity index for this chain
-                        if chain_id in chain_to_entity:
-                            entity_idx = chain_to_entity[chain_id]
-                            entity_pos = chain_positions[chain_id]
-
-                            pdb_to_entity_mapping[current_pdb_pos] = (
-                                entity_idx, entity_pos)
-
-                            chain_positions[chain_id] += 1
-                            current_pdb_pos += 1
-
-                        last_chain = chain_id
-                        last_resnum = resnum
-
-        return pdb_to_entity_mapping
 
     def _replace_chain_id(self, pdb_content: str, new_chain_id: str) -> str:
         """Replace chain IDs in PDB content."""
@@ -616,9 +578,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             num_batches = (num_designs + batch_size - 1) // batch_size
             for batch_idx in range(num_batches):
                 if status_callback:
-
                     status_callback(
-                        "running", None, f"Generating batch {batch_idx + 1}/{num_batches}")
+                        f"Generating batch {batch_idx + 1}/{num_batches}")
 
                 feature_dict_copy["randn"] = torch.randn(
                     [batch_size, L], device=self.device)
