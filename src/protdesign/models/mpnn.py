@@ -267,9 +267,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         Returns:
             Tuple of (pdb_path, pdb_to_entity_mapping, entity_to_pdb_chains)
         """
-        import copy
-        import biotite.structure.io.pdb as pdb
-
         temp_fd, temp_path = tempfile.mkstemp(suffix='.pdb')
         os.close(temp_fd)
 
@@ -285,7 +282,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         structure_key = list(structure_keys)[0] if structure_keys else None
 
         # Track which entity each chain belongs to
-        chain_to_entity = {}  # chain_id -> entity_idx
         entity_to_pdb_chains = {i: [] for i in range(len(system))}
         pdb_to_entity_mapping = {}
 
@@ -302,7 +298,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
         chain_counter = 0
         current_pdb_pos = 0
-        all_structures = []
+        models_to_concat = []
 
         for entity_idx, entity in enumerate(system):
             if entity.structures and structure_key in entity.structures:
@@ -311,29 +307,20 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                     entity_chains = [entity_chains]
 
                 for chain_obj in entity_chains:
-                    # Deep copy the structure to avoid modifying the original
-                    structure_copy = copy.deepcopy(chain_obj)
+
+                    # perform deep copy
+                    model_copy = Model(copy.deepcopy(chain_obj.atom_array))
 
                     # Assign new chain ID
                     new_chain_id = get_chain_id(chain_counter)
-                    chain_to_entity[new_chain_id] = entity_idx
                     entity_to_pdb_chains[entity_idx].append(new_chain_id)
 
-                    # Access the underlying atom array (handle Model wrapper if present)
-                    if hasattr(structure_copy, 'atom_array'):
-                        atom_array = structure_copy.atom_array
-                    elif hasattr(structure_copy, 'array'):
-                        atom_array = structure_copy.array
-                    else:
-                        # Assume it's already an AtomArray
-                        atom_array = structure_copy
-
-                    # Modify chain_id directly in the biotite structure array
-                    atom_array.chain_id[:] = new_chain_id
+                    # Modify chain_id directly in the Model's atom array
+                    model_copy.atom_array.chain_id[:] = new_chain_id
 
                     # Build position mapping from CA atoms
-                    ca_mask = atom_array.atom_name == 'CA'
-                    ca_atoms = atom_array[ca_mask]
+                    ca_mask = model_copy.atom_array.atom_name == 'CA'
+                    ca_atoms = model_copy.atom_array[ca_mask]
 
                     entity_pos = 0
                     for atom in ca_atoms:
@@ -342,19 +329,14 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                         entity_pos += 1
                         current_pdb_pos += 1
 
-                    all_structures.append(atom_array)
+                    models_to_concat.append(model_copy)
                     chain_counter += 1
 
-        # Concatenate all structures and write to file
-        if all_structures:
-            combined_structure = all_structures[0]
-            for struct in all_structures[1:]:
-                combined_structure = combined_structure + struct
-
-            # Write to PDB file
-            pdb_file = pdb.PDBFile()
-            pdb.set_structure(pdb_file, combined_structure)
-            pdb_file.write(temp_path)
+        # Use Model.concat() to merge all models
+        if models_to_concat:
+            combined_model = Model.concat(models_to_concat)
+            # Use Model.to_file() to write to PDB
+            combined_model.to_file(temp_path, format='pdb')
 
         return temp_path, pdb_to_entity_mapping, entity_to_pdb_chains
 
