@@ -419,8 +419,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                                for entity_idx, _ in entity_lengths}
 
         for concat_seq in concatenated_sequences:
-            # Initialize entity sequences with gaps
-            entity_seqs = {entity_idx: ['X'] * length
+            # Initialize entity sequences with mask character for missing density
+            entity_seqs = {entity_idx: [constants.MASK] * length  # Changed from ['X']
                            for entity_idx, length in entity_lengths}
 
             # Fill in positions that exist in PDB
@@ -651,7 +651,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         for instance in instances:
             # Reconstruct full PDB sequence (length = total PDB residues)
             pdb_length = len(self.native_seq)
-            pdb_seq = ['X'] * pdb_length
+            pdb_seq = [constants.MASK] * pdb_length  # Changed from ['X']
 
             # Fill in the PDB sequence from entity sequences
             for entity_idx, entity_instance in enumerate(instance):
