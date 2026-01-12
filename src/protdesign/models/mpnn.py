@@ -5,7 +5,6 @@ import os
 from typing import List, Dict, Sequence, Tuple, Optional, Self
 from pathlib import Path
 import copy
-import biotite.structure.io.pdb as pdb
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources
@@ -308,7 +307,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
                 for chain_obj in entity_chains:
 
-                    # perform deep copy
+                    # Perform deep copy
                     model_copy = Model(copy.deepcopy(chain_obj.atom_array))
 
                     # Assign new chain ID
@@ -318,15 +317,11 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                     # Modify chain_id directly in the Model's atom array
                     model_copy.atom_array.chain_id[:] = new_chain_id
 
-                    # Build position mapping from CA atoms
-                    ca_mask = model_copy.atom_array.atom_name == 'CA'
-                    ca_atoms = model_copy.atom_array[ca_mask]
-
-                    entity_pos = 0
-                    for atom in ca_atoms:
+                    # Build position mapping using residue table
+                    res_df = model_copy.res_df()
+                    for entity_pos in range(len(res_df)):
                         pdb_to_entity_mapping[current_pdb_pos] = (
                             entity_idx, entity_pos)
-                        entity_pos += 1
                         current_pdb_pos += 1
 
                     models_to_concat.append(model_copy)
