@@ -13,6 +13,7 @@ from protdesign.entity import System, SystemInstance, EntityInstance
 from protdesign.entity import EntityPosList
 from protdesign.utils import ensure_sequence
 from protdesign.types import DeviceType, StatusCallback, BatchSize
+import urllib.request
 
 # Import the LigandMPNN modules
 from protdesign.models.ligandmpnn.data_utils import (
@@ -23,21 +24,88 @@ from protdesign.models.ligandmpnn.data_utils import (
     get_score,
 )
 from protdesign.models.ligandmpnn.model_utils import ProteinMPNN
+try:
+    import prody
+    IMPORT_AVAILABLE = True
+except ImportError:
+    IMPORT_AVAILABLE = False
+
+# Model checkpoint URLs
+MODEL_URLS = {
+    # Original ProteinMPNN weights
+    "proteinmpnn_v_48_002": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_002.pt",
+    "proteinmpnn_v_48_010": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_010.pt",
+    "proteinmpnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_020.pt",
+    "proteinmpnn_v_48_030": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_030.pt",
+    # LigandMPNN with num_edges=32; atom_context_num=25
+    "ligandmpnn_v_32_005_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_005_25.pt",
+    "ligandmpnn_v_32_010_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt",
+    "ligandmpnn_v_32_020_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_020_25.pt",
+    "ligandmpnn_v_32_030_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_030_25.pt",
+    # Per residue label membrane ProteinMPNN
+    "per_residue_label_membrane_mpnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/per_residue_label_membrane_mpnn_v_48_020.pt",
+    # Global label membrane ProteinMPNN
+    "global_label_membrane_mpnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/global_label_membrane_mpnn_v_48_020.pt",
+    # SolubleMPNN
+    "solublempnn_v_48_002": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_002.pt",
+    "solublempnn_v_48_010": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_010.pt",
+    "solublempnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt",
+    "solublempnn_v_48_030": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_030.pt",
+    # LigandMPNN for side-chain packing (multi-step denoising model)
+    "ligandmpnn_sc_v_32_002_16": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_sc_v_32_002_16.pt",
+}
+
+
+def download_checkpoint(model_name: str, save_dir: str = "./model_params") -> str:
+    """
+    Download model checkpoint from URL if not already present.
+
+    Args:
+        model_name: Name of the model to download
+        save_dir: Directory to save the checkpoint
+
+    Returns:
+        Path to the downloaded checkpoint
+
+    Raises:
+        ValueError: If model_name is not recognized
+        RuntimeError: If download fails
+    """
+    if model_name not in MODEL_URLS:
+        available_models = ", ".join(MODEL_URLS.keys())
+        raise ValueError(
+            f"Model '{model_name}' not recognized. Available models: {available_models}"
+        )
+
+    # Create save directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Construct file path
+    checkpoint_path = os.path.join(save_dir, f"{model_name}.pt")
+
+    # Download if not already present
+    if not os.path.exists(checkpoint_path):
+        url = MODEL_URLS[model_name]
+        print(f"Downloading {model_name} from {url}...")
+        try:
+            urllib.request.urlretrieve(url, checkpoint_path)
+            print(f"Successfully downloaded to {checkpoint_path}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to download {model_name}: {str(e)}")
+    else:
+        print(f"Using cached checkpoint at {checkpoint_path}")
+
+    return checkpoint_path
 
 
 class LigandMPNNWrapper(BaseModel, Scorer, Generator):
     """
     Wrapper for LigandMPNN that works with System objects.
-
-    Usage:
-        wrapper = LigandMPNNWrapper()
-        wrapper.build(system)
-        instances = wrapper.generate(num_designs=10, temperature=0.2)
-        scores = wrapper.score(instances)
     """
 
-    available = True
+    available = IMPORT_AVAILABLE
     name: str = "LigandMPNN"
+    citations: list[str] = ["doi: 10.1038/s41592-025-02626-1"]
 
     # core properties
     requires_target: bool = True
@@ -56,26 +124,17 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
     requires_3d: bool = True
 
     def __init__(self,
-                 model_type: str = "ligand_mpnn",
+                 model_name: str = "ligandmpnn_v_32_010_25",
                  checkpoint_path: str | None = None,
-                 device: DeviceType | None = None,
+                 device: DeviceType = "cpu",
                  batch_size: BatchSize = 1,
                  seed: int | None = None,
                  use_ligand_context: bool = True,
                  keep_model_after_build: bool = False):
         """
         Initialize the LigandMPNN wrapper.
-
-        Args:
-            model_type: Type of model ("ligand_mpnn", "protein_mpnn", "soluble_mpnn", etc.)
-            checkpoint_path: Path to model checkpoint
-            device: Device to run on ("cuda" or "cpu")
-            batch_size: Batch size for sequence generation
-            seed: Random seed for sequence generation
-            use_ligand_context: Whether to use ligand context
-            keep_model_after_build: Whether to keep model loaded after build
         """
-        self.model_type = model_type
+        self.model_name = model_name
         self.device = device or (
             "cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = batch_size
@@ -83,17 +142,13 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         self.use_ligand_context = use_ligand_context
         self.keep_model_after_build = keep_model_after_build
 
-        # Set default checkpoint paths
+       # Handle checkpoint path
         if checkpoint_path is None:
-            default_paths = {
-                "ligand_mpnn": "./model_params/ligandmpnn_v_32_010_25.pt",
-                "protein_mpnn": "./model_params/proteinmpnn_v_48_020.pt",
-                "soluble_mpnn": "./model_params/solublempnn_v_48_020.pt",
-            }
-            checkpoint_path = default_paths.get(
-                model_type, default_paths["ligand_mpnn"])
+            # Download from web using model_name
+            self.checkpoint_path = download_checkpoint(model_name)
+        else:
+            self.checkpoint_path = checkpoint_path
 
-        self.checkpoint_path = checkpoint_path
         self.model = None
 
         # State that gets set during build()
@@ -157,7 +212,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
 
         # Extract model parameters
-        if self.model_type == "ligand_mpnn":
+        if self.model_name == "ligand_mpnn":
             atom_context_num = checkpoint.get("atom_context_num", 25)
             k_neighbors = checkpoint.get("num_edges", 32)
         else:
@@ -174,7 +229,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             k_neighbors=k_neighbors,
             device=self.device,
             atom_context_num=atom_context_num,
-            model_type=self.model_type,
+            model_type=self.model_name,
             ligand_mpnn_use_side_chain_context=False,
         )
 
@@ -189,15 +244,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
               status_callback: StatusCallback | None = None) -> Self:
         """
         Build/prepare the system for sequence generation.
-
-        Args:
-            system: System object containing protein entities and structures
-            data: Not used, must be None
-            ligand_cutoff: Distance cutoff for ligand context
-            status_callback: Optional callback for status updates
-
-        Returns:
-            self for method chaining
         """
         self.can_model_or_raise(system, data)
         self._system = system
@@ -235,7 +281,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             cutoff_for_score=ligand_cutoff,
             use_atom_context=self.use_ligand_context,
             number_of_ligand_atoms=getattr(self.model, 'atom_context_num', 25),
-            model_type=self.model_type,
+            model_type=self.model_name,
         )
 
         # Store native sequence
@@ -262,9 +308,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
     def _system_to_pdb_file(self, system: System) -> Tuple[str, Dict, Dict]:
         """
         Convert a System object to a temporary PDB file.
-
-        Returns:
-            Tuple of (pdb_path, pdb_to_entity_mapping, entity_to_pdb_chains)
         """
         temp_fd, temp_path = tempfile.mkstemp(suffix='.pdb')
         os.close(temp_fd)
@@ -349,12 +392,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
     def _build_symmetry_from_chains(self, protein_dict: Dict) -> Tuple[List[List[int]], List[List[float]]]:
         """
         Build symmetry constraints from entity_to_pdb_chains mapping.
-
-        Args:
-            protein_dict: Parsed PDB dictionary containing chain info
-
-        Returns:
-            Tuple of (symmetry_residues, symmetry_weights)
         """
         symmetry_residues = []
         symmetry_weights = []
@@ -438,11 +475,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         """
         Create chain mask from fixed positions.
 
-        Args:
-            fixed_pos: Mapping of entity_idx -> list of fixed positions
-
-        Returns:
-            Chain mask tensor (1 = design, 0 = fixed)
         """
         chain_mask = torch.ones_like(
             self.feature_dict["mask"], dtype=torch.float32)
@@ -473,8 +505,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 0.1,
-        batch_size: int | None = None,
-        seed: Optional[int] = None,
         amino_acid_bias: Optional[Dict[str, float]] = None,
         omit_amino_acids: Optional[str] = None,
         use_ligand_context: bool = True,
@@ -484,21 +514,6 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         """
         Generate new sequences for the built structure and optionally score them.
 
-        Args:
-            num_designs: Number of designs to generate
-            entities: Which entities to design (None = all)
-            fixed_pos: Mapping of entity_idx -> list of fixed positions
-            temperature: Sampling temperature
-            batch_size: Batch size for generation
-            seed: Random seed
-            amino_acid_bias: Global amino acid biases
-            omit_amino_acids: Amino acids to omit globally
-            use_ligand_context: Whether to use ligand context
-            deletions: Not supported, must be False
-            status_callback: Optional callback for status updates
-
-        Returns:
-            List of SystemInstance objects with scores and confidence
         """
         # 1. Check model is ready
         self.ready_or_raise()
@@ -506,16 +521,12 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         if deletions:
             raise ValueError("LigandMPNN does not support deletions")
 
-        # Use instance batch_size if not provided
-        if batch_size is None:
-            batch_size = self.batch_size
+        # Use batch_size from constructor
+        batch_size = self.batch_size
 
-        # 2. Set random seed
-        if seed is not None:
-            torch.manual_seed(seed)
-            np.random.seed(seed)
+        # Random seed was already set in constructor if provided
 
-        # 3. Validate entity selection
+        # 2. Validate entity selection
         if entities is not None:
             entities = ensure_sequence(entities)
             # Validate entities exist in system
@@ -527,10 +538,10 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         else:
             entities = list(range(len(self.system)))
 
-        # 4. Process fixed_pos into chain_mask
+        # 3. Process fixed_pos into chain_mask
         chain_mask = self._create_chain_mask(fixed_pos)
 
-        # 5. Update feature_dict with generation parameters
+        # 4. Update feature_dict with generation parameters
         feature_dict_copy = self.feature_dict.copy()
         feature_dict_copy["chain_mask"] = chain_mask
         feature_dict_copy["batch_size"] = batch_size
@@ -538,7 +549,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         feature_dict_copy["symmetry_residues"] = self.symmetry_residues or [[]]
         feature_dict_copy["symmetry_weights"] = self.symmetry_weights or [[]]
 
-        # 6. Apply amino acid biases (always set bias tensor)
+        # 5. Apply amino acid biases (always set bias tensor)
         B, L, _, _ = feature_dict_copy["X"].shape
         if amino_acid_bias:
             bias_tensor = self._create_bias_tensor(amino_acid_bias)
@@ -547,7 +558,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                 [21], device=self.device, dtype=torch.float32)
         feature_dict_copy["bias"] = bias_tensor[None, None, :].repeat(1, L, 1)
 
-        # 7. Generate sequences using the model
+        # 6. Generate sequences using the model
         L = feature_dict_copy["X"].shape[1]
         generated_sequences = []
 
@@ -565,7 +576,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
         S_stack = torch.cat(generated_sequences, 0)[:num_designs]
 
-        # 8. Convert to sequences and split by entity
+        # 7. Convert to sequences and split by entity
         concatenated_sequences = [
             "".join([restype_int_to_str[aa]
                     for aa in S_stack[i].cpu().numpy()])
@@ -576,7 +587,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             concatenated_sequences, self.entity_lengths
         )
 
-        # 9. Create SystemInstance objects
+        # 8. Create SystemInstance objects
         system_instances = []
         for design_idx in range(num_designs):
             entity_instances = []
@@ -598,10 +609,10 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             )
             system_instances.append(system_instance)
 
-        # 10. Score the generated instances
+        # 9. Score the generated instances
         scores = self.score(system_instances, status_callback=status_callback)
 
-        # 11. Attach scores and confidence to instances
+        # 10. Attach scores and confidence to instances
         for instance, raw_score in zip(system_instances, scores):
             instance.score = raw_score
             instance.confidence = raw_score
