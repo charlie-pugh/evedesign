@@ -30,6 +30,7 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
+
 # Model checkpoint URLs
 MODEL_URLS = {
     # Original ProteinMPNN weights
@@ -142,6 +143,12 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         self.use_ligand_context = use_ligand_context
         self.keep_model_after_build = keep_model_after_build
 
+        # Determine model type from model_name
+        if "ligand" in model_name.lower():
+            self.model_type = "ligand_mpnn"
+        else:
+            self.model_type = "protein_mpnn"
+
        # Handle checkpoint path
         if checkpoint_path is None:
             # Download from web using model_name
@@ -212,7 +219,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
 
         # Extract model parameters
-        if self.model_name == "ligand_mpnn":
+        if self.model_type == "ligand_mpnn":
             atom_context_num = checkpoint.get("atom_context_num", 25)
             k_neighbors = checkpoint.get("num_edges", 32)
         else:
@@ -229,7 +236,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             k_neighbors=k_neighbors,
             device=self.device,
             atom_context_num=atom_context_num,
-            model_type=self.model_name,
+            model_type=self.model_type,
             ligand_mpnn_use_side_chain_context=False,
         )
 
@@ -281,7 +288,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             cutoff_for_score=ligand_cutoff,
             use_atom_context=self.use_ligand_context,
             number_of_ligand_atoms=getattr(self.model, 'atom_context_num', 25),
-            model_type=self.model_name,
+            model_type=self.model_type,
         )
 
         # Store native sequence
