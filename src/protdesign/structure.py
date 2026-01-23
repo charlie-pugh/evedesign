@@ -5,6 +5,7 @@ Thin wrapper around biotite structures for more convenient, unified access to PD
 decouples internal codebase from biotite API through abstractions that we know work well from EVcouplings
 package development.
 """
+from copy import deepcopy
 from typing import Literal, TextIO, BinaryIO, Self, Sequence
 import numpy as np
 import pandas as pd
@@ -29,6 +30,19 @@ class Model:
         # dataframe representation (atom- and residue-level)
         self._atom_df = None
         self._res_df = None
+
+    def copy(self) -> Self:
+        """
+        Create deep copy of current instance
+        (will reset cached atom and residue dataframes)
+
+        Returns
+        -------
+        Deep copy of instance
+        """
+        return Model(
+            deepcopy(self.atom_array)
+        )
 
     def atom_df(
         self,
