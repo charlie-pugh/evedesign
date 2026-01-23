@@ -1,19 +1,21 @@
-import numpy as np
-import torch
 import tempfile
 import os
-from typing import List, Dict, Sequence, Tuple, Optional, Self
-from pathlib import Path
+from typing import List, Dict, Sequence, Tuple, Optional, Self, Literal
 import copy
+import urllib.request
+
+import numpy as np
+import torch
+from loguru import logger
 
 from protdesign.model import (
     BaseModel, Scorer, Generator, RequiredResources
 )
-from protdesign.entity import System, SystemInstance, EntityInstance
-from protdesign.entity import EntityPosList
-from protdesign.utils import ensure_sequence
+from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList
+from protdesign.structure import Model
+from protdesign.utils import ensure_sequence, model_param_context
+from protdesign.constants import MASK
 from protdesign.types import DeviceType, StatusCallback, BatchSize
-import urllib.request
 
 # Import the LigandMPNN modules
 from protdesign.models.ligandmpnn.data_utils import (
@@ -30,34 +32,34 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
+MODEL_BASE_URL = "https://files.ipd.uw.edu/pub/ligandmpnn"
 
 # Model checkpoint URLs
 MODEL_URLS = {
     # Original ProteinMPNN weights
-    "proteinmpnn_v_48_002": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_002.pt",
-    "proteinmpnn_v_48_010": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_010.pt",
-    "proteinmpnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_020.pt",
-    "proteinmpnn_v_48_030": "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_030.pt",
+    "proteinmpnn_v_48_002": f"{MODEL_BASE_URL}/proteinmpnn_v_48_002.pt",
+    "proteinmpnn_v_48_010": f"{MODEL_BASE_URL}/proteinmpnn_v_48_010.pt",
+    "proteinmpnn_v_48_020": f"{MODEL_BASE_URL}/proteinmpnn_v_48_020.pt",
+    "proteinmpnn_v_48_030": f"{MODEL_BASE_URL}/proteinmpnn_v_48_030.pt",
     # LigandMPNN with num_edges=32; atom_context_num=25
-    "ligandmpnn_v_32_005_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_005_25.pt",
-    "ligandmpnn_v_32_010_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt",
-    "ligandmpnn_v_32_020_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_020_25.pt",
-    "ligandmpnn_v_32_030_25": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_030_25.pt",
+    "ligandmpnn_v_32_005_25": f"{MODEL_BASE_URL}/ligandmpnn_v_32_005_25.pt",
+    "ligandmpnn_v_32_010_25": f"{MODEL_BASE_URL}/ligandmpnn_v_32_010_25.pt",
+    "ligandmpnn_v_32_020_25": f"{MODEL_BASE_URL}/ligandmpnn_v_32_020_25.pt",
+    "ligandmpnn_v_32_030_25": f"{MODEL_BASE_URL}/ligandmpnn_v_32_030_25.pt",
     # Per residue label membrane ProteinMPNN
-    "per_residue_label_membrane_mpnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/per_residue_label_membrane_mpnn_v_48_020.pt",
+    "per_residue_label_membrane_mpnn_v_48_020": f"{MODEL_BASE_URL}/per_residue_label_membrane_mpnn_v_48_020.pt",
     # Global label membrane ProteinMPNN
-    "global_label_membrane_mpnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/global_label_membrane_mpnn_v_48_020.pt",
+    "global_label_membrane_mpnn_v_48_020": f"{MODEL_BASE_URL}/global_label_membrane_mpnn_v_48_020.pt",
     # SolubleMPNN
-    "solublempnn_v_48_002": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_002.pt",
-    "solublempnn_v_48_010": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_010.pt",
-    "solublempnn_v_48_020": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt",
-    "solublempnn_v_48_030": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_030.pt",
+    "solublempnn_v_48_002": f"{MODEL_BASE_URL}/solublempnn_v_48_002.pt",
+    "solublempnn_v_48_010": f"{MODEL_BASE_URL}/solublempnn_v_48_010.pt",
+    "solublempnn_v_48_020": f"{MODEL_BASE_URL}/solublempnn_v_48_020.pt",
+    "solublempnn_v_48_030": f"{MODEL_BASE_URL}/solublempnn_v_48_030.pt",
     # LigandMPNN for side-chain packing (multi-step denoising model)
-    "ligandmpnn_sc_v_32_002_16": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_sc_v_32_002_16.pt",
+    "ligandmpnn_sc_v_32_002_16": f"{MODEL_BASE_URL}/ligandmpnn_sc_v_32_002_16.pt",
 }
 
-
-def download_checkpoint(model_name: str, save_dir: str = "./model_params") -> str:
+def download_checkpoint(model_name: str, save_dir: str) -> str:
     """
     Download model checkpoint from URL if not already present.
 
@@ -87,30 +89,32 @@ def download_checkpoint(model_name: str, save_dir: str = "./model_params") -> st
     # Download if not already present
     if not os.path.exists(checkpoint_path):
         url = MODEL_URLS[model_name]
-        print(f"Downloading {model_name} from {url}...")
+        logger.info(f"Downloading {model_name} from {url}...")
         try:
             urllib.request.urlretrieve(url, checkpoint_path)
-            print(f"Successfully downloaded to {checkpoint_path}")
+            logger.info(f"Successfully downloaded to {checkpoint_path}")
         except Exception as e:
             raise RuntimeError(f"Failed to download {model_name}: {str(e)}")
     else:
-        print(f"Using cached checkpoint at {checkpoint_path}")
+        logger.info(f"Using cached checkpoint at {checkpoint_path}")
 
     return checkpoint_path
 
 
 class LigandMPNNWrapper(BaseModel, Scorer, Generator):
     """
-    Wrapper for LigandMPNN that works with System objects.
-    """
+    evedesign wrapper for LigandMPNN
 
+    # TODO: extend to also handle ligand entities
+    # TODO: implement specialized scoring methods that move known positions to front to score all substitutions at once
+    """
     available = IMPORT_AVAILABLE
     name: str = "LigandMPNN"
     citations: list[str] = ["doi: 10.1038/s41592-025-02626-1"]
 
     # core properties
     requires_target: bool = True
-    requires_fixed_length: bool = False
+    requires_fixed_length: bool = True
     handles_deletions: bool = False
     handles_insertions: bool = False
     requires_gpu: bool = False
@@ -124,24 +128,48 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
     requires_msa: bool = False
     requires_3d: bool = True
 
-    def __init__(self,
-                 model_name: str = "ligandmpnn_v_32_010_25",
-                 checkpoint_path: str | None = None,
-                 device: DeviceType = "cpu",
-                 batch_size: BatchSize = 1,
-                 seed: int | None = None,
-                 use_ligand_context: bool = True,
-                 keep_model_after_build: bool = False):
+    def __init__(
+        self,
+        model_name: Literal[tuple(MODEL_URLS.keys())],  # noqa
+        checkpoint_path: str | None = None,
+        batch_size: BatchSize = 1,
+        use_ligand_context: bool = True,
+        ligand_cutoff: float = 6.0,
+        keep_model_after_build: bool = False,
+        cache_dir: str | None = "./model_params",
+        device: DeviceType = "cpu"
+    ):
         """
-        Initialize the LigandMPNN wrapper.
+        Initialize the LigandMPNN wrapper
+
+        Parameters
+        ----------
+        model_name
+            Name of MPNN model. If checkpoint_path is specified, must match the loaded model.
+        checkpoint_path
+            Path to checkpoint file to load. If None, will attempt to download from web.
+        batch_size
+            Batch sized used for generation. Will not be used while scoring due to implementation limitations
+            inside original MPNN code.
+        use_ligand_context
+            If True, ligand atoms will be included during calculations
+        keep_model_after_build
+            If True, keep model parameters asssociated to instance after build step
+            to avoid reloading when scoring/generating. If serializing model, set to
+            False to avoid storing model parameters repeatedly.
+        ligand_cutoff
+            Cutoff distance in angstroms to select residues that are considered to be close to ligand atoms
+        cache_dir
+            Directory to use for storing downloaded model parameters (only relevant if checkpoint_path is None)
+        device
+            Device to use for computations
         """
         self.model_name = model_name
-        self.device = device or (
-            "cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.batch_size = batch_size
-        self.seed = seed
         self.use_ligand_context = use_ligand_context
         self.keep_model_after_build = keep_model_after_build
+        self.ligand_cutoff = ligand_cutoff
 
         # Determine model type from model_name
         if "ligand" in model_name.lower():
@@ -152,7 +180,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
        # Handle checkpoint path
         if checkpoint_path is None:
             # Download from web using model_name
-            self.checkpoint_path = download_checkpoint(model_name)
+            self.checkpoint_path = download_checkpoint(model_name, cache_dir)
         else:
             self.checkpoint_path = checkpoint_path
 
@@ -160,16 +188,14 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
         # State that gets set during build()
         self._system = None
-        self.feature_dict = None
-        self.entity_lengths = None
-        self.symmetry_residues = None
-        self.symmetry_weights = None
-        self.native_seq = None
-        self.pdb_path = None
-        self.pdb_to_entity_mapping = None  # Map PDB positions to entity positions
-        self.entity_to_pdb_chains = None  # Map entity_idx to list of PDB chain IDs
-
-        self._load_model()
+        self._feature_dict = None
+        self._entity_lengths = None
+        self._symmetry_residues = None
+        self._symmetry_weights = None
+        self._native_seq = None
+        self._pdb_path = None
+        self._pdb_to_entity_mapping = None  # Map PDB positions to entity positions
+        self._entity_to_pdb_chains = None  # Map entity_idx to list of PDB chain IDs
 
     @property
     def ready(self):
@@ -188,7 +214,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         for entity in system:
             if entity.type_ != "protein":
                 return False, "Can only handle protein entities"
-            if not entity.structures:
+            if not entity.structures or len(entity.structures) == 0:
                 return False, "All entities must have 3D structures"
 
         return True, ""
@@ -206,15 +232,13 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         )
 
     def _load_model(self):
-        """Load the model from checkpoint"""
+        """
+        Load the model from checkpoint
+        """
         if not os.path.exists(self.checkpoint_path):
             raise FileNotFoundError(
-                f"Checkpoint not found: {self.checkpoint_path}")
-
-        # Set random seed if provided
-        if self.seed is not None:
-            torch.manual_seed(self.seed)
-            np.random.seed(self.seed)
+                f"Checkpoint not found: {self.checkpoint_path}"
+            )
 
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
 
@@ -244,29 +268,41 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         self.model.to(self.device)
         self.model.eval()
 
-    def build(self,
-              system: System,
-              data: None = None,
-              ligand_cutoff: float = 8.0,
-              status_callback: StatusCallback | None = None) -> Self:
-        """
-        Build/prepare the system for sequence generation.
-        """
+    def _release_cache(self):
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            torch.mps.empty_cache()
+
+    def _delete_model(self):
+        self.model = None
+        self._release_cache()
+
+    def build(
+        self,
+        system: System,
+        data: None = None,
+        status_callback: StatusCallback | None = None
+    ) -> Self:
         self.can_model_or_raise(system, data)
         self._system = system
 
         # Get entity sequence lengths
-        self.entity_lengths = [(idx, len(entity.rep) if entity.rep is not None else 0)
-                               for idx, entity in enumerate(system)]
+        self._entity_lengths = [
+            (idx, len(entity.rep) if entity.rep is not None else 0)
+            for idx, entity in enumerate(system)
+        ]
 
         # Convert system to PDB file and build mappings simultaneously
-        self.pdb_path, self.pdb_to_entity_mapping, self.entity_to_pdb_chains = (
+        self._pdb_path, self._pdb_to_entity_mapping, self._entity_to_pdb_chains = (
             self._system_to_pdb_file(system)
         )
 
+        print(self._pdb_path)  # TODO: remove again
+
         # Parse PDB with LigandMPNN
         protein_dict, backbone, other_atoms, icodes, _ = parse_PDB(
-            self.pdb_path,
+            self._pdb_path,
             device=self.device,
             chains=[],
             parse_all_atoms=True,
@@ -274,7 +310,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         )
 
         # Build symmetry constraints directly from entity_to_pdb_chains
-        self.symmetry_residues, self.symmetry_weights = (
+        self._symmetry_residues, self._symmetry_weights = (
             self._build_symmetry_from_chains(protein_dict)
         )
 
@@ -283,17 +319,18 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         protein_dict["chain_mask"] = chain_mask
 
         # Featurize the protein
-        self.feature_dict = featurize(
-            protein_dict,
-            cutoff_for_score=ligand_cutoff,
-            use_atom_context=self.use_ligand_context,
-            number_of_ligand_atoms=getattr(self.model, 'atom_context_num', 25),
-            model_type=self.model_type,
-        )
+        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
+            self._feature_dict = featurize(
+                protein_dict,
+                cutoff_for_score=self.ligand_cutoff,
+                use_atom_context=self.use_ligand_context,
+                number_of_ligand_atoms=getattr(self.model, 'atom_context_num', 25),
+                model_type=self.model_type,
+            )
 
         # Store native sequence
-        self.native_seq = "".join([
-            restype_int_to_str[aa] for aa in self.feature_dict["S"][0].cpu().numpy()
+        self._native_seq = "".join([
+            restype_int_to_str[aa] for aa in self._feature_dict["S"][0].cpu().numpy()
         ])
 
         return self
@@ -414,7 +451,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             chain_lengths[chain_id] = chain_length
 
         # For each entity with multiple chains (homo-oligomer)
-        for entity_idx, pdb_chain_ids in self.entity_to_pdb_chains.items():
+        for entity_idx, pdb_chain_ids in self._entity_to_pdb_chains.items():
             if len(pdb_chain_ids) > 1:
                 # Get lengths of all chains for this entity
                 entity_chain_lengths = [chain_lengths.get(
@@ -459,13 +496,13 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
         for concat_seq in concatenated_sequences:
             # Initialize entity sequences with mask character for missing density
-            entity_seqs = {entity_idx: [constants.MASK] * length  # Changed from ['X']
+            entity_seqs = {entity_idx: [MASK] * length  # Changed from ['X']
                            for entity_idx, length in entity_lengths}
 
             # Fill in positions that exist in PDB
             for pdb_pos, aa in enumerate(concat_seq):
-                if pdb_pos in self.pdb_to_entity_mapping:
-                    mapped_entity_idx, entity_pos = self.pdb_to_entity_mapping[pdb_pos]
+                if pdb_pos in self._pdb_to_entity_mapping:
+                    mapped_entity_idx, entity_pos = self._pdb_to_entity_mapping[pdb_pos]
                     entity_length = dict(entity_lengths).get(
                         mapped_entity_idx, 0)
                     if entity_pos < entity_length:
@@ -484,14 +521,14 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
         """
         chain_mask = torch.ones_like(
-            self.feature_dict["mask"], dtype=torch.float32)
+            self._feature_dict["mask"], dtype=torch.float32)
 
         if fixed_pos is not None:
             # Use PDB-to-entity mapping to convert entity positions to PDB positions
             for entity_idx, positions in fixed_pos.items():
                 for entity_pos in positions:
                     # Find corresponding PDB position(s)
-                    for pdb_pos, (mapped_entity_idx, mapped_entity_pos) in self.pdb_to_entity_mapping.items():
+                    for pdb_pos, (mapped_entity_idx, mapped_entity_pos) in self._pdb_to_entity_mapping.items():
                         if mapped_entity_idx == entity_idx and mapped_entity_pos == entity_pos:
                             chain_mask[0, pdb_pos] = 0.0
 
@@ -512,15 +549,15 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 0.1,
+        deletions: bool = False,
+        status_callback: StatusCallback | None = None,
         amino_acid_bias: Optional[Dict[str, float]] = None,
         omit_amino_acids: Optional[str] = None,
         use_ligand_context: bool = True,
-        deletions: bool = False,
-        status_callback: StatusCallback | None = None
     ) -> List[SystemInstance]:
         """
         Generate new sequences for the built structure and optionally score them.
-
+        # TODO: additional parameter documentation
         """
         # 1. Check model is ready
         self.ready_or_raise()
@@ -549,12 +586,12 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         chain_mask = self._create_chain_mask(fixed_pos)
 
         # 4. Update feature_dict with generation parameters
-        feature_dict_copy = self.feature_dict.copy()
+        feature_dict_copy = self._feature_dict.copy()
         feature_dict_copy["chain_mask"] = chain_mask
         feature_dict_copy["batch_size"] = batch_size
         feature_dict_copy["temperature"] = temperature
-        feature_dict_copy["symmetry_residues"] = self.symmetry_residues or [[]]
-        feature_dict_copy["symmetry_weights"] = self.symmetry_weights or [[]]
+        feature_dict_copy["symmetry_residues"] = self._symmetry_residues or [[]]
+        feature_dict_copy["symmetry_weights"] = self._symmetry_weights or [[]]
 
         # 5. Apply amino acid biases (always set bias tensor)
         B, L, _, _ = feature_dict_copy["X"].shape
@@ -569,18 +606,19 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         L = feature_dict_copy["X"].shape[1]
         generated_sequences = []
 
-        with torch.no_grad():
-            num_batches = (num_designs + batch_size - 1) // batch_size
-            for batch_idx in range(num_batches):
-                if status_callback:
-                    progress = ((batch_idx + 1) / num_batches) * 100
-                    status_callback(
-                        "running", progress, f"Generating batch {batch_idx + 1}/{num_batches}")
+        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
+            with torch.no_grad():
+                num_batches = (num_designs + batch_size - 1) // batch_size
+                for batch_idx in range(num_batches):
+                    if status_callback:
+                        progress = ((batch_idx + 1) / num_batches) * 100
+                        status_callback(
+                            "running", progress, f"Generating batch {batch_idx + 1}/{num_batches}")
 
-                feature_dict_copy["randn"] = torch.randn(
-                    [batch_size, L], device=self.device)
-                output_dict = self.model.sample(feature_dict_copy)
-                generated_sequences.append(output_dict["S"])
+                    feature_dict_copy["randn"] = torch.randn(
+                        [batch_size, L], device=self.device)
+                    output_dict = self.model.sample(feature_dict_copy)
+                    generated_sequences.append(output_dict["S"])
 
         S_stack = torch.cat(generated_sequences, 0)[:num_designs]
 
@@ -592,7 +630,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         ]
 
         separated_sequences = self._split_concatenated_sequences(
-            concatenated_sequences, self.entity_lengths
+            concatenated_sequences, self._entity_lengths
         )
 
         # 8. Create SystemInstance objects
@@ -600,7 +638,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         for design_idx in range(num_designs):
             entity_instances = []
 
-            for entity_idx, (entity_id, length) in enumerate(self.entity_lengths):
+            for entity_idx, (entity_id, length) in enumerate(self._entity_lengths):
                 generated_seq = separated_sequences[entity_idx][design_idx]
 
                 # Create EntityInstance
@@ -664,8 +702,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         sequences = []
         for instance in instances:
             # Reconstruct full PDB sequence (length = total PDB residues)
-            pdb_length = len(self.native_seq)
-            pdb_seq = [constants.MASK] * pdb_length  # Changed from ['X']
+            pdb_length = len(self._native_seq)
+            pdb_seq = [MASK] * pdb_length  # Changed from ['X']
 
             # Fill in the PDB sequence from entity sequences
             for entity_idx, entity_instance in enumerate(instance):
@@ -673,7 +711,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
                     entity_instance.rep, np.ndarray) else str(entity_instance.rep)
 
                 # Map entity positions back to PDB positions
-                for pdb_pos, (mapped_entity_idx, entity_pos) in self.pdb_to_entity_mapping.items():
+                for pdb_pos, (mapped_entity_idx, entity_pos) in self._pdb_to_entity_mapping.items():
                     if mapped_entity_idx == entity_idx and entity_pos < len(entity_seq):
                         pdb_seq[pdb_pos] = entity_seq[entity_pos]
 
@@ -681,47 +719,48 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
 
         # 4. Score each sequence
         scores = []
-        with torch.no_grad():
-            for seq_idx, seq in enumerate(sequences):
-                if status_callback:
-                    progress = ((seq_idx + 1) / len(sequences)) * 100
-                    status_callback(
-                        "running", progress, f"Scoring sequence {seq_idx + 1}/{len(sequences)}")
+        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
+            with torch.no_grad():
+                for seq_idx, seq in enumerate(sequences):
+                    if status_callback:
+                        progress = ((seq_idx + 1) / len(sequences)) * 100
+                        status_callback(
+                            "running", progress, f"Scoring sequence {seq_idx + 1}/{len(sequences)}")
 
-                # Convert sequence to tensor
-                S_tensor = torch.tensor(
-                    [restype_str_to_int.get(aa, 20) for aa in seq],
-                    device=self.device,
-                    dtype=torch.int64
-                )[None, :]
+                    # Convert sequence to tensor
+                    S_tensor = torch.tensor(
+                        [restype_str_to_int.get(aa, 20) for aa in seq],
+                        device=self.device,
+                        dtype=torch.int64
+                    )[None, :]
 
-                # Create feature dict for this sequence
-                feature_dict_copy = self.feature_dict.copy()
-                feature_dict_copy["S"] = S_tensor
-                feature_dict_copy["batch_size"] = 1
-                feature_dict_copy["randn"] = torch.randn(
-                    [1, len(seq)], device=self.device)
-                feature_dict_copy["symmetry_residues"] = [[]]
-                feature_dict_copy["symmetry_weights"] = [[]]
+                    # Create feature dict for this sequence
+                    feature_dict_copy = self._feature_dict.copy()
+                    feature_dict_copy["S"] = S_tensor
+                    feature_dict_copy["batch_size"] = 1
+                    feature_dict_copy["randn"] = torch.randn(
+                        [1, len(seq)], device=self.device)
+                    feature_dict_copy["symmetry_residues"] = [[]]
+                    feature_dict_copy["symmetry_weights"] = [[]]
 
-                # Score the sequence
-                output_dict = self.model.score(
-                    feature_dict_copy, use_sequence=True)
+                    # Score the sequence
+                    output_dict = self.model.score(
+                        feature_dict_copy, use_sequence=True)
 
-                # Calculate loss (negative log probability)
-                loss, _ = get_score(
-                    output_dict["S"],
-                    output_dict["log_probs"],
-                    self.feature_dict["mask"][:1]
-                )
+                    # Calculate loss (negative log probability)
+                    loss, _ = get_score(
+                        output_dict["S"],
+                        output_dict["log_probs"],
+                        self._feature_dict["mask"][:1]
+                    )
 
-                # Convert to positive log likelihood
-                scores.append(-loss.item())
+                    # Convert to positive log likelihood
+                    scores.append(-loss.item())
 
         # 5. Return as numpy array
         return np.array(scores)
 
     def __del__(self):
         """Cleanup temporary files"""
-        if hasattr(self, 'pdb_path') and self.pdb_path and os.path.exists(self.pdb_path):
-            os.unlink(self.pdb_path)
+        if hasattr(self, 'pdb_path') and self._pdb_path and os.path.exists(self._pdb_path):
+            os.unlink(self._pdb_path)
