@@ -342,6 +342,16 @@ class Entity:
             key=lambda symbol: (symbol == symbol.lower(), symbol != GAP, symbol)
         )
 
+    def is_biopolymer(self) -> bool:
+        """
+        Check if entity is a biopolymer (protein, DNA, RNA)
+
+        Returns
+        -------
+        True if biopolymer, False otherwise
+        """
+        return self.type_ in BioPolymers
+
 Embedding = np.ndarray[
     tuple[int, int], np.dtype[float]
 ] | np.ndarray[
@@ -593,6 +603,12 @@ class System(UserList[Entity]):
         """
         # turn single entity into list of entities
         entities = ensure_sequence(entities)
+
+        if len(entities) == 0:
+            raise ValueError(
+                "Valid system must contain at least one entity"
+            )
+
         super().__init__(entities)
 
     def __eq__(self, other):
@@ -994,7 +1010,7 @@ class System(UserList[Entity]):
         System instance derived from system representation
         """
         instance = SystemInstance([
-            EntityInstance(rep=entity.rep) for entity in self.data
+            EntityInstance(rep=entity.rep.copy()) for entity in self.data
         ])
 
         self.valid_instance(instance, raise_invalid=True)
