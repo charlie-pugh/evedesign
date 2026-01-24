@@ -1010,7 +1010,7 @@ class System(UserList[Entity]):
         System instance derived from system representation
         """
         instance = SystemInstance([
-            EntityInstance(rep=entity.rep) for entity in self.data
+            EntityInstance(rep=entity.rep.copy()) for entity in self.data
         ])
 
         self.valid_instance(instance, raise_invalid=True)

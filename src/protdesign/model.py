@@ -193,19 +193,21 @@ class _Core(ABC):
 
     def _validate_instances(
         self,
-        instances: Sequence[SystemInstance]
-    ) -> None:
-        [
+        instances: Sequence[SystemInstance],
+        raise_invalid: bool = True,
+    ) -> bool:
+        valid = [
             self.system.valid_instance(
                 instance,
                 validate_reps=True,
                 require_reps=True,
                 fixed_length=self.requires_fixed_length,
                 allow_deletions=self.handles_deletions,
-                raise_invalid=True,
+                raise_invalid=raise_invalid,
             ) for instance in instances
         ]
 
+        return all(valid)
 
 class Generator(_Core):
     """
