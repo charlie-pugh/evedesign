@@ -136,6 +136,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         use_ligand_context: bool = True,
         ligand_cutoff: float = 6.0,
         fix_full_decoding_order: bool = False,
+        vary_decoding_order_per_instance: bool = False,
         keep_model_after_build: bool = False,
         cache_dir: str | None = "./model_params",
         device: DeviceType = "cpu"
@@ -160,6 +161,9 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
             False to avoid storing model parameters repeatedly.
         fix_full_decoding_order
             If True, fix decoding order across calls to score()
+        vary_decoding_order_per_instance:
+            if True, will use different decoding order *per instance* when calling score()
+            (will only have an effect if fix_full_decoding_order is False)
         ligand_cutoff
             Cutoff distance in angstroms to select residues that are considered to be close to ligand atoms
         cache_dir
@@ -174,6 +178,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         self.keep_model_after_build = keep_model_after_build
         self.ligand_cutoff = ligand_cutoff
         self.fix_full_decoding_order = fix_full_decoding_order
+        self.vary_decoding_order_per_instance = vary_decoding_order_per_instance
 
         # Determine model type from model_name
         if "ligand" in model_name.lower():
@@ -647,11 +652,13 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
                     feature_dict_copy = self._feature_dict.copy()
                     feature_dict_copy["S"] = S_tensor
                     feature_dict_copy["batch_size"] = 1
-                    feature_dict_copy["randn"] = decoding_order
-                    # following varies decoding order per sequence
-                    # feature_dict_copy["randn"] = torch.randn(
-                    #     [1, len(seq)], device=self.device
-                    # )
+                    if self.vary_decoding_order_per_instance:
+                        feature_dict_copy["randn"] = torch.randn(
+                            [1, len(seq)], device=self.device
+                        )
+                    else:
+                        feature_dict_copy["randn"] = decoding_order
+
                     feature_dict_copy["symmetry_residues"] = [[]]
                     feature_dict_copy["symmetry_weights"] = [[]]
 
