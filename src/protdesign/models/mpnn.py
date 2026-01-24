@@ -100,7 +100,7 @@ def download_checkpoint(model_name: str, save_dir: str) -> str:
     return checkpoint_path
 
 
-class LigandMPNNWrapper(BaseModel, Scorer, Generator):
+class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer):
     """
     evedesign wrapper for LigandMPNN
 
@@ -135,6 +135,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         batch_size: BatchSize = 1,
         use_ligand_context: bool = True,
         ligand_cutoff: float = 6.0,
+        fix_full_decoding_order: bool = False,
         keep_model_after_build: bool = False,
         cache_dir: str | None = "./model_params",
         device: DeviceType = "cpu"
@@ -157,6 +158,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
             If True, keep model parameters asssociated to instance after build step
             to avoid reloading when scoring/generating. If serializing model, set to
             False to avoid storing model parameters repeatedly.
+        fix_full_decoding_order
+            If True, fix decoding order across calls to score()
         ligand_cutoff
             Cutoff distance in angstroms to select residues that are considered to be close to ligand atoms
         cache_dir
@@ -170,6 +173,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         self.use_ligand_context = use_ligand_context
         self.keep_model_after_build = keep_model_after_build
         self.ligand_cutoff = ligand_cutoff
+        self.fix_full_decoding_order = fix_full_decoding_order
 
         # Determine model type from model_name
         if "ligand" in model_name.lower():
@@ -197,6 +201,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         self._pdb_to_entity_mapping = None  # Map PDB positions to entity positions
         self._entity_to_pdb_chains = None  # Map entity_idx to list of PDB chain IDs
         self._entity_pos_to_pdb_mapping = None
+        self._randn = None
 
     @property
     def ready(self):
@@ -339,6 +344,14 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         self._native_seq = "".join([
             restype_int_to_str[aa] for aa in self._feature_dict["S"][0].cpu().numpy()
         ])
+
+        if self.fix_full_decoding_order:
+            # keep on CPU for easy serialization
+            self._randn = torch.randn(
+                [1, len(self._native_seq)], device="cpu"
+            ).numpy()
+        else:
+            self._randn = None
 
         return self
 
@@ -607,9 +620,13 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator):
         with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
             with torch.no_grad():
                 # fix one decoding order for all sequences
-                decoding_order = torch.randn(
-                    [1, len(self._native_seq)], device=self.device
-                )
+                if self._randn is None:
+                    decoding_order = torch.randn(
+                        [1, len(self._native_seq)], device=self.device
+                    )
+                else:
+                    # use previously stored order
+                    decoding_order = torch.from_numpy(self._randn).to(self.device)
 
                 for seq_idx, seq in enumerate(pdb_sequences):
                     if status_callback:
