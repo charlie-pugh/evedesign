@@ -220,6 +220,8 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         for entity in system:
             if entity.type_ != "protein":
                 return False, "Can only handle protein entities"
+            if not entity.defined_sequence():
+                return False, "Entity must have defined rep sequence"
             if not entity.structures or len(entity.structures) == 0:
                 return False, "All entities must have 3D structures"
 
@@ -509,13 +511,12 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         else:
             entities = protein_entities
 
+        if fixed_pos is not None:
+            for entity_idx, pos_list in fixed_pos.items():
+                self.valid_positions(pos_list, entities=entity_idx, raise_invalid=True)
+
         # process fixed_pos and designable entities into chain_mask
         chain_mask = self._create_chain_mask(fixed_pos, entities)
-
-        # TODO: check fixed positions are valid
-        # TODO: what about mask symbols? - must make sure all mask positions are designed?
-        # TODO: must have defined rep
-        # TODO: validate positions
         if chain_mask.sum().item() <= 0:
             raise ValueError("No positions left to design after removing fixed positions")
 
