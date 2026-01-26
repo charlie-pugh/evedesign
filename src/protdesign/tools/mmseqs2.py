@@ -4,6 +4,7 @@ import random
 import tarfile
 import tempfile
 import time
+from typing import Literal
 
 from pathlib import Path
 from loguru import logger
@@ -19,7 +20,7 @@ def run_mmseqs2(
     use_env=True,
     use_filter=True,
     use_templates=False,
-    filter=None,
+    filter=None,  # noqa
     use_pairing=False,
     pairing_strategy="greedy",
     host_url="https://api.colabfold.com",
@@ -39,9 +40,9 @@ def run_mmseqs2(
     if use_templates:
         logger.warning("Template fetching disabled; proceeding without templates.")
 
-    def submit(seqs, mode, N=101):
+    def submit(seqs, mode, N=101):  # noqa
         n, query = N, ""
-        for seq in seqs:
+        for seq in seqs:  # noqa
             query += f">{n}\n{seq}\n"
             n += 1
 
@@ -54,13 +55,13 @@ def run_mmseqs2(
             context="MSA server",
         )
         try:
-            out = res.json()
+            out = res.json()  # noqa
         except ValueError:
             logger.error(f"Server didn't reply with json: {res.text}")
-            out = {"status": "ERROR"}
+            out = {"status": "ERROR"}  # noqa
         return out
 
-    def status(ID):
+    def status(ID):  # noqa
         res = _request_with_retries(
             "GET",
             f"{host_url}/ticket/{ID}",
@@ -69,13 +70,13 @@ def run_mmseqs2(
             context="MSA server",
         )
         try:
-            out = res.json()
+            out = res.json()  # noqa
         except ValueError:
             logger.error(f"Server didn't reply with json: {res.text}")
-            out = {"status": "ERROR"}
+            out = {"status": "ERROR"}  # noqa
         return out
 
-    def download(ID, path):
+    def download(ID, path):  # noqa
         res = _request_with_retries(
             "GET",
             f"{host_url}/result/download/{ID}",
@@ -83,7 +84,7 @@ def run_mmseqs2(
             headers=headers,
             context="MSA server",
         )
-        with open(path, "wb") as out:
+        with open(path, "wb") as out:  # noqa
             out.write(res.content)
 
     seqs = [x] if isinstance(x, str) else x
@@ -109,13 +110,13 @@ def run_mmseqs2(
     os.makedirs(path, exist_ok=True)
 
     tar_gz_file = f"{path}/out.tar.gz"
-    N, REDO = 101, True
+    N, REDO = 101, True  # noqa
 
     seqs_unique = []
     for seq in seqs:
         if seq not in seqs_unique:
             seqs_unique.append(seq)
-    Ms = [N + seqs_unique.index(seq) for seq in seqs]
+    Ms = [N + seqs_unique.index(seq) for seq in seqs]   # noqa
 
     if not os.path.isfile(tar_gz_file):
         while REDO:
@@ -137,7 +138,7 @@ def run_mmseqs2(
                     "MMseqs2 API is undergoing maintenance. Please try again in a few minutes."
                 )
 
-            ID = out["id"]
+            ID = out["id"]  # noqa
             while out["status"] in ["UNKNOWN", "RUNNING", "PENDING"]:
                 t = 5 + random.randint(0, 5)
                 logger.error(f"Sleeping for {t}s. Reason: {out['status']}")
@@ -145,16 +146,16 @@ def run_mmseqs2(
                 out = status(ID)
 
             if out["status"] == "COMPLETE":
-                REDO = False
+                REDO = False  # noqa
 
             if out["status"] == "ERROR":
-                REDO = False
+                REDO = False  # noqa
                 raise Exception(
                     "MMseqs2 API is giving errors. Please confirm your input is a valid protein sequence. "
                     "If error persists, please try again an hour later."
                 )
 
-        download(ID, tar_gz_file)
+        download(ID, tar_gz_file)  # noqa
 
     if use_pairing:
         a3m_files = [f"{path}/pair.a3m"]
@@ -169,16 +170,16 @@ def run_mmseqs2(
 
     a3m_lines = {}
     for a3m_file in a3m_files:
-        update_M, M = True, None
+        update_M, M = True, None  # noqa
         with open(a3m_file, "r") as handle:
             for line in handle:
                 if line:
                     if "\x00" in line:
                         line = line.replace("\x00", "")
-                        update_M = True
+                        update_M = True  # noqa
                     if line.startswith(">") and update_M:
-                        M = int(line[1:].rstrip())
-                        update_M = False
+                        M = int(line[1:].rstrip())  # noqa
+                        update_M = False  # noqa
                         if M not in a3m_lines:
                             a3m_lines[M] = []
                     a3m_lines[M].append(line)
@@ -204,9 +205,9 @@ def add_sequences_mmseqs2(
     system: System,
     use_env: bool = False,
     use_filter: bool = True,
-    filter=None,
+    filter=None,  # noqa
     use_pairing: bool = False,
-    pair_mode: str = "unpaired_paired",
+    pair_mode: Literal["paired", "unpaired", "unpaired_paired"] = "unpaired_paired",
     pairing_strategy: str = "greedy",
     host_url: str = "https://api.colabfold.com",
     user_agent: str | None = None,
@@ -214,7 +215,37 @@ def add_sequences_mmseqs2(
     tmpdir: str | Path | None = None,
 ) -> System:
     """
-    Attach MSAs to all protein entities in system.
+    Attach MSAs to all protein entities in system
+
+    Parameters
+    ----------
+    system
+        System where sequences should be added for all protein entities
+    use_env
+        If True, search metagenomic sequences (cf. ColabFold documentation)
+    use_filter
+        If True, filter output MSA (cf. ColabFold documentation)
+    filter
+         Cf. ColabFold documentation
+    use_pairing
+        If True, pair sequences across entities with key attribute
+    pair_mode
+        Cf. ColabFold documentation
+    pairing_strategy
+        Strategy for pairing sequences (cf. ColabFold documentation)
+    host_url
+        MMseqs2 server API url (defaults to public ColabFold server)
+    user_agent
+        User agent to send to MMseqs server (If None, will default to
+        "evedesign/" + version)
+    keep_tmp_dir
+        If True, keep temporary directory with outputs
+    tmpdir
+        Optional path to local temporary directory
+
+    Returns
+    -------
+    System with added sequences per entity
     """
     protein_entity_reps = [
         (idx, "".join(entity.rep))
