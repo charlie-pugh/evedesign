@@ -6,10 +6,12 @@ from typing import TypedDict
 from loguru import logger
 
 from protdesign.tools.api_utils import _request_with_retries
+from protdesign.entity import System
 from protdesign.structure import Structure, Model
 from protdesign.constants import GAP
 from protdesign.__about__ import __version__
 
+AFDB_DOWNLOAD_URL = "https://alphafold.ebi.ac.uk/files/{id_}.cif"
 
 def _clean_sequence(seq):
     return "".join(seq.split()).upper()
@@ -598,3 +600,123 @@ def remap_structure_from_hit(hit: FoldSeekHit, structure_model: Model, first_ind
         remapped_chains.append(remapped_chain)
 
     return remapped_chains
+
+
+def find_structures_foldseek(
+    system: System,
+    databases: list[str] = ("pdb100",),
+    mode: str = "3diaa-print3di",
+    host_url: str = "https://search.foldseek.com",
+    predict_host_url: str = "https://3di.foldseek.com",
+    user_agent: str | None = None,
+) -> dict[int, list[FoldSeekHit]]:
+    """
+    Find related 3D structures for all protein entities in system
+    by predicting 3Di for target sequence and searching
+    it against 3Di databases.
+
+    Note that structure searches will be performed independently per
+    entity and need to be intersected afterwards by identifier to
+    find structures of interactions.
+
+    Parameters
+    ----------
+    system
+        System for which to perform related structure search
+    databases
+        Target databases
+    mode
+        FoldSeek server search mode
+    host_url
+        FoldSeek server URL
+    predict_host_url
+        3Di prediction server URL
+    user_agent
+        User agent to send to servers for diagnostic purposes
+
+    Returns
+    -------
+    Mapping from entity index to all identified structure hits
+    """
+    entity_to_hits = {}
+
+    # search entities one by one
+    for idx, entity in enumerate(system):
+        # only search for protein entity with defined sequence
+        if entity.type_ != "protein" or not entity.defined_sequence():
+            continue
+
+        logger.info(f"Running foldseek for entity {idx}")
+
+        # run search
+        entity_to_hits[idx], _ = foldseek_search_sequence(
+            "".join(entity.rep),
+            databases=databases,
+            mode=mode,
+            host_url=host_url,
+            predict_host_url=predict_host_url,
+            user_agent=user_agent,
+        )
+
+    return entity_to_hits
+
+
+def add_structures_foldseek(
+    system: System,
+    entity_to_hits: dict[int, list[FoldSeekHit]]
+) -> System:
+    """
+    Add structure chains to entities in system
+
+    Parameters
+    ----------
+    system
+        System to which structure chains should be added
+    entity_to_hits
+        Mapping from entity index in system to FoldSeek hits, all
+        passed hits will be added (so filter before if needed)
+
+    Returns
+    -------
+    Copy of system with structural information added
+    """
+    system = system.copy()
+
+    for entity_idx, hits in entity_to_hits.items():
+        if system[entity_idx].structures is None:
+            system[entity_idx].structures = {}
+
+        for hit in hits:
+            id_description = hit["target"]
+
+            # AFDB, e.g. "AF-A0A378GLZ1-F1-model_v6 Molybdopterin synthase sulfur carrier subunit"
+            if id_description.startswith("AF-"):
+                structure_id = id_description.split()[0]
+                response = _request_with_retries(
+                    "GET", AFDB_DOWNLOAD_URL.format(id_=structure_id)
+                )
+
+                s = Structure(
+                    StringIO(response.text), format="cif"
+                ).get_model(
+                    use_author_fields=False
+                )
+            else:
+                # PDB, e.g. "1jwb-assembly1.cif.gz_D-2 Structure of the Covalent Acyl-Adenylate Form of the MoeB-MoaD Protein Complex"
+                structure_id = id_description.split("-")[0]
+
+                s = Structure.from_id(
+                    structure_id.lower()
+                ).get_assembly_model(
+                    use_author_fields=False
+                )
+
+            # remap structure to target sequence numbering
+            s_mapped = remap_structure_from_hit(
+                hit, s, first_index=system[entity_idx].first_index
+            )
+
+            # attach chain(s) to system
+            system[entity_idx].structures[structure_id] = s_mapped
+
+    return system
