@@ -1,11 +1,13 @@
 import random
 import time
 from io import StringIO
+from typing import TypedDict
 
 from loguru import logger
 
 from protdesign.tools.api_utils import _request_with_retries
-from protdesign.structure import Structure
+from protdesign.structure import Structure, Model
+from protdesign.constants import GAP
 from protdesign.__about__ import __version__
 
 
@@ -111,8 +113,8 @@ def _extract_hits_brief(result_obj):
 
 def foldseek_search_sequence(
     sequence,
-    databases: list[str] = ["pdb100"],
-    mode: str = "3diaa",
+    databases: list[str] = ("pdb100",),
+    mode: str = "3diaa-print3di",
     host_url: str = "https://search.foldseek.com",
     predict_host_url: str = "https://3di.foldseek.com",
     user_agent: str | None = None,
@@ -181,7 +183,7 @@ def foldseek_search_sequence(
         entry=0,
         host_url=host_url,
         headers=headers,
-        params={"format": "brief"},
+        # params={"format": "brief"},  # need tSeq for our mapping
     )
     hits = _extract_hits_brief(result_obj)
     return hits, ticket
@@ -316,3 +318,283 @@ def hits_to_structures(hits, chain_id="A"):
             continue
         paths[idx] = mmcif
     return paths
+
+
+class FoldSeekHit(TypedDict):
+    query: str
+    target: str
+    seqId: float
+    alnLength: int
+    missmatches: int  # noqa
+    gapsopened: int  # noqa
+    qStartPos: int
+    qEndPos: int
+    dbStartPos: int
+    dbEndPos: int
+    prob: int
+    eval: float
+    score: int
+    qLen: int
+    dbLen: int
+    qAln: str
+    dbAln: str
+    taxId: int
+    taxName: str
+    q3di: str
+    t3di: str
+    tCa: int | str  # 0 if format "brief"
+    tSeq: int | str  # 0 if format "brief"
+
+"""
+
+Mapping extracted from https://github.com/steineggerlab/foldseek/blob/8979d230fb64c7089380b652758d8705493ed4a5/src/strucclustutils/GemmiWrapper.cpp#L110
+with following Python code, after manually editing fall-through case:
+
+for row in AA_CODES.split("\n"):
+    row = row.strip()
+    if "return" not in row or row.startswith("//"):
+        continue
+
+    symbol = row.split('"')[1]
+    code = row.split("return ")[1].split(";")[0].replace("'", "")
+
+    if code not in code_to_symbol:
+        code_to_symbol[code] = []
+
+    code_to_symbol[code].append(symbol)
+    symbol_to_code[symbol] = code
+"""
+FOLDSEEK_THREE_TO_ONE = {
+    'ALA': 'A',
+    'ARG': 'R',
+    'ASN': 'N',
+    'ABA': 'A',
+    'ASP': 'D',
+    'ASX': 'B',
+    'CYS': 'C',
+    'CSH': 'S',
+    'GLN': 'Q',
+    'GLU': 'E',
+    'GLX': 'Z',
+    'GLY': 'G',
+    'HIS': 'H',
+    'ILE': 'I',
+    'LEU': 'L',
+    'LYS': 'K',
+    'MET': 'M',
+    'MSE': 'M',
+    'ORN': 'A',
+    'PHE': 'F',
+    'PRO': 'P',
+    'SER': 'S',
+    'THR': 'T',
+    'TRY': 'T',
+    'TRP': 'W',
+    'TYR': 'Y',
+    'UNK': 'X',
+    'VAL': 'V',
+    'SEC': 'C',
+    'PYL': 'O',
+    'SEP': 'S',
+    'TPO': 'T',
+    'PCA': 'E',
+    'CSO': 'C',
+    'PTR': 'Y',
+    'KCX': 'K',
+    'CSD': 'C',
+    'LLP': 'K',
+    'CME': 'C',
+    'MLY': 'K',
+    'DAL': 'A',
+    'TYS': 'Y',
+    'OCS': 'C',
+    'M3L': 'K',
+    'FME': 'M',
+    'ALY': 'K',
+    'HYP': 'P',
+    'CAS': 'C',
+    'CRO': 'T',
+    'CSX': 'C',
+    'DPR': 'P',
+    'DGL': 'E',
+    'DVA': 'V',
+    'CSS': 'C',
+    'DPN': 'F',
+    'DSN': 'S',
+    'DLE': 'L',
+    'HIC': 'H',
+    'NLE': 'L',
+    'MVA': 'V',
+    'MLZ': 'K',
+    'CR2': 'G',
+    'SAR': 'G',
+    'DAR': 'R',
+    'DLY': 'K',
+    'YCM': 'C',
+    'NRQ': 'M',
+    'CGU': 'E',
+    '0TD': 'D',
+    'MLE': 'L',
+    'DAS': 'D',
+    'DTR': 'W',
+    'CXM': 'M',
+    'TPQ': 'Y',
+    'DCY': 'C',
+    'DSG': 'N',
+    'DTY': 'Y',
+    'DHI': 'H',
+    'MEN': 'N',
+    'DTH': 'T',
+    'SAC': 'S',
+    'DGN': 'Q',
+    'AIB': 'A',
+    'SMC': 'C',
+    'IAS': 'D',
+    'CIR': 'R',
+    'BMT': 'T',
+    'DIL': 'I',
+    'FGA': 'E',
+    'PHI': 'F',
+    'CRQ': 'Q',
+    'SME': 'M',
+    'GHP': 'G',
+    'MHO': 'M',
+    'NEP': 'H',
+    'TRQ': 'W',
+    'TOX': 'W',
+    'ALC': 'A',
+    'SCH': 'C',
+    'MDO': 'A',
+    'MAA': 'A',
+    'GYS': 'S',
+    'MK8': 'L',
+    'CR8': 'H',
+    'KPI': 'K',
+    'SCY': 'C',
+    'DHA': 'S',
+    'OMY': 'Y',
+    'CAF': 'C',
+    '0AF': 'W',
+    'SNN': 'N',
+    'MHS': 'H',
+    'SNC': 'C',
+    'PHD': 'D',
+    'B3E': 'E',
+    'MEA': 'F',
+    'MED': 'M',
+    'OAS': 'S',
+    'GL3': 'G',
+    'FVA': 'V',
+    'PHL': 'F',
+    'CRF': 'T',
+    'BFD': 'D',
+    'MEQ': 'Q',
+    'DAB': 'A',
+    'AGM': 'R',
+    '4BF': 'Y',
+    'B3A': 'A',
+    'B3D': 'D',
+    'B3K': 'K',
+    'B3Y': 'Y',
+    'BAL': 'A',
+    'DBZ': 'A',
+    'GPL': 'K',
+    'HSK': 'H',
+    'HY3': 'P',
+    'HZP': 'P',
+    'KYN': 'W',
+    'MGN': 'Q'
+}
+
+def remap_structure_from_hit(hit: FoldSeekHit, structure_model: Model, first_index: int) -> list[Model]:
+    """
+    Extract chain(s) from a PDB structure mapped by a FoldSeekHit independent of auth/label chain IDs,
+    and remap residue indices so they match the target/query structure sequence indices.
+
+    Parameters
+    ----------
+    hit
+        Single FoldSeek hit (from list returned by foldseek_search_sequence)
+    structure_model
+        Loaded PDB structure with all chains present
+    first_index
+        Index of first position of target sequeence
+
+    Returns
+    -------
+    All chains in structure_model that are covered by hit, remapped to target sequence indices
+    """
+    # store mapping of sequence to chain to match with FoldSeek sequences
+    seq_to_chain_id = {}
+
+    # also store mapping from chain_id to filtered position and sequence
+    chain_id_to_residues = {}
+
+    # iterate individual chains
+    for chain_id, chain_df in structure_model.atom_df().groupby("chain_id"):
+        # limit to residues which have CA atoms, and those that
+        # are contained in FoldSeek/gemmi residue mapping
+        s_ca = chain_df.query("atom_name == 'CA'").drop_duplicates(
+            subset=["chain_id", "res_id", "ins_code"]
+        ).query(
+            "res_name in @FOLDSEEK_THREE_TO_ONE"
+        ).assign(
+            res_name_oneletter=lambda df: df.res_name.map(FOLDSEEK_THREE_TO_ONE)
+        )
+
+        # ignore anything that does not survive filtering (will be mostly non-protein chains)
+        if len(s_ca) == 0:
+            continue
+
+        # assemble sequence as output by FoldSeek (i.e. no CA or not mappable missing)
+        chain_seq = "".join(s_ca.res_name_oneletter)
+        seq_to_chain_id[chain_seq] = seq_to_chain_id.get(chain_seq, []) + [chain_id]
+
+        # also store filtered residue table for later position index mapping
+        chain_id_to_residues[chain_id] = s_ca
+
+    # identify what chains our target sequence maps to
+    try:
+        target_chains = seq_to_chain_id[hit["tSeq"]]
+    except KeyError as e:
+        raise ValueError(
+            f"Could not map hit to structure, seq_to_chain_id={seq_to_chain_id}, tSeq={hit.get('tSeq')}"
+        ) from e
+
+    # perform remapping of chains one by one
+    remapped_chains = []
+    for chain_id in target_chains:
+        chain_pos = chain_id_to_residues[chain_id]
+        chain_map = {}
+
+        # current positions in query and database sequence; local alignment
+        # should not start with gaps in either pos;
+        # 1-based index in target sequence, note that qStartPos does not incorporate first index shifts
+        q_idx_seq = first_index + hit["qStartPos"] - 1
+        db_idx = hit["dbStartPos"] - 1  # 0-based index in string
+
+        # iterate through pairwise alignment;
+        # paired symbols at current alignment position
+        for q_symbol, db_symbol in zip(hit["qAln"], hit["dbAln"]):
+            # establish residue mapping if two residues are aligned (no gap in either sequence)
+            if q_symbol != GAP and db_symbol != GAP:
+                # check we are tracking position in db sequence correctly
+                assert hit["tSeq"][db_idx] == db_symbol, "Sequence mismatch that should never occur"
+
+                # get corresponding residue information from structure, and store
+                # mapping into position in target sequence
+                cur_pos = chain_pos.iloc[db_idx]
+                assert cur_pos.res_name_oneletter == db_symbol, "Sequence mismatch that should never occur"
+                chain_map[int(cur_pos.res_id)] = q_idx_seq
+
+            # increase index in either sequence if position was not a gap
+            if q_symbol != GAP:
+                q_idx_seq += 1
+            if db_symbol != GAP:
+                db_idx += 1
+
+        # perform remapping and store chain
+        remapped_chain = structure_model.get_chain(chain_id).remap(chain_map)
+        remapped_chains.append(remapped_chain)
+
+    return remapped_chains
