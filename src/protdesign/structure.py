@@ -548,6 +548,7 @@ class Structure:
         use_author_fields: bool = True,
         include_bonds: bool = False,
         add_all_fields: bool = False,
+        sym_id_to_chain_id: bool = True,
     ) -> Model:
         """
         Extract one model from biological assembly
@@ -570,6 +571,9 @@ class Structure:
         add_all_fields
             Extract all identifier columns (author and label ids), not just main numbering
             selected with use_author_fields. Available for PDBx-based formats (cif/bcif) only.
+        sym_id_to_chain_id
+            If True, merge sym_id into chain ID so chain_ids become A, A-2, ...
+            instead of listing all coordinates for copies under chain A
 
         Returns
         -------
@@ -604,6 +608,12 @@ class Structure:
                 extra_fields=self._extra_fields,
                 include_bonds=include_bonds
             )
+
+        if sym_id_to_chain_id and "sym_id" in coords.get_annotation_categories():
+            coords.chain_id[:] = [
+                (f"{chain_id}-{sym_id + 1}" if sym_id > 0 else chain_id)
+                for chain_id, sym_id in zip(coords.chain_id, coords.sym_id)
+            ]
 
         return Model(coords)
 
