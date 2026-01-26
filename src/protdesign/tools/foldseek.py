@@ -701,14 +701,22 @@ def add_structures_foldseek(
                 ).get_model(
                     use_author_fields=False
                 )
-            else:
+            elif "assembly" in id_description:
                 # PDB, e.g. "1jwb-assembly1.cif.gz_D-2 Structure of the Covalent Acyl-Adenylate Form of the MoeB-MoaD Protein Complex"
                 structure_id = id_description.split("-")[0]
+
+                # use specific assembly ID or we can run into issues that chain cannot be found
+                assembly_id = id_description.split("-assembly")[1].split(".")[0]
 
                 s = Structure.from_id(
                     structure_id.lower()
                 ).get_assembly_model(
+                    assembly_id=assembly_id,
                     use_author_fields=False
+                )
+            else:
+                raise NotImplementedError(
+                    f"Database type not yet supported {id_description}"
                 )
 
             # remap structure to target sequence numbering
