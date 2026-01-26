@@ -250,7 +250,7 @@ def add_sequences_mmseqs2(
     protein_entity_reps = [
         (idx, "".join(entity.rep))
         for idx, entity in enumerate(system)
-        if entity.type_ == "protein" and entity.rep is not None
+        if entity.type_ == "protein" and entity.defined_sequence()
     ]
     if not protein_entity_reps:
         return system.copy()
@@ -277,7 +277,7 @@ def add_sequences_mmseqs2(
     if keep_tmp_dir:
         tmpdir_path = Path(tmpdir) if tmpdir is not None else Path(tempfile.mkdtemp(prefix="mmseqs_"))
         tmpdir_path.mkdir(parents=True, exist_ok=True)
-        logger.info("Keeping MMseqs2 output in %s", tmpdir_path)
+        logger.info(f"Keeping MMseqs2 output in {tmpdir_path}")
     else:
         tmpdir_ctx = tempfile.TemporaryDirectory()
         tmpdir_path = Path(tmpdir_ctx.name)
