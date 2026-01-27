@@ -346,6 +346,7 @@ class FoldSeekHit(TypedDict):
     t3di: str
     tCa: int | str  # 0 if format "brief"
     tSeq: int | str  # 0 if format "brief"
+    scoreAdj: float
 
 """
 
@@ -602,9 +603,92 @@ def remap_structure_from_hit(hit: FoldSeekHit, structure_model: Model, first_ind
     return remapped_chains
 
 
+def correct_score_for_spaghetti(hit: FoldSeekHit) -> FoldSeekHit:
+    """
+    Rescale hit score to reduce inflated contribution of low-complexity
+    regions relative to experimental structures ("spaghetti" in AF structures
+    that are typically not resolved in PDB structures)
+
+    Corresponds to rankStructureHits function in frontend
+
+    Parameters
+    ----------
+    hit
+        Raw hit from FoldSeek API
+
+    Returns
+    -------
+    Hit with corrected score field
+    """
+    t_seq = hit["tSeq"]
+    if not isinstance(t_seq, str):
+        raise ValueError("Must run FoldSeek with full instead of brief mode for this feature")
+
+    # extract 3Di aligned region from full DB 3Di sequence
+    target_region = t_seq[hit["dbStartPos"] - 1:hit["dbEndPos"]]
+    target_region_from_aln = hit["dbAln"].replace(GAP, "")
+    target_region_3di = hit["t3di"][hit["dbStartPos"] - 1:hit["dbEndPos"]]
+
+    assert (
+        target_region == target_region_from_aln and len(target_region_3di) == len(target_region)
+    ), "Structure alignment inconsistency, this should never happen"
+
+    # current positions in query and database sequence; local alignment
+    # should not start with gaps in either pos
+    q_idx = hit["qStartPos" ] - 1
+    db_idx = hit["dbStartPos" ] - 1
+
+    aligned_pairs = 0
+    good_pairs = 0
+
+    # sliding window matching D or P state
+    overhang = "DD"
+    t3di_with_overhang = overhang + hit["t3di"] + overhang
+
+    assert len(hit["qAln"]) == len(hit["dbAln"]), "Alignment length mismatch"
+
+    # iterate through aligned amino acid pairs
+    for i, (q_symbol, db_symbol) in enumerate(zip(hit["qAln"], hit["dbAln"])):
+        assert i != 0 or (q_symbol != GAP and db_symbol != GAP), "Alignment starts with gaps (against code assumptions"
+
+        # check if pair is aligned
+        if q_symbol != GAP and db_symbol != GAP:
+            assert t_seq[db_idx] == db_symbol, "Sequence mismatch that should never occur"
+
+            # increase aligned pair count, this will be used for normalization
+            aligned_pairs += 1
+
+            q_3di = hit["q3di"][q_idx]
+            db_3di = hit["t3di"][db_idx]
+
+            # extract sliding window
+            db_3di_window = t3di_with_overhang[
+                db_idx:(db_idx + 1 + 2 * len(overhang))
+            ].replace("P", "D")
+
+            # only consider non-D/P state as informative
+            if not (q_3di in {"D", "P"} and db_3di in {"D", "P"} and db_3di_window == overhang + "D" + overhang):
+                good_pairs += 1
+
+        # increase index in either sequence if position was not a gap
+        if q_symbol != GAP:
+            q_idx += 1
+        if db_symbol != GAP:
+            db_idx += 1
+
+    # rescale score
+    score_adj = hit["score"] * (good_pairs / aligned_pairs)
+
+    # linter does not like unpacking here so do it old-fashioned way
+    hit = hit.copy()
+    hit["scoreAdj"] = score_adj
+    return hit
+
+
 def find_structures_foldseek(
     system: System,
     databases: list[str] = ("pdb100",),
+    correct_spagetthi: bool = True,
     mode: str = "3diaa-print3di",
     host_url: str = "https://search.foldseek.com",
     predict_host_url: str = "https://3di.foldseek.com",
@@ -625,6 +709,10 @@ def find_structures_foldseek(
         System for which to perform related structure search
     databases
         Target databases
+    correct_spagetthi
+        If True, rescale hit score to reduce inflated contribution of low-complexity
+        regions relative to experimental structures ("spaghetti" in AF structures
+        that are typically not resolved in PDB structures)
     mode
         FoldSeek server search mode
     host_url
@@ -649,7 +737,7 @@ def find_structures_foldseek(
         logger.info(f"Running foldseek for entity {idx}")
 
         # run search
-        entity_to_hits[idx], _ = foldseek_search_sequence(
+        hits, _ = foldseek_search_sequence(
             "".join(entity.rep),
             databases=databases,
             mode=mode,
@@ -657,6 +745,13 @@ def find_structures_foldseek(
             predict_host_url=predict_host_url,
             user_agent=user_agent,
         )
+
+        if correct_spagetthi:
+            hits = [
+                correct_score_for_spaghetti(hit) for hit in hits
+            ]
+
+        entity_to_hits[idx] = hits
 
     return entity_to_hits
 
