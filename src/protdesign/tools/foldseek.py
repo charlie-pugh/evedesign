@@ -689,7 +689,7 @@ def find_structures_foldseek(
     system: System,
     databases: list[str] = ("pdb100",),
     entity_subset: Sequence[int] | None = None,
-    correct_spagetthi: bool = True,
+    correct_spaghetti: bool = True,
     mode: str = "3diaa-print3di",
     host_url: str = "https://search.foldseek.com",
     predict_host_url: str = "https://3di.foldseek.com",
@@ -713,7 +713,7 @@ def find_structures_foldseek(
     entity_subset
         If None, search structures for all protein entities, otherwise limit to specified
         entities (by index in system)
-    correct_spagetthi
+    correct_spaghetti
         If True, rescale hit score to reduce inflated contribution of low-complexity
         regions relative to experimental structures ("spaghetti" in AF structures
         that are typically not resolved in PDB structures)
@@ -754,14 +754,129 @@ def find_structures_foldseek(
             user_agent=user_agent,
         )
 
-        if correct_spagetthi:
+        if correct_spaghetti:
             hits = [
                 correct_score_for_spaghetti(hit) for hit in hits
             ]
+        else:
+            for hit in hits:
+                hit["scoreAdj"] = hit["score"]
 
         entity_to_hits[idx] = hits
 
     return entity_to_hits
+
+
+def _extract_structure_id(id_description: str) -> tuple[str, str, str]:
+    """
+    Extract structure ID and database type from FoldSeek hit target
+
+    Parameters
+    ----------
+    id_description
+        FoldSeek hit target
+
+    Returns
+    -------
+    Tuple of structure ID, assembly and database type
+    """
+    # AFDB, e.g. "AF-A0A378GLZ1-F1-model_v6 Molybdopterin synthase sulfur carrier subunit"
+    if id_description.startswith("AF-"):
+        structure_id = id_description.split()[0]
+        assembly_id = ""
+        db_type = "afdb"
+
+    # PDB, e.g. "1jwb-assembly1.cif.gz_D-2 Structure of the Covalent Acyl-Adenylate Form of the MoeB-MoaD Protein Complex"
+    elif "assembly" in id_description:
+        structure_id = id_description.split("-")[0]
+        # use specific assembly ID or we can run into issues that chain cannot be found
+        assembly_id = id_description.split("-assembly")[1].split(".")[0]
+        db_type = "pdb"
+    else:
+        raise NotImplementedError(
+            f"Database type not yet supported {id_description}"
+        )
+
+    return structure_id, assembly_id, db_type
+
+
+def filter_structures_foldseek(
+    entity_to_hits: dict[int, list[FoldSeekHit]],
+    use_pairing: bool = False,
+    ids: Sequence[str] | None = None,
+    top_n: int | None = None,
+) -> dict[int, list[FoldSeekHit]]:
+    """
+    Filter FoldSeek hits, with filters applied in the following order (if specified):
+    1. use_pairing
+    2. ids
+    3. top_n
+
+    Parameters
+    ----------
+    entity_to_hits
+        Input structure mapping from find_structures_foldseek
+    use_pairing
+        If True, only keep structures where all entities have a hit to the respective structure
+    ids
+        If not None, only keep hits with these identifiers
+    top_n
+        If not None, restrict to top n hits per entity. Unless intersect is True, hits are ranked independently
+         *per entity*, i.e. hits may have different orders across entities
+
+    Returns
+    -------
+    Filtered hits
+    """
+    if use_pairing:
+        # note that we keep full tuple from _extract_structure_id to include assembly ID for intersection
+        shared_ids = set.intersection(*[
+            set(_extract_structure_id(hit["target"]) for hit in hits)
+            for entity_idx, hits in entity_to_hits.items()
+        ])
+
+        entity_to_hits = {
+            idx: [hit for hit in hits if _extract_structure_id(hit["target"]) in shared_ids]
+            for idx, hits in entity_to_hits.items()
+        }
+
+    if ids is not None:
+        ids_lower = [id_.lower() for id_ in ids]
+        entity_to_hits = {
+            idx: [hit for hit in hits if _extract_structure_id(hit["target"])[0].lower() in ids_lower]
+            for idx, hits in entity_to_hits.items()
+        }
+
+    if top_n:
+        entity_to_hits_new = {}
+        if use_pairing:
+            # aggregate adjusted scores per hit across entities
+            id_to_scores = {}
+            for entity_idx, hits in entity_to_hits.items():
+                chain_id_already_seen = {}
+                for hit in hits:
+                    _id = _extract_structure_id(hit["target"])
+                    # only count each unique structure per entity once in case of multiple occurrences
+                    if _id not in chain_id_already_seen:
+                        id_to_scores[_id] = id_to_scores.get(_id, 0) + hit["scoreAdj"]
+                        chain_id_already_seen[_id] = True
+
+            # then sort and extract top n per entity
+            for entity_idx, hits in entity_to_hits.items():
+                hits_sorted = sorted(
+                    hits, key=lambda hit: id_to_scores[_extract_structure_id(hit["target"])], reverse=True
+                )
+
+                entity_to_hits_new[entity_idx] = hits_sorted[:top_n]
+        else:
+            # sort independently by adjusted score per entity
+            for entity_idx, hits in entity_to_hits.items():
+                entity_to_hits_new[entity_idx] = sorted(
+                    hits, key=lambda hit: hit["scoreAdj"], reverse=True
+                )[:top_n]
+        return entity_to_hits_new
+    else:
+        return entity_to_hits
 
 
 def add_structures_foldseek(
@@ -790,11 +905,10 @@ def add_structures_foldseek(
             system[entity_idx].structures = {}
 
         for hit in hits:
-            id_description = hit["target"]
+            structure_id, assembly_id, db_type = _extract_structure_id(hit["target"])
 
             # AFDB, e.g. "AF-A0A378GLZ1-F1-model_v6 Molybdopterin synthase sulfur carrier subunit"
-            if id_description.startswith("AF-"):
-                structure_id = id_description.split()[0]
+            if db_type == "afdb":
                 response = _request_with_retries(
                     "GET", AFDB_DOWNLOAD_URL.format(id_=structure_id)
                 )
@@ -804,13 +918,7 @@ def add_structures_foldseek(
                 ).get_model(
                     use_author_fields=False
                 )
-            elif "assembly" in id_description:
-                # PDB, e.g. "1jwb-assembly1.cif.gz_D-2 Structure of the Covalent Acyl-Adenylate Form of the MoeB-MoaD Protein Complex"
-                structure_id = id_description.split("-")[0]
-
-                # use specific assembly ID or we can run into issues that chain cannot be found
-                assembly_id = id_description.split("-assembly")[1].split(".")[0]
-
+            elif db_type == "pdb":
                 s = Structure.from_id(
                     structure_id.lower()
                 ).get_assembly_model(
@@ -818,9 +926,8 @@ def add_structures_foldseek(
                     use_author_fields=False
                 )
             else:
-                raise NotImplementedError(
-                    f"Database type not yet supported {id_description}"
-                )
+                # should already raise in _extract_structure_id
+                assert False, "Invalid DB type"
 
             # remap structure to target sequence numbering
             s_mapped = remap_structure_from_hit(
