@@ -1,10 +1,11 @@
 import io
 import os
 import random
+import subprocess
 import tarfile
 import tempfile
 import time
-from typing import Literal
+from typing import Literal, Sequence as SequenceType
 
 from pathlib import Path
 from loguru import logger
@@ -13,6 +14,71 @@ from protdesign.__about__ import __version__
 from protdesign.tools.api_utils import _request_with_retries
 from protdesign.entity import System
 from protdesign.sequence import read_fasta, Sequence, Sequences
+
+
+def filter_sequences_mmseqs(
+    sequences: list[str],
+    target_num_sequences: int,
+    brackets: SequenceType[float]=(0.2, 0.4, 0.6, 0.8, 1.0),
+    max_seq_id: float | None = None,
+    filter_min_enable: int | None = None,
+    mmseqs_path: str = "mmseqs"
+):
+    """
+    Reduce sequences down to a specified number of clusters with MMseqs filtera3m command
+
+    Parameters
+    ----------
+    sequences
+        Input sequences, must be aligned in a3m format
+    target_num_sequences
+        Target number of most diverse sequences (note the exact number returned may differ)
+        per bracket.
+    brackets:
+        Reduce diversity of output MSAs using min.seq. identity with query sequences (--qid parameter)
+    mmseqs_path
+        Path to mmseqs binary (optional, defaults to assuming mmseqs is on $PATH)
+    """
+    with tempfile.TemporaryDirectory() as tempdir:
+        tempdir = Path(tempdir)
+
+        # Write sequences to a temporary FASTA file
+        input_ali = tempdir / "input.a3m"
+
+        with open(input_ali, "w") as f:
+            for i, sequence in enumerate(sequences):
+                f.write(f">{i}\n{sequence}\n")
+
+        output_ali = tempdir / "output.a3m"
+
+        cmd = [
+            mmseqs_path,
+            "filtera3m",
+            str(input_ali),
+            str(output_ali),
+            "--diff", str(target_num_sequences),
+            "--qsc", "0",
+            "--qid", ",".join([str(thr) for thr in brackets])
+        ]
+
+        if filter_min_enable is not None:
+            cmd += ["--filter-min-enable 1000", str(filter_min_enable)]
+
+        if max_seq_id is not None:
+            cmd += ["--max-seq-id", str(max_seq_id)]
+
+        subprocess.run(
+            cmd, capture_output=True
+        )
+
+        # parse output
+        with output_ali.open() as f:
+            filtered_ids = [
+                int(line[1:]) for line in f if line.startswith(">")
+            ]
+
+    return filtered_ids
+
 
 def run_mmseqs2(
     x,
