@@ -10,7 +10,7 @@ import numpy as np
 from numba import prange, jit
 from sklearn.manifold import MDS
 from protdesign.analysis import Analyzer
-from protdesign.analyzers.sequence_clustering import filter_sequences_mmseqs
+from protdesign.tools.mmseqs2 import filter_sequences_mmseqs
 
 try:
     from umap import UMAP  # noqa
