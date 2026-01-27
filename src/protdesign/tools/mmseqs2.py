@@ -12,7 +12,7 @@ from loguru import logger
 
 from protdesign.__about__ import __version__
 from protdesign.tools.api_utils import _request_with_retries
-from protdesign.entity import System
+from protdesign.entity import System, Entity
 from protdesign.sequence import read_fasta, Sequence, Sequences
 
 
@@ -33,9 +33,13 @@ def filter_sequences_mmseqs(
         Input sequences, must be aligned in a3m format
     target_num_sequences
         Target number of most diverse sequences (note the exact number returned may differ)
-        per bracket.
+        per bucket.
     brackets:
-        Reduce diversity of output MSAs using min.seq. identity with query sequences (--qid parameter)
+        Reduce diversity of output MSAs using buckets with these identity boundaries to query sequences (--qid parameter)
+    max_seq_id:
+        Maximum sequence identity between any pair of sequence (--max-seq-id parameter)
+    filter_min_enable:
+        Minimum number of sequences in bracket required to enable filtering (--filter-min-enable parameter)
     mmseqs_path
         Path to mmseqs binary (optional, defaults to assuming mmseqs is on $PATH)
     """
@@ -62,14 +66,18 @@ def filter_sequences_mmseqs(
         ]
 
         if filter_min_enable is not None:
-            cmd += ["--filter-min-enable 1000", str(filter_min_enable)]
+            cmd += ["--filter-min-enable", str(filter_min_enable)]
 
         if max_seq_id is not None:
             cmd += ["--max-seq-id", str(max_seq_id)]
 
-        subprocess.run(
+        ret = subprocess.run(
             cmd, capture_output=True
         )
+        if ret.returncode != 0:
+            raise ValueError(
+                f"Error running MMseqs2, retcode={ret.returncode} stdout={ret.stdout} stderr={ret.stderr}"
+            )
 
         # parse output
         with output_ali.open() as f:
@@ -78,6 +86,65 @@ def filter_sequences_mmseqs(
             ]
 
     return filtered_ids
+
+
+def filter_entity_sequences_mmseqs(
+    entity: Entity,
+    target_num_sequences: int = 3000,
+    brackets: SequenceType[float]=(0.2, 0.4, 0.6, 0.8, 1.0),
+    max_seq_id: float | None = 0.95,
+    filter_min_enable: int | None = 1000,
+    mmseqs_path: str = "mmseqs"
+) -> Sequences | None:
+    """
+    Filter sequences on entity by ColabFold bucket-based method,
+    with same default values as in Mirdita et al. (Nature Methods, 2022)
+
+    Function does not consider if sequences are paired to other sequences
+    with key or not, which may lose sequence pairs if applied to an
+    entity from a complex system
+
+    Parameters
+    ----------
+    entity
+        Entity for which sequences should be filtered
+    target_num_sequences
+        Target number of most diverse sequences (note the exact number returned may differ)
+        per bucket.
+    brackets:
+        Reduce diversity of output MSAs using buckets with these identity boundaries to query sequences (--qid parameter)
+    max_seq_id:
+        Maximum sequence identity between any pair of sequence (--max-seq-id parameter)
+    filter_min_enable:
+        Minimum number of sequences in bracket required to enable filtering (--filter-min-enable parameter)
+    mmseqs_path
+        Path to mmseqs binary (optional, defaults to assuming mmseqs is on $PATH)
+
+    Returns
+    -------
+    Sequences object with filtered set of sequences (can be assigned to entity)
+    """
+    if entity.sequences is None:
+        return None
+
+    # get indices of remaining sequences
+    idx_filt = filter_sequences_mmseqs(
+        [x.seq for x in entity.sequences.seqs],
+        target_num_sequences=target_num_sequences,
+        brackets=brackets,
+        max_seq_id=max_seq_id,
+        filter_min_enable=filter_min_enable,
+        mmseqs_path=mmseqs_path
+    )
+
+    # create updated Sequences object
+    return Sequences(
+        seqs=[entity.sequences.seqs[i] for i in idx_filt],
+        aligned=entity.sequences.aligned,
+        type=entity.sequences.type_,
+        weights=None,  # reset weights as not meaningful for subset
+        format=entity.sequences.format_
+    )
 
 
 def run_mmseqs2(
