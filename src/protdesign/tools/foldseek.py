@@ -1,7 +1,7 @@
 import random
 import time
 from io import StringIO
-from typing import TypedDict
+from typing import TypedDict, Sequence
 
 from loguru import logger
 
@@ -688,6 +688,7 @@ def correct_score_for_spaghetti(hit: FoldSeekHit) -> FoldSeekHit:
 def find_structures_foldseek(
     system: System,
     databases: list[str] = ("pdb100",),
+    entity_subset: Sequence[int] | None = None,
     correct_spagetthi: bool = True,
     mode: str = "3diaa-print3di",
     host_url: str = "https://search.foldseek.com",
@@ -709,6 +710,9 @@ def find_structures_foldseek(
         System for which to perform related structure search
     databases
         Target databases
+    entity_subset
+        If None, search structures for all protein entities, otherwise limit to specified
+        entities (by index in system)
     correct_spagetthi
         If True, rescale hit score to reduce inflated contribution of low-complexity
         regions relative to experimental structures ("spaghetti" in AF structures
@@ -732,6 +736,10 @@ def find_structures_foldseek(
     for idx, entity in enumerate(system):
         # only search for protein entity with defined sequence
         if entity.type_ != "protein" or not entity.defined_sequence():
+            continue
+
+        # skip entities if filter is defined
+        if entity_subset is not None and idx not in entity_subset:
             continue
 
         logger.info(f"Running foldseek for entity {idx}")
