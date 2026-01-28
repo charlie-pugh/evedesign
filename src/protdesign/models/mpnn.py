@@ -590,7 +590,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         # try to score target sequence as well
         target_instance = self._system.rep_to_instance()
         if self._validate_instances([target_instance], raise_invalid=False):
-            target_score = self.score([target_instance])
+            target_score = self.score([target_instance])[0]
         else:
             target_score = 0.0
 
