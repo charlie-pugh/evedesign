@@ -23,7 +23,7 @@ StructureFormat = Literal["bcif", "cif", "pdb"]
 _INVALID_FORMAT_MSG = "Invalid PDB file type, options are: 'bcif', 'cif', 'pdb'"
 
 
-class Model:
+class Structure:
     def __init__(self, atom_array: struc.AtomArray):
         self.atom_array = atom_array
 
@@ -40,7 +40,7 @@ class Model:
         -------
         Deep copy of instance
         """
-        return Model(
+        return Structure(
             deepcopy(self.atom_array)
         )
 
@@ -386,7 +386,7 @@ class Model:
         out_file.write(file)
 
 
-class Structure:
+class StructureFile:
     """
     Biomolecular 3D structure
     """
@@ -484,7 +484,7 @@ class Structure:
         use_author_fields: bool = True,
         include_bonds: bool = False,
         add_all_fields: bool = False,
-    ) -> Model:
+    ) -> Structure:
         """
         Extract one model from asymmetric unit
 
@@ -538,7 +538,7 @@ class Structure:
                 include_bonds=include_bonds
             )
 
-        return Model(coords)
+        return Structure(coords)
 
     def get_assembly_model(
         self,
@@ -549,7 +549,7 @@ class Structure:
         include_bonds: bool = False,
         add_all_fields: bool = False,
         sym_id_to_chain_id: bool = True,
-    ) -> Model:
+    ) -> Structure:
         """
         Extract one model from biological assembly
 
@@ -615,7 +615,7 @@ class Structure:
                 for chain_id, sym_id in zip(coords.chain_id, coords.sym_id)
             ]
 
-        return Model(coords)
+        return Structure(coords)
 
     def sequences(self) -> dict[str, str]:
         """

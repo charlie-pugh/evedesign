@@ -18,7 +18,7 @@ try:
 except ImportError:
     UMAP_AVAILABLE = False
 
-from evedesign.entity import System, SystemInstance
+from evedesign.system import System, SystemInstance
 from evedesign.types import EntityType, SEQSPACE_PROJECTION_COMPONENT_KEY
 from evedesign.utils import str_to_np_char_view, map_array, index_map
 

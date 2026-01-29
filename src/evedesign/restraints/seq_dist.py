@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from evedesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer, MutationScorer
-from evedesign.entity import Entity, System, SystemInstance
+from evedesign.system import Entity, System, SystemInstance
 from evedesign.types import StatusCallback
 from evedesign.utils import str_to_np_char_view, map_array
 from evedesign.constants import GAP

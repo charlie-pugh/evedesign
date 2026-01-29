@@ -25,7 +25,7 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 from evedesign.constants import GAP, VALID_DNA_SORTED
-from evedesign.entity import System, SystemInstance, EntityInstance
+from evedesign.system import System, SystemInstance, EntityInstance
 from evedesign.sequence import valid_sequence
 
 OPTIMIZATION_METHODS = [

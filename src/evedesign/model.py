@@ -4,7 +4,7 @@ from typing import Self, Sequence, Any, TypeVar
 import numpy as np
 import pandas as pd
 from evedesign.dataset import LabeledInstanceDataset
-from evedesign.entity import System, SystemInstance, Entity, EntityInstance, EntityPosList, Mutant, Mutation
+from evedesign.system import System, SystemInstance, Entity, EntityInstance, EntityPosList, Mutant, Mutation
 from evedesign.types import StatusCallback, ModelStats, BioPolymers
 
 

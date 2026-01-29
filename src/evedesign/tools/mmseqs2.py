@@ -12,7 +12,7 @@ from loguru import logger
 
 from evedesign.__about__ import __version__
 from evedesign.tools.api_utils import _request_with_retries
-from evedesign.entity import System, Entity
+from evedesign.system import System, Entity
 from evedesign.sequence import read_fasta, Sequence, Sequences
 
 

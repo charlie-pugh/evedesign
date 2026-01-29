@@ -11,8 +11,8 @@ from loguru import logger
 from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
 )
-from evedesign.entity import System, SystemInstance, EntityPosList
-from evedesign.structure import Model
+from evedesign.system import System, SystemInstance, EntityPosList
+from evedesign.structure import Structure
 from evedesign.utils import ensure_sequence, model_param_context
 from evedesign.types import DeviceType, StatusCallback, BatchSize
 
@@ -448,7 +448,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         # write concatenated model to PDB format (do not write to temporary file to allow model
         # to be serialized after build())
         pdb_string = StringIO()
-        Model.concat(models_to_concat).to_file(pdb_string, format="pdb")
+        Structure.concat(models_to_concat).to_file(pdb_string, format="pdb")
         return pdb_string.getvalue(), pdb_to_entity_mapping, entity_to_pdb_chains, entity_pos_to_pdb_mapping
 
     def _create_chain_mask(self, fixed_pos: EntityPosList | None, entities: Sequence[int]) -> torch.Tensor:

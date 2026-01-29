@@ -11,7 +11,7 @@ from sklearn.utils import all_estimators
 from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
 from evedesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
-from evedesign.entity import System, SystemInstance
+from evedesign.system import System, SystemInstance
 from evedesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
 from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize

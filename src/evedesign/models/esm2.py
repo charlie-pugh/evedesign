@@ -10,7 +10,7 @@ import torch
 from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from evedesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from evedesign.utils import model_param_context
 from evedesign.types import DeviceType, StatusCallback, BatchSize
 from evedesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
