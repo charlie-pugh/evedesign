@@ -10,7 +10,7 @@ import pandas as pd
 from dnachisel import NoSolutionError
 from loguru import logger
 
-from evedesign.synthesis import ProteinToDnaOptimizer, CodonUsageTable
+from evedesign.nucleotides import ProteinToDnaOptimizer, CodonUsageTable
 
 try:
     import dnachisel as dc  # noqa
