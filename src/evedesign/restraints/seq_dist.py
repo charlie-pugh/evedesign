@@ -213,108 +213,111 @@ class LinearSeqDistRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutat
         assert len(dists) == len(instances)
         return dists
 
-    def score_conditional(
-        self,
-        instances: Sequence[SystemInstance],
-        entities: Sequence[int],
-        positions: Sequence[int],
-        status_callback: StatusCallback | None = None
-    ) -> pd.DataFrame:
-        self.ready_or_raise()
-
-        if not len(instances) == len(entities) == len(positions):
-            raise ValueError(
-                "Sequences for instances, entities and positions must all have same length"
-            )
-
-        # validate instance sequences with specific requirements for this class
-        self._validate_instances(instances)
-
-        # validate entities / positions
-        self.valid_positions(
-            positions=positions, entities=entities, raise_invalid=True
-        )
-
-        # initialize table of instance/entity/pos triplets and add current
-        # instance symbol for later comparison to restraint sequences
-        entity_to_first_index = {
-            entity_idx: entity.first_index for entity_idx, entity in enumerate(self._system)
-        }
-
-        # prepare empty scoring matrix
-        res = pd.DataFrame({
-            "instance": np.arange(len(instances)),
-            "entity": entities,
-            "pos": positions,
-        }).set_index(
-            ["instance", "entity", "pos"]
-        ).reindex(
-            self._alphabet_mapping, axis=1, fill_value=np.nan
-        )
-
-        # determine instance symbol for each row, this allows to reuse the scores for single_mutation_scan()
-        inst_symbol = np.array([
-            instance[entity_idx].rep[
-                pos - entity_to_first_index[entity_idx]
-            ]
-            for (instance, entity_idx, pos) in zip(instances, entities, positions)
-        ])
-
-        inst_symbol_idx = map_array(inst_symbol, self._alphabet_mapping)
-        gap_idx = self._alphabet_mapping[GAP]
-
-        # compare sequences entity by entity and accumulate updated subgroup dataframes
-        groups = res.groupby("entity", sort=False)
-
-        for entity_idx, all_row_idx in groups.indices.items():
-            entity_idx = int(entity_idx)  # noqa
-
-            # get current alphabet for initializing relevant entries in array to 0, keep all others as nan
-            alphabet = self._alphabets[entity_idx]
-            for symbol in alphabet:
-                res.values[
-                    all_row_idx, self._alphabet_mapping[symbol]
-                ] = 0
-
-            # keep neutral scores to positions in entities that are restrained
-            if entity_idx not in self._ref_seqs:
-                continue
-
-            # map requested position for each instance
-            cur_positions = (
-                res.iloc[all_row_idx].index.get_level_values("pos").values - entity_to_first_index[entity_idx]
-            )
-
-            # compare to all reference sequences for current entity
-            # (use version mapped to indices for direct fancy indexing into numpy array)
-            cur_ref_seqs = self._ref_seqs_mapped[entity_idx]
-
-            # iterate through individual reference sequences
-            # TODO: may need to make this more efficient for larger sets of restraint sequences
-            #  (e.g. comparing against entire MSA)
-            for i in range(len(cur_ref_seqs)):
-                # extract symbols at different positions in this reference sequence
-                ref_symbols = cur_ref_seqs[i, cur_positions]
-
-                # treat gap special case
-                if self.exclude_gaps_from_distance:
-                    # determine if reference has a gap at specified positions
-                    ref_not_gap = ref_symbols != gap_idx
-
-                    # only update positions where reference is not a gap, as we can change
-                    # symbols in reference gap positions arbitrarily without changing restraint;
-                    # if instance is gap and reference is not, handle just like regular symbol exchanges
-                    res.values[
-                        all_row_idx[ref_not_gap], ref_symbols[ref_not_gap]
-                    ] -= 1
-                else:
-                    # otherwise treat all symbols equally
-                    res.values[all_row_idx, ref_symbols] -= 1
-
-        # retrieve value for instance symbol across all rows, then subtract from full matrix to normalize
-        inst_symbol_val = res.values[np.arange(len(res)), inst_symbol_idx]
-        res.values[:, :] -= inst_symbol_val[:, None]
-
-        assert len(res) == len(instances)
-        return res
+    # Note: following implementation breaks on latest pandas versions due to direct assignment to .values;
+    #  but can now be replaced with the ConditionalScorer mixin for simplicity
+    #
+    # def score_conditional(
+    #     self,
+    #     instances: Sequence[SystemInstance],
+    #     entities: Sequence[int],
+    #     positions: Sequence[int],
+    #     status_callback: StatusCallback | None = None
+    # ) -> pd.DataFrame:
+    #     self.ready_or_raise()
+    #
+    #     if not len(instances) == len(entities) == len(positions):
+    #         raise ValueError(
+    #             "Sequences for instances, entities and positions must all have same length"
+    #         )
+    #
+    #     # validate instance sequences with specific requirements for this class
+    #     self._validate_instances(instances)
+    #
+    #     # validate entities / positions
+    #     self.valid_positions(
+    #         positions=positions, entities=entities, raise_invalid=True
+    #     )
+    #
+    #     # initialize table of instance/entity/pos triplets and add current
+    #     # instance symbol for later comparison to restraint sequences
+    #     entity_to_first_index = {
+    #         entity_idx: entity.first_index for entity_idx, entity in enumerate(self._system)
+    #     }
+    #
+    #     # prepare empty scoring matrix
+    #     res = pd.DataFrame({
+    #         "instance": np.arange(len(instances)),
+    #         "entity": entities,
+    #         "pos": positions,
+    #     }).set_index(
+    #         ["instance", "entity", "pos"]
+    #     ).reindex(
+    #         self._alphabet_mapping, axis=1, fill_value=np.nan
+    #     )
+    #
+    #     # determine instance symbol for each row, this allows to reuse the scores for single_mutation_scan()
+    #     inst_symbol = np.array([
+    #         instance[entity_idx].rep[
+    #             pos - entity_to_first_index[entity_idx]
+    #         ]
+    #         for (instance, entity_idx, pos) in zip(instances, entities, positions)
+    #     ])
+    #
+    #     inst_symbol_idx = map_array(inst_symbol, self._alphabet_mapping)
+    #     gap_idx = self._alphabet_mapping[GAP]
+    #
+    #     # compare sequences entity by entity and accumulate updated subgroup dataframes
+    #     groups = res.groupby("entity", sort=False)
+    #
+    #     for entity_idx, all_row_idx in groups.indices.items():
+    #         entity_idx = int(entity_idx)  # noqa
+    #
+    #         # get current alphabet for initializing relevant entries in array to 0, keep all others as nan
+    #         alphabet = self._alphabets[entity_idx]
+    #         for symbol in alphabet:
+    #             res.values[
+    #                 all_row_idx, self._alphabet_mapping[symbol]
+    #             ] = 0
+    #
+    #         # keep neutral scores to positions in entities that are restrained
+    #         if entity_idx not in self._ref_seqs:
+    #             continue
+    #
+    #         # map requested position for each instance
+    #         cur_positions = (
+    #             res.iloc[all_row_idx].index.get_level_values("pos").values - entity_to_first_index[entity_idx]
+    #         )
+    #
+    #         # compare to all reference sequences for current entity
+    #         # (use version mapped to indices for direct fancy indexing into numpy array)
+    #         cur_ref_seqs = self._ref_seqs_mapped[entity_idx]
+    #
+    #         # iterate through individual reference sequences
+    #         # TODO: may need to make this more efficient for larger sets of restraint sequences
+    #         #  (e.g. comparing against entire MSA)
+    #         for i in range(len(cur_ref_seqs)):
+    #             # extract symbols at different positions in this reference sequence
+    #             ref_symbols = cur_ref_seqs[i, cur_positions]
+    #
+    #             # treat gap special case
+    #             if self.exclude_gaps_from_distance:
+    #                 # determine if reference has a gap at specified positions
+    #                 ref_not_gap = ref_symbols != gap_idx
+    #
+    #                 # only update positions where reference is not a gap, as we can change
+    #                 # symbols in reference gap positions arbitrarily without changing restraint;
+    #                 # if instance is gap and reference is not, handle just like regular symbol exchanges
+    #                 res.values[
+    #                     all_row_idx[ref_not_gap], ref_symbols[ref_not_gap]
+    #                 ] -= 1
+    #             else:
+    #                 # otherwise treat all symbols equally
+    #                 res.values[all_row_idx, ref_symbols] -= 1
+    #
+    #     # retrieve value for instance symbol across all rows, then subtract from full matrix to normalize
+    #     inst_symbol_val = res.values[np.arange(len(res)), inst_symbol_idx]
+    #     res.values[:, :] -= inst_symbol_val[:, None]
+    #
+    #     assert len(res) == len(instances)
+    #     return res
 
