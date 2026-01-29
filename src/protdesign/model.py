@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Self, Sequence, Any
+from typing import Self, Sequence, Any, TypeVar
 import numpy as np
 import pandas as pd
 from protdesign.dataset import LabeledInstanceDataset
-from protdesign.entity import System, SystemInstance, Entity, EntityPosList, Mutant, Mutation
+from protdesign.entity import System, SystemInstance, Entity, EntityInstance, EntityPosList, Mutant, Mutation
 from protdesign.types import StatusCallback, ModelStats, BioPolymers
 
 
@@ -938,3 +938,411 @@ class SupervisedBaseModel(BaseModel):
             Reference to the instance for method chaining
         """
         pass
+
+
+T = TypeVar("T")
+
+
+def system_subset_model(model_class: T) -> T:
+    """
+    Factory function to dynamically modify a model so it can seamlessly operate on a subset
+    of entities in a system (e.g. to apply single-protein LLM to binder designed in complex
+    of a target structure)
+
+    Parameters
+    ----------
+    model_class
+        Model class to wrap
+
+    Returns
+    -------
+    Updated model class
+    """
+    # functionality added on top of model_class only makes sense if it is a model operating on systems
+    if not issubclass(model_class, BaseModel):
+        raise TypeError("model_class must inherit from BaseModel")
+
+    class SubsetModel(model_class):
+        def __init__(self, **args):
+            # note: we store model as attribute rather than really subclassing it
+            # as this creates headaches with method resolution between child and parent class
+            # super().__init__(**args)
+
+            self.model = model_class(**args)
+            self.entity_subset = None
+            self.entity_subset_map = None
+            self.system_full = None
+            self.system_subset = None
+
+        # _Core properties
+        @property
+        # citation strings for method
+        def citations(self) -> list[str]:
+            return self.model.citations
+
+        @property
+        def system(self) -> System | None:
+            # to outside world, we need to claim we model full system
+            return self.system_full
+
+        @property
+        def requires_target(self) -> bool:
+            return self.model.requires_target
+
+        @property
+        def requires_fixed_length(self) -> bool:
+            return self.model.requires_fixed_length
+
+        @property
+        def handles_deletions(self) -> bool:
+            return self.model.handles_deletions
+
+        @property
+        def handles_insertions(self) -> bool:
+            return self.model.handles_insertions
+
+        @property
+        def requires_gpu(self) -> bool:
+            return self.model.handles_gpu
+
+        @property
+        def supports_gpu(self) -> bool:
+            return self.model.supports_gpu
+
+        @property
+        def supports_cpu_parallel(self) -> bool:
+            return self.model.supports_cpu_parallel
+
+        @property
+        def supports_gpu_parallel(self) -> bool:
+            return self.model.supports_gpu_parallel
+
+        # BaseModel properties
+        @property
+        def name(self) -> str:
+            return self.model.name
+
+        @property
+        # whether model has long-running build step (e.g. EVE VAE)
+        def requires_heavy_build(self) -> bool:
+            return self.model.requires_heavy_build
+
+        @property
+        # whether model needs unaligned sequences as input
+        def requires_seqs(self) -> bool:
+            return self.model.requires_seqs
+
+        @property
+        def requires_msa(self) -> bool:
+            return self.model.requires_msa
+
+        @property
+        def requires_3d(self) -> bool:
+            return self.model.requires_3d
+
+        @property
+        def ready(self) -> str:
+            # implies all other relevant attributes were set by build()
+            return self.system_full is not None
+
+        def stats(self) -> ModelStats | None:
+           return self.model.stats()
+
+        @staticmethod
+        def _filter_system(
+            system: System,
+            entity_subset: Sequence[int] | None = None,
+        ) -> System:
+            for idx in entity_subset:
+                if idx < 0 or idx >= len(system):
+                    raise ValueError(f"Invalid entity index: {idx}")
+
+            return System([
+                system[entity_idx] for entity_idx in sorted(entity_subset)
+            ])
+
+        def _filter_instance(self, instance) -> SystemInstance:
+            # filter entity instance to subset of entities, must keep order
+            return SystemInstance([
+                instance[idx] for idx in sorted(self.entity_subset)
+            ])
+
+        def _map_entity(self, entity: int | None):
+            # check and map selected entity
+            if entity is not None:
+                if entity not in self.entity_subset_map:
+                    raise ValueError(
+                        f"Entity {entity} not covered by subset map: {self.entity_subset_map}"
+                    )
+
+                entity_mapped = self.entity_subset_map[entity]
+            else:
+                entity_mapped = None
+
+            return entity_mapped
+
+        @classmethod
+        def can_model(
+            cls,
+            system: System,
+            data: Any,
+            entity_subset: Sequence[int] | None = None,
+        ) -> tuple[bool, str]:
+            return model_class.can_model(
+                system, data, cls._filter_system(system, entity_subset)
+            )
+
+        def build(
+            self,
+            system: System,
+            data: Any,
+            status_callback: StatusCallback | None = None,
+            entity_subset: Sequence[int] | None = None,
+        ) -> Self:
+            # filter system and store, also retain full system and indices for remapping
+            self.system_subset = self._filter_system(system, entity_subset)
+            self.entity_subset = sorted(entity_subset)
+            self.entity_subset_map = {
+                full_index: filt_index for filt_index, full_index in enumerate(self.entity_subset)
+            }
+            self.system_full = system
+
+            # build wrapped model on filtered system
+            self.model.build(
+                self.system_subset, data, status_callback
+            )
+
+            return self
+
+        def positions(
+            self,
+            instance: SystemInstance | None,
+        ) -> list[tuple[int, int]]:
+            self.ready_or_raise()
+            if instance is not None:
+                self._validate_instances([instance])
+
+            if instance is not None:
+                instance_filt = self._filter_instance(instance)
+            else:
+                instance_filt = None
+
+            # get positions on mapped instance
+            positions = self.model.positions(instance_filt)
+
+            # remap entity indices and return
+            return [
+                (self.entity_subset[entity], pos) for (entity, pos) in positions
+            ]
+
+        def score(
+            self,
+            instances: Sequence[SystemInstance],
+            status_callback: StatusCallback | None = None
+        ) -> np.ndarray[tuple[int], np.dtype[float]]:
+            self.ready_or_raise()
+            self._validate_instances(instances)
+
+            instances_filt = [
+                self._filter_instance(instance) for instance in instances
+            ]
+
+            return self.model.score(
+                instances_filt, status_callback
+            )
+
+        def score_conditional(
+            self,
+            instances: Sequence[SystemInstance],
+            entities: Sequence[int],
+            positions: Sequence[int],
+            status_callback: StatusCallback | None = None
+        ) -> pd.DataFrame:
+            self.ready_or_raise()
+            self._validate_instances(instances)
+
+            # check all entity selections
+            try:
+                entities_mapped = [
+                    self.entity_subset_map[entity_idx] for entity_idx in entities
+                ]
+            except KeyError as e:
+                raise ValueError("Invalid entity index") from e
+
+            instances_filt = [
+                self._filter_instance(instance) for instance in instances
+            ]
+
+            # score
+            scores = self.model.score_conditional(
+                instances_filt, entities_mapped, positions, status_callback
+            )
+
+            # remap entity index in dataframe
+            assert scores.index.names[1] == "entity"
+            scores.index = scores.index.set_levels(
+                scores.index.levels[1].map(
+                    lambda entity_idx: self.entity_subset[entity_idx]
+                ).values, level=1
+            )
+
+            return scores
+
+        def single_mutation_scan(
+            self,
+            instance: SystemInstance,
+            entity: int | None = None,
+            positions: Sequence[int] | None = None,
+            status_callback: StatusCallback | None = None
+        ) -> pd.DataFrame:
+            self.ready_or_raise()
+            self._validate_instances([instance])
+
+            # filter instance to subsystem, and map entity indices
+            instance_filt = self._filter_instance(instance)
+            entity_mapped = self._map_entity(entity)
+
+            # compute mutation matrix with model on instance limited to system subset
+            scores = self.model.single_mutation_scan(
+                instance=instance_filt, entity=entity_mapped, positions=positions, status_callback=status_callback
+            )
+
+            # remap entity index in dataframe
+            assert scores.index.names[0] == "entity"
+            scores.index = scores.index.set_levels(
+                scores.index.levels[0].map(
+                    lambda entity_idx: self.entity_subset[entity_idx]
+                ).values, level=0
+            )
+
+            return scores
+
+        def score_mutants(
+            self,
+            instance: SystemInstance,
+            mutants: Sequence[Mutant],
+            status_callback: StatusCallback | None = None
+        ) -> np.ndarray[tuple[int], np.dtype[float]]:
+            self.ready_or_raise()
+            self._validate_instances([instance])
+
+            # map mutants to filtered indices
+            mutants_mapped = [
+                [
+                    Mutation(
+                        entity=self._map_entity(mutation.entity), pos=mutation.pos, ref=mutation.ref,to=mutation.to
+                    ) for mutation in mutant
+                ]
+                for mutant in mutants
+            ]
+
+            instance_filt = self._filter_instance(instance)
+
+            return self.model.score_mutants(
+                instance_filt, mutants_mapped, status_callback
+            )
+
+        def transform(
+            self,
+            instances: Sequence[SystemInstance],
+            entity: int | None = None,
+            status_callback: StatusCallback | None = None
+        ) -> list[SystemInstance]:
+            self.ready_or_raise()
+            self._validate_instances(instances)
+
+            # filter instances to subsystem, and map entity indices
+            instances_filt = [
+                self._filter_instance(instance) for instance in instances
+            ]
+            entity_mapped = self._map_entity(entity)
+
+            # transform the filtered instances
+            instances_transformed = self.model.transform(
+                instances_filt, entity_mapped, status_callback
+            )
+
+            # update transformed instances by filling in original entity instances from full instances
+            # for entities not covered by subset model
+            for instance_transformed, instance_full in zip(instances_transformed, instances):
+                entity_instances = [
+                    (
+                        instance_transformed[self.entity_subset_map[entity_idx]]
+                        if entity_idx in self.entity_subset_map
+                        else instance_full[entity_idx]
+                    )
+                    for entity_idx, _ in enumerate(self.system_full)
+                ]
+                instance_transformed.data = entity_instances
+
+            return instances_transformed
+
+        def generate(
+            self,
+            num_designs: int,
+            entities: Sequence[int] | None = None,
+            fixed_pos: EntityPosList | None = None,
+            temperature: float = 1.0,
+            deletions: bool = False,
+            status_callback: StatusCallback | None = None
+        ) -> list[SystemInstance]:
+            self.ready_or_raise()
+
+            # map designed entities if specified (will raise if invalid)
+            if entities is not None:
+                entities_mapped = [
+                    self._map_entity(entity) for entity in entities
+                ]
+            else:
+                entities_mapped = None
+
+            # map fixed positions (will raise if invalid)
+            if fixed_pos is not None:
+                fixed_pos_mapped = {
+                    self.entity_subset_map[entity]: positions for entity, positions in fixed_pos.items()
+                }
+            else:
+                fixed_pos_mapped = None
+
+            # design on filtered system
+            designs = self.model.generate(
+                num_designs=num_designs,
+                entities=entities_mapped,
+                fixed_pos=fixed_pos_mapped,
+                temperature=temperature,
+                deletions=deletions,
+                status_callback=status_callback
+            )
+
+            # update designs by filling unspecified instances for entities not covered by subset model
+            for instance in designs:
+                entity_instances = [
+                    (
+                        instance[self.entity_subset_map[entity_idx]]
+                        if entity_idx in self.entity_subset_map
+                        else EntityInstance()
+                    )
+                    for entity_idx, _ in enumerate(self.system_full)
+                ]
+                instance.data = entity_instances
+
+            return designs
+
+        @classmethod
+        def required_resources(
+            cls,
+            system: System,
+            data: Any,
+            use_gpu: bool = True,
+            build: bool = True,
+        ) -> RequiredResources:
+            # will drop required_resources altogether, don't implement
+            raise NotImplementedError()
+
+    # remove methods which are not present on parent (eg transform) so it behaves
+    # exactly the same to the outside world
+    for attr in dir(SubsetModel):
+        if not hasattr(model_class, attr) and not attr.startswith("_"):
+            delattr(SubsetModel, attr)
+
+    return SubsetModel
