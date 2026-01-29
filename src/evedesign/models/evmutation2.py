@@ -1,5 +1,5 @@
 """
-Wrapper class around EVmutation2/picasso model
+Wrapper class around EVmutation2 model
 """
 from os import PathLike
 from typing import Self, Sequence
@@ -19,7 +19,7 @@ from evedesign.utils import ensure_sequence, model_param_context
 from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
-    from picasso_model import model, features, parsers  # noqa
+    from evmutation2 import model, features, parsers  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -27,7 +27,7 @@ except ImportError:
 
 class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
-    Wrapper class around EVmutation2/picasso model
+    Wrapper class around EVmutation2 model
     """
     available = IMPORT_AVAILABLE
     name: str = "EVmutation2"
@@ -563,7 +563,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     ) -> pd.DataFrame:
         """
         Note: could express this function through newer score_conditionals to simplify codebase
-        and avoid redundancy (either here, or inside picasso_model package, tbd)
+        and avoid redundancy (either here, or inside evmutation2 package, tbd)
         """
         self.ready_or_raise()
 
@@ -598,7 +598,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
             # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
             # different decoding orders will already have cancelled out. ultimately, this functionality should
-            # probably go inside the score_single_mutants() method in picasso...
+            # probably go inside the score_single_mutants() method in evmutation2...
             effects = {}
             for idx_enc in range(num_encodings):
                 # note: method has @torch.inference_mode() so no_grad not necessary here
@@ -679,7 +679,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
             # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
             # different decoding orders will already have cancelled out. ultimately, this functionality should
-            # probably go inside the score_single_mutants() method in picasso...
+            # probably go inside the score_single_mutants() method in evmutation2...
             effects = {}
             for idx_enc in range(num_encodings):
                 # note: method has @torch.inference_mode() so no_grad not necessary here

@@ -18,9 +18,9 @@
 1. If you want to use the EVmutation2 model, install it first (editable install): 
 
 ```console
-git clone https://github.com/thomashopf/picasso.git
+git clone https://github.com/thomashopf/evmutation2.git
 
-cd picasso
+cd evmutation2
 
 pip install -e .
 ```

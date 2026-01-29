@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-evmutation2 = ["picasso_model"]
+evmutation2 = ["evmutation2"]
 esm2 = ["transformers"]
 mpnn = ["prody"]
 umap = ["umap-learn"]
