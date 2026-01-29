@@ -131,7 +131,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
     def __init__(
         self,
         model_name: Literal[tuple(MODEL_URLS.keys())],  # noqa
-        checkpoint_path: str | None = None,
+        model_file_path: str | None = None,
         batch_size: BatchSize = 1,
         use_ligand_context: bool = True,
         ligand_cutoff: float = 6.0,
@@ -148,7 +148,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         ----------
         model_name
             Name of MPNN model. If checkpoint_path is specified, must match the loaded model.
-        checkpoint_path
+        model_file_path
             Path to checkpoint file to load. If None, will attempt to download from web.
         batch_size
             Batch sized used for generation. Will not be used while scoring due to implementation limitations
@@ -187,11 +187,11 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
             self.model_type = "protein_mpnn"
 
        # Handle checkpoint path
-        if checkpoint_path is None:
+        if model_file_path is None:
             # Download from web using model_name
             self.checkpoint_path = download_checkpoint(model_name, cache_dir)
         else:
-            self.checkpoint_path = checkpoint_path
+            self.checkpoint_path = model_file_path
 
         self.model = None
 
