@@ -1,4 +1,4 @@
-# protdesign
+# evedesign
 
 [![PyPI - Version](https://img.shields.io/pypi/v/protdesign.svg)](https://pypi.org/project/protdesign)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/protdesign.svg)](https://pypi.org/project/protdesign)
@@ -28,9 +28,9 @@ pip install -e .
 2. Install this repo (editable install of *develop* branch):
 
 ```console
-git clone https://github.com/thomashopf/protdesign.git
+git clone https://github.com/thomashopf/evedesign.git
 
-cd protdesign
+cd evedesign
 
 git checkout develop
 

@@ -10,13 +10,13 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import (
+from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.constants import MASK
-from protdesign.utils import ensure_sequence, model_param_context
-from protdesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.constants import MASK
+from evedesign.utils import ensure_sequence, model_param_context
+from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
     from picasso_model import model, features, parsers  # noqa

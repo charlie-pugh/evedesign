@@ -7,13 +7,13 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import (
+from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.utils import model_param_context
-from protdesign.types import DeviceType, StatusCallback, BatchSize
-from protdesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
+from evedesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.utils import model_param_context
+from evedesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
 
 try:
     from transformers import EsmForMaskedLM, AutoTokenizer  # noqa

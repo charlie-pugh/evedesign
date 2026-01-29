@@ -6,11 +6,11 @@ from typing import Self, Sequence
 import numpy as np
 import pandas as pd
 
-from protdesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer, MutationScorer
-from protdesign.entity import Entity, System, SystemInstance
-from protdesign.types import StatusCallback
-from protdesign.utils import str_to_np_char_view, map_array
-from protdesign.constants import GAP
+from evedesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer, MutationScorer
+from evedesign.entity import Entity, System, SystemInstance
+from evedesign.types import StatusCallback
+from evedesign.utils import str_to_np_char_view, map_array
+from evedesign.constants import GAP
 
 EntityToReferenceSeqs = dict[int, list[str]]
 

@@ -4,9 +4,9 @@ Biopolymer sequence functionality (protein sequences etc.)
 from string import ascii_lowercase
 from typing import Any, Literal, Self, TextIO
 from collections import abc
-from protdesign.constants import MASK, GAP
-from protdesign.types import BioPolymer, RepSequence, SequenceMetadata
-from protdesign.utils import shorten
+from evedesign.constants import MASK, GAP
+from evedesign.types import BioPolymer, RepSequence, SequenceMetadata
+from evedesign.utils import shorten
 
 
 REMOVE_INSERTIONS_TRANSLATION = str.maketrans("", "", ascii_lowercase)

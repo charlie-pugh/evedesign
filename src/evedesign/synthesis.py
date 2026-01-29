@@ -5,7 +5,7 @@ Functionality related to physically making designed sequences (e.g. expressing p
 from abc import ABC, abstractmethod
 from typing import Sequence
 import pandas as pd
-from protdesign.entity import System, SystemInstance
+from evedesign.entity import System, SystemInstance
 
 CodonUsageTable = dict[str, [dict[str, float]]]
 

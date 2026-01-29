@@ -8,16 +8,16 @@ from io import StringIO
 from typing import Mapping, NamedTuple, Self, Any
 import numpy as np
 
-from protdesign.sequence import valid_sequence, Sequences
-from protdesign.structure import Model, Structure
-from protdesign.types import EntityType, Metadata, BioPolymers, RepSequence
-from protdesign.constants import (
+from evedesign.sequence import valid_sequence, Sequences
+from evedesign.structure import Model, Structure
+from evedesign.types import EntityType, Metadata, BioPolymers, RepSequence
+from evedesign.constants import (
     VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
     VALID_DNA_OR_GAP_SORTED, VALID_DNA_SORTED,
     VALID_RNA_OR_GAP_SORTED, VALID_RNA_SORTED,
     GAP
 )
-from protdesign.utils import ensure_sequence, shorten
+from evedesign.utils import ensure_sequence, shorten
 
 
 """

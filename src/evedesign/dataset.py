@@ -1,5 +1,5 @@
 from typing import Sequence
-from protdesign.entity import SystemInstance
+from evedesign.entity import SystemInstance
 
 
 class LabeledInstanceDataset:

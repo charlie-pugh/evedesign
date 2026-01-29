@@ -10,11 +10,11 @@ from sklearn.model_selection import cross_validate, cross_val_predict, KFold, St
 from sklearn.utils import all_estimators
 from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
-from protdesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
-from protdesign.entity import System, SystemInstance
-from protdesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
+from evedesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
+from evedesign.entity import System, SystemInstance
+from evedesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
-from protdesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
+from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
 
 spearman_score = lambda y_true, y_pred: spearmanr(y_true, y_pred).correlation
 pearson_score = lambda y_true, y_pred: pearsonr(y_true, y_pred).correlation

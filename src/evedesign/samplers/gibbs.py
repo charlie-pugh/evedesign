@@ -8,11 +8,11 @@ import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from protdesign.constants import GAP
-from protdesign.model import Generator, ConditionalMutationScorer, Scorer
-from protdesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
-from protdesign.types import StatusCallback, CHAIN_COMPONENT_KEY, SCORE_COMPONENT_KEY
-from protdesign.utils import status_progress, ensure_sequence, map_array
+from evedesign.constants import GAP
+from evedesign.model import Generator, ConditionalMutationScorer, Scorer
+from evedesign.entity import System, Entity, SystemInstance, EntityPosList, EntityInstance
+from evedesign.types import StatusCallback, CHAIN_COMPONENT_KEY, SCORE_COMPONENT_KEY
+from evedesign.utils import status_progress, ensure_sequence, map_array
 
 ScanOrder = Literal[
     "random", "sequential"

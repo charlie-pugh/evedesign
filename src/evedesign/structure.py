@@ -15,8 +15,8 @@ import biotite.structure.io.pdbx as pdbx
 import biotite.database.rcsb as rcsb
 from biotite.structure import AtomArray
 
-from protdesign.constants import RESIDUE_MAX_SASA, AA3_to_AA1
-from protdesign.utils import map_array
+from evedesign.constants import RESIDUE_MAX_SASA, AA3_to_AA1
+from evedesign.utils import map_array
 
 # allow to receive single chain, or map from identifier to single chain or list of chains
 StructureFormat = Literal["bcif", "cif", "pdb"]

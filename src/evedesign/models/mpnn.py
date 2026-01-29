@@ -8,23 +8,23 @@ import numpy as np
 import torch
 from loguru import logger
 
-from protdesign.model import (
+from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
 )
-from protdesign.entity import System, SystemInstance, EntityPosList
-from protdesign.structure import Model
-from protdesign.utils import ensure_sequence, model_param_context
-from protdesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.entity import System, SystemInstance, EntityPosList
+from evedesign.structure import Model
+from evedesign.utils import ensure_sequence, model_param_context
+from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 # Import the LigandMPNN modules
-from protdesign.models.ligandmpnn.data_utils import (
+from evedesign.models.ligandmpnn.data_utils import (
     featurize,
     parse_PDB,
     restype_str_to_int,
     restype_int_to_str,
     get_score,
 )
-from protdesign.models.ligandmpnn.model_utils import ProteinMPNN
+from evedesign.models.ligandmpnn.model_utils import ProteinMPNN
 try:
     import prody
     IMPORT_AVAILABLE = True

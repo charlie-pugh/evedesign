@@ -10,7 +10,7 @@ import pandas as pd
 from dnachisel import NoSolutionError
 from loguru import logger
 
-from protdesign.synthesis import ProteinToDnaOptimizer, CodonUsageTable
+from evedesign.synthesis import ProteinToDnaOptimizer, CodonUsageTable
 
 try:
     import dnachisel as dc  # noqa
@@ -24,9 +24,9 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
-from protdesign.constants import GAP, VALID_DNA_SORTED
-from protdesign.entity import System, SystemInstance, EntityInstance
-from protdesign.sequence import valid_sequence
+from evedesign.constants import GAP, VALID_DNA_SORTED
+from evedesign.entity import System, SystemInstance, EntityInstance
+from evedesign.sequence import valid_sequence
 
 OPTIMIZATION_METHODS = [
     "use_best_codon",
