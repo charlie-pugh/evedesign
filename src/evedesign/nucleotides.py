@@ -7,7 +7,7 @@ from typing import Sequence
 import pandas as pd
 from evedesign.system import System, SystemInstance
 
-CodonUsageTable = dict[str, [dict[str, float]]]
+CodonUsageTable = dict[str, dict[str, float]]
 
 class ProteinToDnaOptimizer(ABC):
     """
