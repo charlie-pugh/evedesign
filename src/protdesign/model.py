@@ -4,7 +4,7 @@ from typing import Self, Sequence, Any, TypeVar
 import numpy as np
 import pandas as pd
 from protdesign.dataset import LabeledInstanceDataset
-from protdesign.entity import System, SystemInstance, Entity, EntityPosList, Mutant, Mutation
+from protdesign.entity import System, SystemInstance, Entity, EntityInstance, EntityPosList, Mutant, Mutation
 from protdesign.types import StatusCallback, ModelStats, BioPolymers
 
 
@@ -949,8 +949,6 @@ def system_subset_model(model_class: T) -> T:
     of entities in a system (e.g. to apply single-protein LLM to binder designed in complex
     of a target structure)
 
-    Assumes instances and system have been validated before passing them to the model
-
     Parameters
     ----------
     model_class
@@ -960,6 +958,10 @@ def system_subset_model(model_class: T) -> T:
     -------
     Updated model class
     """
+    # functionality added on top of model_class only makes sense if it is a model operating on systems
+    if not issubclass(model_class, BaseModel):
+        raise TypeError("model_class must inherit from BaseModel")
+
     class SubsetModel(model_class):
         def __init__(self, **args):
             # note: we store model as attribute rather than really subclassing it
@@ -1040,7 +1042,8 @@ def system_subset_model(model_class: T) -> T:
 
         @property
         def ready(self) -> str:
-            return self.model.ready
+            # implies all other relevant attributes were set by build()
+            return self.system_full is not None
 
         def stats(self) -> ModelStats | None:
            return self.model.stats()
@@ -1063,6 +1066,20 @@ def system_subset_model(model_class: T) -> T:
             return SystemInstance([
                 instance[idx] for idx in sorted(self.entity_subset)
             ])
+
+        def _map_entity(self, entity: int | None):
+            # check and map selected entity
+            if entity is not None:
+                if entity not in self.entity_subset_map:
+                    raise ValueError(
+                        f"Entity {entity} not covered by subset map: {self.entity_subset_map}"
+                    )
+
+                entity_mapped = self.entity_subset_map[entity]
+            else:
+                entity_mapped = None
+
+            return entity_mapped
 
         @classmethod
         def can_model(
@@ -1101,6 +1118,10 @@ def system_subset_model(model_class: T) -> T:
             self,
             instance: SystemInstance | None,
         ) -> list[tuple[int, int]]:
+            self.ready_or_raise()
+            if instance is not None:
+                self._validate_instances([instance])
+
             if instance is not None:
                 instance_filt = self._filter_instance(instance)
             else:
@@ -1119,6 +1140,9 @@ def system_subset_model(model_class: T) -> T:
             instances: Sequence[SystemInstance],
             status_callback: StatusCallback | None = None
         ) -> np.ndarray[tuple[int], np.dtype[float]]:
+            self.ready_or_raise()
+            self._validate_instances(instances)
+
             instances_filt = [
                 self._filter_instance(instance) for instance in instances
             ]
@@ -1134,6 +1158,9 @@ def system_subset_model(model_class: T) -> T:
             positions: Sequence[int],
             status_callback: StatusCallback | None = None
         ) -> pd.DataFrame:
+            self.ready_or_raise()
+            self._validate_instances(instances)
+
             # check all entity selections
             try:
                 entities_mapped = [
@@ -1152,6 +1179,7 @@ def system_subset_model(model_class: T) -> T:
             )
 
             # remap entity index in dataframe
+            assert scores.index.names[1] == "entity"
             scores.index = scores.index.set_levels(
                 scores.index.levels[1].map(
                     lambda entity_idx: self.entity_subset[entity_idx]
@@ -1167,19 +1195,12 @@ def system_subset_model(model_class: T) -> T:
             positions: Sequence[int] | None = None,
             status_callback: StatusCallback | None = None
         ) -> pd.DataFrame:
-            # filter instance to subsystem
+            self.ready_or_raise()
+            self._validate_instances([instance])
+
+            # filter instance to subsystem, and map entity indices
             instance_filt = self._filter_instance(instance)
-
-            # check and map selected entity
-            if entity is not None:
-                if entity not in self.entity_subset_map:
-                    raise ValueError(
-                        f"Entity {entity} not covered by subset map: {self.entity_subset_map}"
-                    )
-
-                entity_mapped = self.entity_subset_map[entity]
-            else:
-                entity_mapped = None
+            entity_mapped = self._map_entity(entity)
 
             # compute mutation matrix with model on instance limited to system subset
             scores = self.model.single_mutation_scan(
@@ -1187,6 +1208,7 @@ def system_subset_model(model_class: T) -> T:
             )
 
             # remap entity index in dataframe
+            assert scores.index.names[0] == "entity"
             scores.index = scores.index.set_levels(
                 scores.index.levels[0].map(
                     lambda entity_idx: self.entity_subset[entity_idx]
@@ -1201,8 +1223,24 @@ def system_subset_model(model_class: T) -> T:
             mutants: Sequence[Mutant],
             status_callback: StatusCallback | None = None
         ) -> np.ndarray[tuple[int], np.dtype[float]]:
-            # TODO: must validate/map mutants
-            raise NotImplementedError()
+            self.ready_or_raise()
+            self._validate_instances([instance])
+
+            # map mutants to filtered indices
+            mutants_mapped = [
+                [
+                    Mutation(
+                        entity=self._map_entity(mutation.entity), pos=mutation.pos, ref=mutation.ref,to=mutation.to
+                    ) for mutation in mutant
+                ]
+                for mutant in mutants
+            ]
+
+            instance_filt = self._filter_instance(instance)
+
+            return self.model.score_mutants(
+                instance_filt, mutants_mapped, status_callback
+            )
 
         def transform(
             self,
@@ -1210,15 +1248,34 @@ def system_subset_model(model_class: T) -> T:
             entity: int | None = None,
             status_callback: StatusCallback | None = None
         ) -> list[SystemInstance]:
+            self.ready_or_raise()
+            self._validate_instances(instances)
+
+            # filter instances to subsystem, and map entity indices
             instances_filt = [
                 self._filter_instance(instance) for instance in instances
             ]
+            entity_mapped = self._map_entity(entity)
 
-            # TODO: check & map entity and pass
-            # transformed = self.model.transform(instances_filt, 0, status_callback)
+            # transform the filtered instances
+            instances_transformed = self.model.transform(
+                instances_filt, entity_mapped, status_callback
+            )
 
-            # TODO: must map transformed instances back
-            raise NotImplementedError()
+            # update transformed instances by filling in original entity instances from full instances
+            # for entities not covered by subset model
+            for instance_transformed, instance_full in zip(instances_transformed, instances):
+                entity_instances = [
+                    (
+                        instance_transformed[self.entity_subset_map[entity_idx]]
+                        if entity_idx in self.entity_subset_map
+                        else instance_full[entity_idx]
+                    )
+                    for entity_idx, _ in enumerate(self.system_full)
+                ]
+                instance_transformed.data = entity_instances
+
+            return instances_transformed
 
         def generate(
             self,
@@ -1229,8 +1286,47 @@ def system_subset_model(model_class: T) -> T:
             deletions: bool = False,
             status_callback: StatusCallback | None = None
         ) -> list[SystemInstance]:
-            # handle uncovered entities? keep from system? or set rep to None...
-            raise NotImplementedError()
+            self.ready_or_raise()
+
+            # map designed entities if specified (will raise if invalid)
+            if entities is not None:
+                entities_mapped = [
+                    self._map_entity(entity) for entity in entities
+                ]
+            else:
+                entities_mapped = None
+
+            # map fixed positions (will raise if invalid)
+            if fixed_pos is not None:
+                fixed_pos_mapped = {
+                    self.entity_subset_map[entity]: positions for entity, positions in fixed_pos.items()
+                }
+            else:
+                fixed_pos_mapped = None
+
+            # design on filtered system
+            designs = self.model.generate(
+                num_designs=num_designs,
+                entities=entities_mapped,
+                fixed_pos=fixed_pos_mapped,
+                temperature=temperature,
+                deletions=deletions,
+                status_callback=status_callback
+            )
+
+            # update designs by filling unspecified instances for entities not covered by subset model
+            for instance in designs:
+                entity_instances = [
+                    (
+                        instance[self.entity_subset_map[entity_idx]]
+                        if entity_idx in self.entity_subset_map
+                        else EntityInstance()
+                    )
+                    for entity_idx, _ in enumerate(self.system_full)
+                ]
+                instance.data = entity_instances
+
+            return designs
 
         @classmethod
         def required_resources(
