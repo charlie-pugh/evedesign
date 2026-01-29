@@ -100,9 +100,9 @@ def download_checkpoint(model_name: str, save_dir: str) -> str:
     return checkpoint_path
 
 
-class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer):
+class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer):
     """
-    evedesign wrapper for LigandMPNN
+    evedesign wrapper for LigandMPNN/ProteinMPNN
 
     TODO: extend to also handle ligand entities
     TODO: implement specialized scoring methods that move known positions to front to score all substitutions at once
