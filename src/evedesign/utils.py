@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from collections import defaultdict
 from typing import Callable, Sequence, TypeVar, Mapping
 import numpy as np
-from protdesign.types import StatusCallback
+from evedesign.types import StatusCallback
 
 T = TypeVar("T")
 

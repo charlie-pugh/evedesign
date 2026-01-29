@@ -1,8 +1,8 @@
 """
-Wrapper class around EVmutation2/picasso model
+Wrapper class around EVmutation2 model
 """
 from os import PathLike
-from typing import Self, Sequence
+from typing import Literal, Self, Sequence
 from contextlib import contextmanager
 
 import numpy as np
@@ -10,24 +10,26 @@ import pandas as pd
 from loguru import logger
 import torch
 
-from protdesign.model import (
+from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from protdesign.entity import System, SystemInstance, EntityInstance, EntityPosList, Mutant
-from protdesign.constants import MASK
-from protdesign.utils import ensure_sequence, model_param_context
-from protdesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.constants import MASK
+from evedesign.utils import ensure_sequence, model_param_context
+from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
-    from picasso_model import model, features, parsers  # noqa
+    from evmutation2 import model, features, parsers  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
 
+MODEL_DOWNLOAD_URL = "https://huggingface.co/thomashopf/evmutation2/resolve/main/{model_name}.ckpt"
+
 
 class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
-    Wrapper class around EVmutation2/picasso model
+    Wrapper class around EVmutation2 model
     """
     available = IMPORT_AVAILABLE
     name: str = "EVmutation2"
@@ -51,7 +53,8 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
     def __init__(
         self,
-        model_file_path: str | PathLike,
+        model_name: Literal["msa-only-small"] = "msa-only-small",
+        model_file_path: str | PathLike | None = None,
         encoder_num_samples: int = 1,
         encoder_num_recycling_steps: int = 4,
         encoder_max_num_msa: int | None = 2048,
@@ -70,8 +73,10 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
         Parameters
         ----------
+        model_name : {"msa-only-small"}
+            Name of the model to load
         model_file_path
-            Path to Lightning checkpoint
+            Path to model Lightning checkpoint. If None, will fetch checkpoint from Huggingface.
         encoder_num_samples
             Number of encoder samples to draw (at least 1), can improve model performance
         encoder_num_recycling_steps
@@ -100,7 +105,11 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         if not self.available:
             raise ValueError("EVmutation2 package could not be imported. Is it installed already?")
 
-        self.model_file_path = model_file_path
+        if model_file_path is not None:
+            self.model_file_path = model_file_path
+        else:
+            self.model_file_path = MODEL_DOWNLOAD_URL.format(model_name=model_name)
+
         self.keep_model_after_build = keep_model_after_build
 
         # by default, keep parameters loaded once loaded for prediction purposes to avoid reloading over and over
@@ -563,7 +572,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     ) -> pd.DataFrame:
         """
         Note: could express this function through newer score_conditionals to simplify codebase
-        and avoid redundancy (either here, or inside picasso_model package, tbd)
+        and avoid redundancy (either here, or inside evmutation2 package, tbd)
         """
         self.ready_or_raise()
 
@@ -598,7 +607,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
             # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
             # different decoding orders will already have cancelled out. ultimately, this functionality should
-            # probably go inside the score_single_mutants() method in picasso...
+            # probably go inside the score_single_mutants() method in evmutation2...
             effects = {}
             for idx_enc in range(num_encodings):
                 # note: method has @torch.inference_mode() so no_grad not necessary here
@@ -679,7 +688,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
             # iterate through encoder samples; we can average these as these are log-odds scores, i.e.
             # different decoding orders will already have cancelled out. ultimately, this functionality should
-            # probably go inside the score_single_mutants() method in picasso...
+            # probably go inside the score_single_mutants() method in evmutation2...
             effects = {}
             for idx_enc in range(num_encodings):
                 # note: method has @torch.inference_mode() so no_grad not necessary here

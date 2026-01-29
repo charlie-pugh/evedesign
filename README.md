@@ -1,7 +1,7 @@
-# protdesign
+# evedesign
 
-[![PyPI - Version](https://img.shields.io/pypi/v/protdesign.svg)](https://pypi.org/project/protdesign)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/protdesign.svg)](https://pypi.org/project/protdesign)
+[![PyPI - Version](https://img.shields.io/pypi/v/evedesign.svg)](https://pypi.org/project/evedesign)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/evedesign.svg)](https://pypi.org/project/evedesign)
 
 -----
 
@@ -18,9 +18,9 @@
 1. If you want to use the EVmutation2 model, install it first (editable install): 
 
 ```console
-git clone https://github.com/thomashopf/picasso.git
+git clone https://github.com/thomashopf/evmutation2.git
 
-cd picasso
+cd evmutation2
 
 pip install -e .
 ```
@@ -28,9 +28,9 @@ pip install -e .
 2. Install this repo (editable install of *develop* branch):
 
 ```console
-git clone https://github.com/thomashopf/protdesign.git
+git clone https://github.com/thomashopf/evedesign.git
 
-cd protdesign
+cd evedesign
 
 git checkout develop
 

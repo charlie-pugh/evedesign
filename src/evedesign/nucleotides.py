@@ -5,9 +5,9 @@ Functionality related to physically making designed sequences (e.g. expressing p
 from abc import ABC, abstractmethod
 from typing import Sequence
 import pandas as pd
-from protdesign.entity import System, SystemInstance
+from evedesign.system import System, SystemInstance
 
-CodonUsageTable = dict[str, [dict[str, float]]]
+CodonUsageTable = dict[str, dict[str, float]]
 
 class ProteinToDnaOptimizer(ABC):
     """

@@ -1,4 +1,4 @@
-from protdesign.entity import System, Entity, SystemInstance, EntityInstance
+from evedesign.system import System, Entity, SystemInstance, EntityInstance
 
 def test_system_validation():
     system = System([

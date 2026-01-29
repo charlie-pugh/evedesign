@@ -8,16 +8,16 @@ from io import StringIO
 from typing import Mapping, NamedTuple, Self, Any
 import numpy as np
 
-from protdesign.sequence import valid_sequence, Sequences
-from protdesign.structure import Model, Structure
-from protdesign.types import EntityType, Metadata, BioPolymers, RepSequence
-from protdesign.constants import (
+from evedesign.sequence import valid_sequence, Sequences
+from evedesign.structure import Structure, StructureFile
+from evedesign.types import EntityType, Metadata, BioPolymers, RepSequence
+from evedesign.constants import (
     VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
     VALID_DNA_OR_GAP_SORTED, VALID_DNA_SORTED,
     VALID_RNA_OR_GAP_SORTED, VALID_RNA_SORTED,
     GAP
 )
-from protdesign.utils import ensure_sequence, shorten
+from evedesign.utils import ensure_sequence, shorten
 
 
 """
@@ -50,7 +50,7 @@ Conventions:
   missing if no coordinates are available, but there must not be any positions in structure that do not map to the
   entities representative
 """
-StructureChainMap = dict[str, Model | list[Model]]
+StructureChainMap = dict[str, Structure | list[Structure]]
 
 def _rep_to_np_array(rep: RepSequence | str | None) -> RepSequence | None:
     if isinstance(rep, str):
@@ -112,7 +112,7 @@ def _deserialize_chain_map(s: dict[str, Any] | None) -> StructureChainMap | None
         models = ensure_sequence(models)
         deserialized_map[key] = []
         for model in models:
-            model_deserialized = Structure(
+            model_deserialized = StructureFile(
                 StringIO(model), format="cif"
             ).get_model()
 
@@ -669,7 +669,7 @@ class System(UserList[Entity]):
         return deepcopy(self)
 
     @classmethod
-    def from_structure(cls, structure_model: Model) -> Self:
+    def from_structure(cls, structure_model: Structure) -> Self:
         """
         Build a system from entities in a protein 3D structure
 

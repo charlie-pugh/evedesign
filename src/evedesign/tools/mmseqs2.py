@@ -10,10 +10,10 @@ from typing import Literal, Sequence as SequenceType
 from pathlib import Path
 from loguru import logger
 
-from protdesign.__about__ import __version__
-from protdesign.tools.api_utils import _request_with_retries
-from protdesign.entity import System, Entity
-from protdesign.sequence import read_fasta, Sequence, Sequences
+from evedesign.__about__ import __version__
+from evedesign.tools.api_utils import _request_with_retries
+from evedesign.system import System, Entity
+from evedesign.sequence import read_fasta, Sequence, Sequences
 
 
 def filter_sequences_mmseqs(

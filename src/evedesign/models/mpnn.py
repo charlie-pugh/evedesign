@@ -8,23 +8,23 @@ import numpy as np
 import torch
 from loguru import logger
 
-from protdesign.model import (
+from evedesign.model import (
     BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
 )
-from protdesign.entity import System, SystemInstance, EntityPosList
-from protdesign.structure import Model
-from protdesign.utils import ensure_sequence, model_param_context
-from protdesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.system import System, SystemInstance, EntityPosList
+from evedesign.structure import Structure
+from evedesign.utils import ensure_sequence, model_param_context
+from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 # Import the LigandMPNN modules
-from protdesign.models.ligandmpnn.data_utils import (
+from evedesign.models.ligandmpnn.data_utils import (
     featurize,
     parse_PDB,
     restype_str_to_int,
     restype_int_to_str,
     get_score,
 )
-from protdesign.models.ligandmpnn.model_utils import ProteinMPNN
+from evedesign.models.ligandmpnn.model_utils import ProteinMPNN
 try:
     import prody
     IMPORT_AVAILABLE = True
@@ -100,9 +100,9 @@ def download_checkpoint(model_name: str, save_dir: str) -> str:
     return checkpoint_path
 
 
-class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer):
+class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer):
     """
-    evedesign wrapper for LigandMPNN
+    evedesign wrapper for LigandMPNN/ProteinMPNN
 
     TODO: extend to also handle ligand entities
     TODO: implement specialized scoring methods that move known positions to front to score all substitutions at once
@@ -131,7 +131,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
     def __init__(
         self,
         model_name: Literal[tuple(MODEL_URLS.keys())],  # noqa
-        checkpoint_path: str | None = None,
+        model_file_path: str | None = None,
         batch_size: BatchSize = 1,
         use_ligand_context: bool = True,
         ligand_cutoff: float = 6.0,
@@ -148,7 +148,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         ----------
         model_name
             Name of MPNN model. If checkpoint_path is specified, must match the loaded model.
-        checkpoint_path
+        model_file_path
             Path to checkpoint file to load. If None, will attempt to download from web.
         batch_size
             Batch sized used for generation. Will not be used while scoring due to implementation limitations
@@ -187,11 +187,11 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
             self.model_type = "protein_mpnn"
 
        # Handle checkpoint path
-        if checkpoint_path is None:
+        if model_file_path is None:
             # Download from web using model_name
             self.checkpoint_path = download_checkpoint(model_name, cache_dir)
         else:
-            self.checkpoint_path = checkpoint_path
+            self.checkpoint_path = model_file_path
 
         self.model = None
 
@@ -448,7 +448,7 @@ class LigandMPNNWrapper(BaseModel, Scorer, Generator, MutationScorer, Conditiona
         # write concatenated model to PDB format (do not write to temporary file to allow model
         # to be serialized after build())
         pdb_string = StringIO()
-        Model.concat(models_to_concat).to_file(pdb_string, format="pdb")
+        Structure.concat(models_to_concat).to_file(pdb_string, format="pdb")
         return pdb_string.getvalue(), pdb_to_entity_mapping, entity_to_pdb_chains, entity_pos_to_pdb_mapping
 
     def _create_chain_mask(self, fixed_pos: EntityPosList | None, entities: Sequence[int]) -> torch.Tensor:

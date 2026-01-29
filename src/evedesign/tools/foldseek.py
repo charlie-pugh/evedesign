@@ -5,11 +5,11 @@ from typing import TypedDict, Sequence
 
 from loguru import logger
 
-from protdesign.tools.api_utils import _request_with_retries
-from protdesign.entity import System
-from protdesign.structure import Structure, Model
-from protdesign.constants import GAP
-from protdesign.__about__ import __version__
+from evedesign.tools.api_utils import _request_with_retries
+from evedesign.system import System
+from evedesign.structure import StructureFile, Structure
+from evedesign.constants import GAP
+from evedesign.__about__ import __version__
 
 AFDB_DOWNLOAD_URL = "https://alphafold.ebi.ac.uk/files/{id_}.cif"
 
@@ -293,7 +293,7 @@ def build_structure_from_ca(tca, seq, chain_id="A"):
     pdb_text = _mock_pdb_from_ca(tca, seq, chain_id=chain_id)
     if not pdb_text:
         return ""
-    return Structure(StringIO(pdb_text), format="pdb")
+    return StructureFile(StringIO(pdb_text), format="pdb")
 
 
 def build_structure_from_hit(hit, chain_id="A"):
@@ -509,7 +509,7 @@ FOLDSEEK_THREE_TO_ONE = {
     'MGN': 'Q'
 }
 
-def remap_structure_from_hit(hit: FoldSeekHit, structure_model: Model, first_index: int) -> list[Model]:
+def remap_structure_from_hit(hit: FoldSeekHit, structure_model: Structure, first_index: int) -> list[Structure]:
     """
     Extract chain(s) from a PDB structure mapped by a FoldSeekHit independent of auth/label chain IDs,
     and remap residue indices so they match the target/query structure sequence indices.
@@ -913,13 +913,13 @@ def add_structures_foldseek(
                     "GET", AFDB_DOWNLOAD_URL.format(id_=structure_id)
                 )
 
-                s = Structure(
+                s = StructureFile(
                     StringIO(response.text), format="cif"
                 ).get_model(
                     use_author_fields=False
                 )
             elif db_type == "pdb":
-                s = Structure.from_id(
+                s = StructureFile.from_id(
                     structure_id.lower()
                 ).get_assembly_model(
                     assembly_id=assembly_id,

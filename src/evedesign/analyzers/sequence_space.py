@@ -9,8 +9,8 @@ from typing import Sequence, Literal
 import numpy as np
 from numba import prange, jit
 from sklearn.manifold import MDS
-from protdesign.analysis import Analyzer
-from protdesign.tools.mmseqs2 import filter_sequences_mmseqs
+from evedesign.analysis import Analyzer
+from evedesign.tools.mmseqs2 import filter_sequences_mmseqs
 
 try:
     from umap import UMAP  # noqa
@@ -18,9 +18,9 @@ try:
 except ImportError:
     UMAP_AVAILABLE = False
 
-from protdesign.entity import System, SystemInstance
-from protdesign.types import EntityType, SEQSPACE_PROJECTION_COMPONENT_KEY
-from protdesign.utils import str_to_np_char_view, map_array, index_map
+from evedesign.system import System, SystemInstance
+from evedesign.types import EntityType, SEQSPACE_PROJECTION_COMPONENT_KEY
+from evedesign.utils import str_to_np_char_view, map_array, index_map
 
 # each element is (entity, list of sequences, number of system sequences at end of list)
 CollectedSequences = list[tuple[int, list[str], list[int]]]
