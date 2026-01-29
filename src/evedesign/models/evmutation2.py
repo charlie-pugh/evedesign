@@ -24,6 +24,8 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
+MODEL_DOWNLOAD_URL = "https://huggingface.co/thomashopf/evmutation2/resolve/main/{model_name}.ckpt"
+
 
 class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
@@ -51,7 +53,8 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
     def __init__(
         self,
-        model_file_path: str | PathLike,
+        model_name: Literal["msa-only-small"] = "msa-only-small",
+        model_file_path: str | PathLike | None = None,
         encoder_num_samples: int = 1,
         encoder_num_recycling_steps: int = 4,
         encoder_max_num_msa: int | None = 2048,
@@ -70,8 +73,10 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
 
         Parameters
         ----------
+        model_name : {"msa-only-small"}
+            Name of the model to load
         model_file_path
-            Path to Lightning checkpoint
+            Path to model Lightning checkpoint. If None, will fetch checkpoint from Huggingface.
         encoder_num_samples
             Number of encoder samples to draw (at least 1), can improve model performance
         encoder_num_recycling_steps
@@ -100,7 +105,11 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         if not self.available:
             raise ValueError("EVmutation2 package could not be imported. Is it installed already?")
 
-        self.model_file_path = model_file_path
+        if model_file_path is not None:
+            self.model_file_path = model_file_path
+        else:
+            self.model_file_path = MODEL_DOWNLOAD_URL.format(model_name=model_name)
+
         self.keep_model_after_build = keep_model_after_build
 
         # by default, keep parameters loaded once loaded for prediction purposes to avoid reloading over and over
