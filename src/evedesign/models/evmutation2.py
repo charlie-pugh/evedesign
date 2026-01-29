@@ -2,7 +2,7 @@
 Wrapper class around EVmutation2 model
 """
 from os import PathLike
-from typing import Self, Sequence
+from typing import Literal, Self, Sequence
 from contextlib import contextmanager
 
 import numpy as np
