@@ -1,7 +1,7 @@
 # evedesign
 
-[![PyPI - Version](https://img.shields.io/pypi/v/protdesign.svg)](https://pypi.org/project/protdesign)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/protdesign.svg)](https://pypi.org/project/protdesign)
+[![PyPI - Version](https://img.shields.io/pypi/v/evedesign.svg)](https://pypi.org/project/evedesign)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/evedesign.svg)](https://pypi.org/project/evedesign)
 
 -----
 

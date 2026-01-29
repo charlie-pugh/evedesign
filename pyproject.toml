@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "protdesign"
+name = "evedesign"
 dynamic = ["version"]
 description = ''
 readme = "README.md"
@@ -32,31 +32,31 @@ mpnn = ["prody"]
 umap = ["umap-learn"]
 
 [project.urls]
-Documentation = "https://github.com/thomashopf/protdesign#readme"
-Issues = "https://github.com/thomashopf/protdesign/issues"
-Source = "https://github.com/thomashopf/protdesign"
+Documentation = "https://github.com/thomashopf/evedesign#readme"
+Issues = "https://github.com/thomashopf/evedesign/issues"
+Source = "https://github.com/thomashopf/evedesign"
 
 [tool.hatch.version]
-path = "src/protdesign/__about__.py"
+path = "src/evedesign/__about__.py"
 
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
 ]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/protdesign tests}"
+check = "mypy --install-types --non-interactive {args:src/evedesign tests}"
 
 [tool.coverage.run]
-source_pkgs = ["protdesign", "tests"]
+source_pkgs = ["evedesign", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/protdesign/__about__.py",
+  "src/evedesign/__about__.py",
 ]
 
 [tool.coverage.paths]
-protdesign = ["src/protdesign", "*/protdesign/src/protdesign"]
-tests = ["tests", "*/protdesign/tests"]
+evedesign = ["src/evedesign", "*/evedesign/src/evedesign"]
+tests = ["tests", "*/evedesign/tests"]
 
 [tool.coverage.report]
 exclude_lines = [
