@@ -1,5 +1,5 @@
 from os import PathLike
-from typing import Self, Sequence
+from typing import Literal, Self, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +48,10 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
     def __init__(
         self,
-        model_name: str | None = None,
+        model_name: Literal[
+            "esm2_t6_8M_UR50D", "esm2_t12_35M_UR50D", "esm2_t30_150M_UR50D",
+            "esm2_t33_650M_UR50D", "esm2_t36_3B_UR50D", "esm2_t48_15B_UR50D"
+        ] = "esm2_t33_650M_UR50D",
         model_dir_path: str | PathLike | None = None,
         batch_size: BatchSize = 64,
         keep_model_after_build: bool = False,
@@ -62,12 +65,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         if not self.available:
             raise ValueError(
                 "transformers package could not be imported. Is it installed already?"
-            )
-
-        # Validate model specification parameters
-        if (model_name is None and model_dir_path is None) or (model_name is not None and model_dir_path is not None):
-            raise ValueError(
-                "Must specify exactly one of model_name or model_file_path, but not both"
             )
 
         self.model_name = model_name
@@ -157,7 +154,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         if self.model is not None:
             return
 
-        if self.model_name is not None:
+        if self.model_dir_path is None:
             # Load from HuggingFace hub
             try:
                 # For remote loading from HuggingFace
@@ -172,7 +169,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 raise ValueError(
                     f"Failed to load model {self.model_name} from HuggingFace: {e}"
                 )
-        elif self.model_dir_path is not None:
+        else:
             # Load from local file path
             try:
                 # For local loading from a directory

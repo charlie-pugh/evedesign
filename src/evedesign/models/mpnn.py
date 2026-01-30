@@ -131,7 +131,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
     def __init__(
         self,
         model_name: Literal[tuple(MODEL_URLS.keys())],  # noqa
-        model_file_path: str | None = None,
+        model_file_path: str | os.PathLike | None = None,
         batch_size: BatchSize = 1,
         use_ligand_context: bool = True,
         ligand_cutoff: float = 6.0,
