@@ -741,6 +741,19 @@ class Entity:
                     f"first_index must be specified for type {self.type_} and must be >= 1"
                 )
 
+            # verify that polymer sequence is valid if specified (including mask)
+            if rep is not None:
+                # allow representative to contain gaps, may want to mutate this to AA
+                valid_seq, invalid = valid_sequence(
+                    rep, self.alphabet(
+                        include_gap=self.deletions,  # use as truth-y type
+                        include_inserts=False,
+                    ), allow_mask=True
+                )
+
+                if not valid_seq:
+                    raise ValueError(f"Invalid sequence: {invalid}")
+
         elif self.type_ == "ligand":
             if self.sequences is not None:
                 raise ValueError(
@@ -1707,77 +1720,115 @@ class System(UserList[Entity]):
         return instances
 
 
-class Protein(Entity):
+class _BiopolymerEntity(Entity):
     """
-    Single protein chain entity
+    Helper class for syntactic sugar classes Protein, DNA, RNA,
+    should never be instantiated directly.
     """
+    _entity_type = None
     def __init__(
         self,
-        id: str | None,  # noqa
-        rep: str | None = None,
-        first_index: int = 1,
+        rep: str | RepSequence | None = None,
+        id: str | None = None,  # noqa
         copies: int | None = None,
+        first_index: int = 1,
         sequences: Sequences | None = None,
         structures: StructureChainMap | None = None,
-        # TODO: extend
+        interactions: Sequence[Interaction] | None = None,
+        atom_bonds: Sequence[AtomBond] | None = None,
+        modifications: Sequence[Modification] | None = None,
+        symmetry: SymmetryType | None = None,
+        secondary_structure: Sequence[SecondaryStructure] | None = None,
+        cyclic: bool = False,
+        min_length: int | None = None,
+        max_length: int | None = None,
+        residue_bias: Sequence[ResidueBias] | None = None,
+        insertions: Sequence[Insertion] | None = None,
+        deletions: bool = False,
     ):
         """
-        Create new protein entity
-
-        Parameters
-        ----------
-        id
-            Unique identifier of protein
-        rep
-            Sequence of protein (if None, auto-infer or leave open as needed for model).
-            May contain any valid amino acid or the mask symbol.
-        first_index
-            Sequence index of first residue (1-based numbering)
-        copies
-            Number of copies of protein chain in system (None to leave unspecified/variable)
-        sequences
-            Sequence record (e.g. multiple sequence alignment of homologs) of the target
-            sequence represented by this entity
-        structures
-            Structure chains representing this entity. Use dict with structure identifiers
-            as keys to supply multiple different structures; use list to supply multiple copies
-            of the chain within the structure (homooligomer)
+        Create new biopolymer entity. Syntactic sugar for instantiating Entity class directly,
+        cf. to this class for parameter documentation.
         """
-        # verify that protein sequence is valid if specified (including mask)
-        if rep is not None:
-            # allow representative to contain gaps, may want to mutate this to AA
-            valid_seq, invalid_aa = valid_sequence(
-                rep, VALID_AA_OR_GAP_SORTED, allow_mask=True
+        if self._entity_type is None:
+            raise ValueError(
+                "Should not instantiate this class, use Protein, DNA, RNA instead"
             )
 
-            if not valid_seq:
-                raise ValueError(f"Invalid protein sequence: {invalid_aa}")
-
         super().__init__(
-            type="protein",
-            id=id,
+            type=self._entity_type,
             rep=rep,
-            first_index=first_index,
+            id=id,
             copies=copies,
+            first_index=first_index,
             sequences=sequences,
             structures=structures,
+            interactions=interactions,
+            atom_bonds=atom_bonds,
+            modifications=modifications,
+            symmetry=symmetry,
+            secondary_structure=secondary_structure,
+            cyclic=cyclic,
+            min_length=min_length,
+            max_length=max_length,
+            residue_bias=residue_bias,
+            insertions=insertions,
+            deletions=deletions,
         )
 
+class Protein(_BiopolymerEntity):
+    """
+    Protein entity
+    """
+    _entity_type = "protein"
 
-class DNA(Entity):
-    # TODO: implement, share implementation with Protein and RNA
-    pass
+
+class DNA(_BiopolymerEntity):
+    """
+    DNA entity
+    """
+    _entity_type = "dna"
 
 
-class RNA(Entity):
-    # TODO: implement, share implementation with Protein and RNA
-    pass
+class RNA(_BiopolymerEntity):
+    """
+    RNA entity
+    """
+    _entity_type = "rna"
 
 
 class Ligand(Entity):
-    # TODO: implement
-    pass
+    """
+    Create ligand entity. Syntactic sugar for direct instantiation
+    of class Entity
+    """
+    def __init__(
+        self,
+        rep: str | RepSequence | None = None,
+        id: str | None = None,  # noqa
+        copies: int | None = None,
+        structures: StructureChainMap | None = None,
+        ligand_rep_type: LigandRepType | None = None,
+        interactions: Sequence[Interaction] | None = None,
+        atom_bonds: Sequence[AtomBond] | None = None,
+        symmetry: SymmetryType | None = None,
+    ):
+        """
+        Create new ligand entity
 
+        Cf. Entity class documentation for parameters
+        """
+        super().__init__(
+            type="ligand",
+            rep=rep,
+            id=id,
+            copies=copies,
+            structures=structures,
+            ligand_rep_type=ligand_rep_type,
+            interactions=interactions,
+            atom_bonds=atom_bonds,
+            symmetry=symmetry
+        )
 
 # mapping from entity index to positions in entity (e.g. for fixing positions)
 EntityPosList = Mapping[int, Sequence[int]]
