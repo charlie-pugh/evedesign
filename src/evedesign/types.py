@@ -3,7 +3,11 @@ import numpy as np
 
 BioPolymers = {"protein", "dna", "rna"}
 BioPolymer = Literal["protein", "dna", "rna"]
-EntityType = BioPolymer
+EntityType = BioPolymer | Literal["ligand"]
+LigandRepType = Literal["smiles", "ccd", "user_ccd"]
+BondType = Literal["covalent", "hydrogen", "vdw", "ionic"]
+SecondaryStructureType = Literal["H", "E", "C"]  # helix, sheet, coil
+SymmetryType = Literal["C", "D", "T", "O", "I"]
 DeviceType = Literal["cpu", "cuda", "mps"]
 BatchSize = int | Literal["auto"] | None
 
