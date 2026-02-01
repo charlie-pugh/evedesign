@@ -1109,7 +1109,7 @@ class SystemInstance(UserList[EntityInstance]):
         score: float | None = None,
         confidence: float | None = None,
         metadata: Metadata | None = None,
-        id: str | None = None
+        id: str | None = None  # noqa
     ):
         """
         Create new entity system instance
@@ -1131,10 +1131,10 @@ class SystemInstance(UserList[EntityInstance]):
         self.score = score
         self.confidence = confidence
         self.metadata = metadata
-        self.id_ = id
+        self.id = id
 
     def __repr__(self):
-        return f"SystemInstance({self.data} id={self.id_} score={self.score})"
+        return f"SystemInstance({self.data} id={self.id} score={self.score})"
 
     def copy(self) -> Self:
         """
@@ -1150,7 +1150,7 @@ class SystemInstance(UserList[EntityInstance]):
             score=self.score,
             confidence=self.confidence,
             metadata=self.metadata.copy() if self.metadata is not None else None,
-            id=self.id_
+            id=self.id
         )
 
     def serialize(self) -> dict[str, Any]:
@@ -1168,7 +1168,7 @@ class SystemInstance(UserList[EntityInstance]):
             "score":self.score,
             "confidence": self.confidence,
             "metadata": self.metadata,
-            "id": self.id_,
+            "id": self.id,
             "schema_version": CURRENT_SYSTEM_INSTANCE_SPEC_VERSION
         }
 
