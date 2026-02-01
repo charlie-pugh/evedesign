@@ -5,6 +5,7 @@ from collections import UserList
 from collections.abc import Sequence
 from copy import deepcopy
 from io import StringIO
+from math import isclose
 from typing import Mapping, NamedTuple, Self, Any
 import numpy as np
 
@@ -184,6 +185,18 @@ class Interaction:
         self.partner_ids = partner_ids
         self.avoid = avoid
 
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, Interaction):
+            return False
+
+        return (
+            self.id == other.id and
+            self.pos == other.pos and
+            self.partner_ids == other.partner_ids and
+            self.avoid == other.avoid
+        )
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize interaction to JSON-compatible representation
@@ -259,6 +272,20 @@ class AtomBond:
         self.target_pos = target_pos
         self.target_atom = target_atom
 
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, AtomBond):
+            return False
+
+        return (
+            self.type == other.type and
+            self.source_pos == other.source_pos and
+            self.source_atom == other.source_atom and
+            self.target_entity_id == other.target_entity_id and
+            self.target_pos == other.target_pos and
+            self.target_atom == other.target_atom
+        )
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize atom bond to JSON-compatible representation
@@ -322,6 +349,13 @@ class SecondaryStructure:
         self.pos = pos
         self.type = type
 
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, SecondaryStructure):
+            return False
+
+        return self.pos == other.pos and self.type == other.type
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize secondary structure specification to JSON-compatible representation
@@ -379,6 +413,24 @@ class ResidueBias:
         self.pos = pos
         self.bias = bias
 
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, ResidueBias):
+            return False
+
+        if self.pos != other.pos:
+            return False
+
+        if set(self.bias) != set(other.bias):
+            return False
+
+        # compare floats properly item by item
+        for key, value in self.bias.items():
+            if not isclose(value, other.bias[key]):
+                return False
+
+        return True
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize residue bias to JSON-compatible representation
@@ -433,6 +485,13 @@ class Modification:
         """
         self.pos = pos
         self.type = type
+
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, Modification):
+            return False
+
+        return self.pos == other.pos and self.type == other.type
 
     def serialize(self) -> dict[str, Any]:
         """
@@ -509,6 +568,19 @@ class Insertion:
                 if interaction.pos is not None:
                     raise ValueError("Insertions can not specify pos for Interaction")
 
+    def __eq__(self, other):
+        # only ever accept other entities for equality
+        if not isinstance(other, Insertion):
+            return False
+
+        return (
+            self.pos == other.pos and
+            self.min_length == other.min_length and
+            self.max_length == other.max_length and
+            self.secondary_structure == other.secondary_structure and
+            self.interactions == other.interactions
+        )
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize insertion to JSON-compatible representation
@@ -565,7 +637,7 @@ class Entity:
         atom_bonds: Sequence[AtomBond] | None = None,
         modifications: Sequence[Modification] | None = None,
         symmetry: SymmetryType | None = None,
-        secondary_structure: None = None,
+        secondary_structure: Sequence[SecondaryStructure] | None = None,
         cyclic: bool | None = None,
         min_length: int | None = None,
         max_length: int | None = None,
@@ -578,6 +650,8 @@ class Entity:
 
         Note: For clarity, preferentially use subclasses for specific types
         of entities (e.g. Protein class)
+
+        Note: Equality does not check sequences and structures
 
         Parameters
         ----------
@@ -695,15 +769,24 @@ class Entity:
 
         # do not compare sequences and structures are these are auxiliary resources
         # for modeling the entity
-
-        # TODO: need to extend equality to new attributes, solve
-        #  this with hashing instead?
         return (
             self.type_ == other.type_ and
             np.all(self.rep == other.rep) and
             self.id_ == other.id_ and
             self.copies == other.copies and
-            self.first_index == other.first_index
+            self.first_index == other.first_index and
+            self.ligand_rep_type == other.ligand_rep_type and
+            self.interactions == other.interactions and
+            self.atom_bonds == other.atom_bonds and
+            self.modifications == other.modifications and
+            self.symmetry == other.symmetry and
+            self.secondary_structure == other.secondary_structure and
+            self.cyclic == other.cyclic and
+            self.min_length == other.min_length and
+            self.max_length == other.max_length and
+            self.residue_bias == other.residue_bias and
+            self.insertions == other.insertions and
+            self.deletions == other.deletions
         )
 
     def serialize(self) -> dict[str, Any]:
@@ -722,11 +805,12 @@ class Entity:
             "first_index": self.first_index,
             "sequences": self.sequences.serialize() if self.sequences is not None else None,
             "structures": _serialize_chain_map(self.structures),
+            "ligand_rep_type": self.ligand_rep_type,
             "interactions": _serialize_optional_list(self.interactions),
             "atom_bonds": _serialize_optional_list(self.atom_bonds),
             "modifications": _serialize_optional_list(self.modifications),
-            "secondary_structure": _serialize_optional_list(self.secondary_structure),
             "symmetry": self.symmetry,
+            "secondary_structure": _serialize_optional_list(self.secondary_structure),
             "cyclic": self.cyclic,
             "min_length": self.min_length,
             "max_length": self.max_length,
@@ -759,6 +843,7 @@ class Entity:
             first_index=entity_dict.get("first_index"),
             sequences=Sequences.deserialize(sequences) if sequences is not None else None,
             structures=_deserialize_chain_map(entity_dict.get("structures")),
+            ligand_rep_type=entity_dict.get("ligand_rep_type"),
             interactions=_deserialize_optional_list(entity_dict.get("interactions"), Interaction),
             atom_bonds=_deserialize_optional_list(entity_dict.get("atom_bonds"), AtomBond),
             modifications=_deserialize_optional_list(entity_dict.get("modifications"), Modification),
