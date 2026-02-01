@@ -4,13 +4,11 @@ Restraining generated sequence distance to reference sequences
 from typing import Self, Sequence
 
 import numpy as np
-import pandas as pd
 
-from evedesign.model import BaseModel, Scorer, RequiredResources, ConditionalMutationScorer, MutationScorer
+from evedesign.model import BaseModel, Scorer, ConditionalMutationScorer, MutationScorer
 from evedesign.system import Entity, System, SystemInstance
 from evedesign.types import StatusCallback
 from evedesign.utils import str_to_np_char_view, map_array
-from evedesign.constants import GAP
 
 EntityToReferenceSeqs = dict[int, list[str]]
 
@@ -116,18 +114,6 @@ class LinearSeqDistRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutat
                 return False, f"Reference sequence(s) do not have correct length of {cur_entity_length}: {invalid}"
 
         return True, ""
-
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: EntityToReferenceSeqs,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        # TODO need to implement taking into account size of sequences to compare to
-        # TODO: also depends on number of instances? or batch?
-        raise NotImplementedError()
 
     def build(
         self,

@@ -12,7 +12,7 @@ from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
 from evedesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
 from evedesign.system import System, SystemInstance
-from evedesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
+from evedesign.model import Transformer, Scorer, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
 from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
 
@@ -231,15 +231,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     @property
     def system(self) -> System | None:
         return self._system
-
-    @classmethod
-    def required_resources(
-        cls, system: System, data: Any, use_gpu: bool = True,
-        build: bool = True
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
 
     def positions(
         self,

@@ -11,7 +11,7 @@ from loguru import logger
 import torch
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
 )
 from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from evedesign.constants import MASK
@@ -192,27 +192,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         #  and is alignment compatible with a3m format
 
         return True, ""
-
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: None = None,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
-        # TODO: implement meaningful requirements depending on target size instead of made up values
-        # return RequiredResources(
-        #     min_gpu_cores=1,
-        #     min_gpu_memory_per_core=16000,
-        #     min_cpu_cores=1,
-        #     min_cpu_memory_per_core=16000,
-        #     max_batch_size=512,
-        #     time=1,
-        # )
 
     def _load_model(self):
         # avoid reloading if already loaded

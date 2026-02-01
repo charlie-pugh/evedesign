@@ -8,7 +8,7 @@ from loguru import logger
 import torch
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
 )
 from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
 from evedesign.utils import model_param_context
@@ -131,26 +131,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             return False, f"Sequence length ({len(target.rep)}) exceeds maximum allowed ({max_seq_length})"
 
         return True, ""
-
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: None = None,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
-        # return RequiredResources(
-        #     min_gpu_cores=1,
-        #     min_gpu_memory_per_core=16000,
-        #     min_cpu_cores=1,
-        #     min_cpu_memory_per_core=16000,
-        #     max_batch_size=512,
-        #     time=1,
-        # )
 
     def _load_model(self):
         if self.model is not None:

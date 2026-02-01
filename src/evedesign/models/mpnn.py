@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer
 )
 from evedesign.system import System, SystemInstance, EntityPosList
 from evedesign.structure import Structure
@@ -231,18 +231,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
                 return False, "All entities must have 3D structures"
 
         return True, ""
-
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: None = None,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
 
     def _load_model(self):
         """

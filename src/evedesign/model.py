@@ -820,39 +820,6 @@ class BaseModel(_Core):
         if not can_model:
             raise ValueError(can_model_msg)
 
-    @classmethod
-    @abstractmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: Any,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        """
-        Estimate the required resources to perform computations on molecular system
-
-        Parameters
-        ----------
-        system
-            Molecular system to be modelled
-        data
-            Arbitrary additional data specific to model that is not a descriptive property of system itself
-            (cf. documentation for build() method)
-        use_gpu
-            Set to True if you want to estimate resources making use of GPU
-            (only for models supporting GPU-based computations)
-        build
-            Set as True to estimate resources for model building. Set as False to
-            estimate resources for inference (scoring / sampling).
-
-        Returns
-        -------
-        RequiredResources
-            CPU/GPU/RAM requirements for running computations on molecular system
-        """
-        pass
-
     @abstractmethod
     def build(
         self,
@@ -1327,17 +1294,6 @@ def system_subset_model(model_class: T) -> T:
                 instance.data = entity_instances
 
             return designs
-
-        @classmethod
-        def required_resources(
-            cls,
-            system: System,
-            data: Any,
-            use_gpu: bool = True,
-            build: bool = True,
-        ) -> RequiredResources:
-            # will drop required_resources altogether, don't implement
-            raise NotImplementedError()
 
     # remove methods which are not present on parent (eg transform) so it behaves
     # exactly the same to the outside world
