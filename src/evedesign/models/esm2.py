@@ -25,6 +25,8 @@ except ImportError:
 class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
     Wrapper class around ESM2 model
+
+    Note: warnings upon loading can be ignored (https://github.com/huggingface/transformers/issues/39405)
     """
     available = IMPORT_AVAILABLE
     name: str = "ESM2"
