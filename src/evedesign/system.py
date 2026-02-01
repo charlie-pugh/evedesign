@@ -305,7 +305,7 @@ class SecondaryStructure:
     """
     def __init__(
         self,
-        pos: Sequence[int] | None,
+        pos: int | None,
         type: SecondaryStructureType,  # noqa
     ):
         """
@@ -314,7 +314,7 @@ class SecondaryStructure:
         Parameters
         ----------
         pos
-            Apply secondary structure to these positions, or apply to all positions
+            Apply secondary structure to this position, or apply to all positions
             in entity (if None)
         type:
             Secondary structure element type ({"H", "E", "C"})}
@@ -362,7 +362,7 @@ class ResidueBias:
     """
     def __init__(
         self,
-        pos: Sequence[int] | None,
+        pos: int | None,
         bias: dict[str, float]
     ):
         """
@@ -371,7 +371,7 @@ class ResidueBias:
         Parameters
         ----------
         pos
-            Apply bias to these positions, or apply to all positions
+            Apply bias to this position, or apply to all positions
             in entity (if None)
         bias
             Mapping from alphabet symbol to bias logits, -inf to exclude (e.g. cysteines)
@@ -473,7 +473,7 @@ class Insertion:
     """
     def __init__(
         self,
-        pos: Sequence[int] | None = None,
+        pos: int | None = None,
         min_length: int = 1,
         max_length: int | None = None,
         secondary_structure: SecondaryStructureType | None = None,
@@ -485,7 +485,7 @@ class Insertion:
         Parameters
         ----------
         pos
-            Positions after which insertion can occur. Use first_index - 1
+            Position after which insertion can occur. Use first_index - 1
             to define N-terminal extension. If None, insertion can occur
             anywhere in entity.
         min_length
