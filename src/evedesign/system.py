@@ -186,7 +186,7 @@ class Interaction:
         self.avoid = avoid
 
     def __eq__(self, other):
-        # only ever accept other entities for equality
+        # only ever accept same class for equality
         if not isinstance(other, Interaction):
             return False
 
@@ -273,7 +273,7 @@ class AtomBond:
         self.target_atom = target_atom
 
     def __eq__(self, other):
-        # only ever accept other entities for equality
+        # only ever accept same class for equality
         if not isinstance(other, AtomBond):
             return False
 
@@ -350,7 +350,7 @@ class SecondaryStructure:
         self.type = type
 
     def __eq__(self, other):
-        # only ever accept other entities for equality
+        # only ever accept same class for equality
         if not isinstance(other, SecondaryStructure):
             return False
 
@@ -414,7 +414,7 @@ class ResidueBias:
         self.bias = bias
 
     def __eq__(self, other):
-        # only ever accept other entities for equality
+        # only ever accept same class for equality
         if not isinstance(other, ResidueBias):
             return False
 
@@ -487,7 +487,7 @@ class Modification:
         self.type = type
 
     def __eq__(self, other):
-        # only ever accept other entities for equality
+        # only ever accept same class for equality
         if not isinstance(other, Modification):
             return False
 
@@ -776,7 +776,7 @@ class Entity:
             )
 
     def __eq__(self, other):
-        # only ever accept other entities for equality
+        # only ever accept same class for equality
         if not isinstance(other, Entity):
             return False
 
@@ -1240,7 +1240,7 @@ class System(UserList[Entity]):
         super().__init__(entities)
 
     def __eq__(self, other):
-        # only ever accept other systems for equality
+        # only ever accept same class for equality
         if not isinstance(other, System):
             return False
 
@@ -1265,7 +1265,7 @@ class System(UserList[Entity]):
         Serialized System with individual entities
         """
         return {
-            "entities":[
+            "entities": [
                 entity.serialize() for entity in self.data
             ],
             "schema_version": CURRENT_SYSTEM_SPEC_VERSION,
@@ -1391,7 +1391,7 @@ class System(UserList[Entity]):
                         )
 
                         # validate all models attached to current EntityInstance
-                        for models in entity_instance.models.values():
+                        for models in entity_instance.models.values():  # noqa
                             models = ensure_sequence(models)
                             for model in models:
                                 valid = valid and model.represents(
