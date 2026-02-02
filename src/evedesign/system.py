@@ -24,10 +24,10 @@ from evedesign.constants import (
 from evedesign.utils import ensure_sequence, shorten
 
 # versioning scheme for System and child entities
-CURRENT_SYSTEM_SPEC_VERSION = 1
+CURRENT_SYSTEM_SPEC_VERSION = "0.2"
 
 # versioning scheme for SystemInstance and child entity instances
-CURRENT_SYSTEM_INSTANCE_SPEC_VERSION = 1
+CURRENT_SYSTEM_INSTANCE_SPEC_VERSION = "0.2"
 
 """
 Data structures/types for providing mutation information in structured format
@@ -1246,7 +1246,7 @@ class SystemInstance(UserList[EntityInstance]):
         List of deserialized EntityInstance objects
         """
         # if not specified, assume first version
-        version = serialized_system_instance.get("schema_version", 1)
+        version = serialized_system_instance.get("schema_version", "0.2")
         if version != CURRENT_SYSTEM_INSTANCE_SPEC_VERSION:
             raise ValueError(
                 f"Unable to handle SystemInstance version {version}"
@@ -1331,7 +1331,7 @@ class System(UserList[Entity]):
         List of deserialized Entity objects
         """
         # if not specified, assume first version
-        version = serialized_system.get("schema_version", 1)
+        version = serialized_system.get("schema_version", "0.2")
         if version != CURRENT_SYSTEM_SPEC_VERSION:
             raise ValueError(
                 f"Unable to handle System version {version}"
