@@ -707,7 +707,7 @@ class GibbsSampler(Generator):
                 # we go through pytorch here to use the parallelized multinomial implementation which is much
                 # more suitable here
                 scores_scaled = torch.from_numpy(
-                    agg_scores.replace(np.nan, -np.inf).values
+                    agg_scores.replace(np.nan, -np.inf).to_numpy(copy=True)
                 ) / step_temp
 
                 p = scores_scaled.softmax(dim=-1)
