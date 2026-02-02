@@ -764,15 +764,16 @@ class Entity:
                 self.first_index is not None or self.deletions or
                 self.cyclic is not None or self.min_length is not None or
                 self.max_length is not None or self.insertions is not None or
-                self.modifications is not None
+                self.modifications is not None or self.residue_bias is not None
             ):
                 raise ValueError(
-                    "first_index, deletions, cyclic, min_length, max_length, insertions can only be True/defined for biopolymer entities"
+                    "first_index, deletions, cyclic, min_length, max_length, insertions, modifications, residue_bias "
+                    "can only be True/defined for biopolymer entities"
                 )
 
         if self.symmetry is not None and self.copies is None:
             raise ValueError(
-                "symmetry must be specified together with copies attribute"
+                "Attribute 'symmetry' must be specified together with 'copies'"
             )
 
     def __eq__(self, other):
