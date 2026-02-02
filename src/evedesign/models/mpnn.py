@@ -122,11 +122,8 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = True
+    required_entity_attributes: list[str] = ["structures"]
+    optional_entity_attributes: list[str] = ["residue_bias"]
 
     def __init__(
         self,

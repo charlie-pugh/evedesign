@@ -45,11 +45,8 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = True
-    requires_msa: bool = True
-    requires_3d: bool = False
+    required_entity_attributes: list[str] = ["sequences"]
+    optional_entity_attributes: list[str] = ["deletions"]
 
     def __init__(
         self,

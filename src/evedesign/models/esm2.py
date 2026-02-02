@@ -42,11 +42,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = False
+    required_entity_attributes: list[str] = []
+    optional_entity_attributes: list[str] = []
 
     def __init__(
         self,

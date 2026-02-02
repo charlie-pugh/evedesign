@@ -17,6 +17,12 @@ class _Core(ABC):
     """
     @property
     @abstractmethod
+    # plain-text name of method
+    def name(self) -> str:
+        pass
+
+    @property
+    @abstractmethod
     # citation strings for method
     def citations(self) -> list[str]:
         pass
@@ -718,32 +724,15 @@ class BaseModel(_Core):
     """
     @property
     @abstractmethod
-    # plain-text name of method
-    def name(self) -> str:
+    # required attributes on Entity that must be specified; type, rep, id and first_index are always mandatory on System
+    # and can be left out here
+    def required_entity_attributes(self) -> list[str]:
         pass
 
     @property
     @abstractmethod
-    # whether model has long-running build step (e.g. EVE VAE)
-    def requires_heavy_build(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    # whether model needs unaligned sequences as input
-    def requires_seqs(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    # whether model needs aligned sequences as input
-    def requires_msa(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    # whether model needs 3D structures as input
-    def requires_3d(self) -> bool:
+    # optional attributes on Entity that can but do not have to be specified
+    def optional_entity_attributes(self) -> list[str]:
         pass
 
     @property

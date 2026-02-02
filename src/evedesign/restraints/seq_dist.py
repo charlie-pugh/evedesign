@@ -31,7 +31,6 @@ class LinearSeqDistRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutat
     name: str = "LinearSeqDistRestraint"
     citations: list[str] = ["doi:10.1038/s41467-024-49119-x"]
 
-    requires_heavy_build: bool = False
     requires_gpu: bool = False
     supports_gpu: bool = False
     supports_gpu_parallel: bool = False
@@ -42,9 +41,8 @@ class LinearSeqDistRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutat
     handles_deletions: bool = True
     handles_insertions: bool = False
 
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = False
+    required_entity_attributes: list[str] = []
+    optional_entity_attributes: list[str] = []
 
     def __init__(
         self,

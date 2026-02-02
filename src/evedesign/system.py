@@ -628,7 +628,6 @@ class Entity:
         type: EntityType,  # noqa
         rep: str | RepSequence | None = None,
         id: str | None = None,  # noqa
-        copies: int | None = None,
         first_index: int | None = None,
         sequences: Sequences | None = None,
         structures: StructureChainMap | None = None,
@@ -636,6 +635,7 @@ class Entity:
         interactions: Sequence[Interaction] | None = None,
         atom_bonds: Sequence[AtomBond] | None = None,
         modifications: Sequence[Modification] | None = None,
+        copies: int | None = None,
         symmetry: SymmetryType | None = None,
         secondary_structure: Sequence[SecondaryStructure] | None = None,
         cyclic: bool | None = None,
@@ -664,9 +664,6 @@ class Entity:
         first_index
             Sequence index of first residue; must be specified
             for polymer types (protein, nucleotide, ...)
-        copies
-            Number of entity copies in molecular system. Set to None
-            to leave variable.
         sequences
             Sequence record (e.g. multiple sequence alignment of homologs) of the target
             sequence represented by this entity (only applies to proteins and nucleotides)
@@ -680,6 +677,9 @@ class Entity:
             Defined interactions between pairs of atoms
         modifications:
             Biopolymer residue modifications (must be None for ligand)
+        copies
+            Number of entity copies in molecular system. Set to None
+            to leave variable.
         symmetry:
             Type of structural symmetry (cyclic, dihedral, tetrahedral, ...)
             entity should assume, must be specified together with copies attribute
@@ -1775,13 +1775,13 @@ class _BiopolymerEntity(Entity):
         self,
         rep: str | RepSequence | None = None,
         id: str | None = None,  # noqa
-        copies: int | None = None,
         first_index: int = 1,
         sequences: Sequences | None = None,
         structures: StructureChainMap | None = None,
         interactions: Sequence[Interaction] | None = None,
         atom_bonds: Sequence[AtomBond] | None = None,
         modifications: Sequence[Modification] | None = None,
+        copies: int | None = None,
         symmetry: SymmetryType | None = None,
         secondary_structure: Sequence[SecondaryStructure] | None = None,
         cyclic: bool = False,
@@ -1804,13 +1804,13 @@ class _BiopolymerEntity(Entity):
             type=self._entity_type,
             rep=rep,
             id=id,
-            copies=copies,
             first_index=first_index,
             sequences=sequences,
             structures=structures,
             interactions=interactions,
             atom_bonds=atom_bonds,
             modifications=modifications,
+            copies=copies,
             symmetry=symmetry,
             secondary_structure=secondary_structure,
             cyclic=cyclic,
@@ -1851,11 +1851,11 @@ class Ligand(Entity):
         self,
         rep: str | RepSequence | None = None,
         id: str | None = None,  # noqa
-        copies: int | None = None,
         structures: StructureChainMap | None = None,
         ligand_rep_type: LigandRepType | None = None,
         interactions: Sequence[Interaction] | None = None,
         atom_bonds: Sequence[AtomBond] | None = None,
+        copies: int | None = None,
         symmetry: SymmetryType | None = None,
     ):
         """
@@ -1867,11 +1867,11 @@ class Ligand(Entity):
             type="ligand",
             rep=rep,
             id=id,
-            copies=copies,
             structures=structures,
             ligand_rep_type=ligand_rep_type,
             interactions=interactions,
             atom_bonds=atom_bonds,
+            copies=copies,
             symmetry=symmetry
         )
 

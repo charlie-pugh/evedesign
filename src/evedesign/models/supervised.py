@@ -53,11 +53,8 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = True
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = False
+    required_entity_attributes: list[str] = []
+    optional_entity_attributes: list[str] = []
 
     def __init__(
         self,
