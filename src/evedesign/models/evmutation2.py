@@ -13,10 +13,10 @@ import torch
 from evedesign.model import (
     BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.system import System, SystemInstance, EntityInstance, Mutant
 from evedesign.constants import MASK
 from evedesign.utils import ensure_sequence, model_param_context
-from evedesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 
 try:
     from evmutation2 import model, features, parsers  # noqa

@@ -11,10 +11,10 @@ from loguru import logger
 from evedesign.model import (
     BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer
 )
-from evedesign.system import System, SystemInstance, EntityPosList
+from evedesign.system import System, SystemInstance
 from evedesign.structure import Structure
 from evedesign.utils import ensure_sequence, model_param_context
-from evedesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 
 # Import the LigandMPNN modules
 from evedesign.models.ligandmpnn.data_utils import (

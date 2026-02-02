@@ -6,14 +6,14 @@ from collections.abc import Sequence
 from copy import deepcopy
 from io import StringIO
 from math import isclose
-from typing import Mapping, NamedTuple, Self, Any
+from typing import NamedTuple, Self, Any
 import numpy as np
 
 from evedesign.sequence import valid_sequence, Sequences
 from evedesign.structure import Structure, StructureFile
 from evedesign.types import (
     EntityType, Metadata, BioPolymers, RepSequence, LigandRepType, SymmetryType, BondType,
-    SecondaryStructureType
+    SecondaryStructureType, Embedding
 )
 from evedesign.constants import (
     VALID_AA_OR_GAP_SORTED, VALID_AA_SORTED,
@@ -973,11 +973,6 @@ class Entity:
         """
         return self.type_ in BioPolymers
 
-Embedding = np.ndarray[
-    tuple[int, int], np.dtype[float]
-] | np.ndarray[
-    tuple[int], np.dtype[float]
-]
 
 class EntityInstance:
     """
@@ -1832,4 +1827,3 @@ class Ligand(Entity):
         )
 
 # mapping from entity index to positions in entity (e.g. for fixing positions)
-EntityPosList = Mapping[int, Sequence[int]]

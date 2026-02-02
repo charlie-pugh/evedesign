@@ -10,8 +10,8 @@ import torch
 from loguru import logger
 from evedesign.constants import GAP
 from evedesign.model import Generator, ConditionalMutationScorer, Scorer
-from evedesign.system import System, Entity, SystemInstance, EntityPosList, EntityInstance
-from evedesign.types import StatusCallback, CHAIN_COMPONENT_KEY, SCORE_COMPONENT_KEY
+from evedesign.system import System, Entity, SystemInstance, EntityInstance
+from evedesign.types import StatusCallback, CHAIN_COMPONENT_KEY, SCORE_COMPONENT_KEY, EntityPosList
 from evedesign.utils import status_progress, ensure_sequence, map_array
 
 ScanOrder = Literal[

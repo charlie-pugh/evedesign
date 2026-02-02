@@ -1,4 +1,4 @@
-from typing import Literal, Callable, Any, TypedDict, NotRequired
+from typing import Literal, Callable, Any, TypedDict, NotRequired, Mapping, Sequence
 import numpy as np
 
 BioPolymers = {"protein", "dna", "rna"}
@@ -55,3 +55,9 @@ class ModelStats(TypedDict):
 Status = Literal["running", "done", "failed"]
 StatusCallback = Callable[[Status, float | None, str | None], Any]
 RepSequence = np.ndarray[tuple[int], np.dtype["U1"]]
+Embedding = np.ndarray[
+    tuple[int, int], np.dtype[float]
+] | np.ndarray[
+    tuple[int], np.dtype[float]
+]
+EntityPosList = Mapping[int, Sequence[int]]
