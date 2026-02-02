@@ -991,6 +991,37 @@ class Entity:
             pos for pos, _ in enumerate(self.rep, start=self.first_index)
         ]
 
+    def expand_residue_bias(self) -> dict[int, dict[str, float]]:
+        """
+        Expand residue bias definition into dictionary mapping all specified positions,
+        evaluating in order of residue_bias attribute (later entries overwrite
+        earlier entries)
+
+        Returns
+        -------
+        Expanded residue bias mapping
+        """
+        if self.residue_bias is None:
+            return {}
+
+        expanded = {}
+
+        for bias_entry in self.residue_bias:
+            # If pos is None, means all positions in entity
+            if bias_entry.pos is None:
+                entry_pos = self.positions()
+            else:
+                entry_pos = [bias_entry.pos]
+
+            for cur_pos in entry_pos:
+                if cur_pos not in expanded:
+                    expanded[cur_pos] = {}
+
+                for symbol, value in bias_entry.bias.items():
+                    expanded[cur_pos][symbol] = value
+
+        return expanded
+
 
 class EntityInstance:
     """

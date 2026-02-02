@@ -456,19 +456,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         return chain_mask
 
-    def _create_bias_tensor(self, amino_acid_bias: dict[str, float]) -> torch.Tensor:
-        """
-        Create bias tensor from amino acid bias dictionary.
-        """
-        bias_tensor = torch.zeros(
-            [21], device=self.device, dtype=torch.float32
-        )
-        for aa, bias in amino_acid_bias.items():
-            if aa in restype_str_to_int:
-                bias_tensor[restype_str_to_int[aa]] = bias
-
-        return bias_tensor
-
     def generate(
         self,
         num_designs: int,
@@ -477,9 +464,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         temperature: float = 0.1,
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
-        """
-        TODO: extra parameter amino_acid_bias will be moved to system specification
-        """
         self.ready_or_raise()
 
         # validate entity selection
@@ -520,19 +504,19 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         bias_tensor = torch.zeros(
             [L, 21], device=self.device, dtype=torch.float32
         )
-        print(bias_tensor.shape, bias_tensor) # TODO: remove
-        feature_dict_copy["bias"] = bias_tensor[None, :, :]
+        for entity_idx, entity in enumerate(self.system):
+            expanded_bias = entity.expand_residue_bias()
+            for entity_pos, bias_map in expanded_bias.items():
+                if (entity_idx, entity_pos) not in self._entity_pos_to_pdb_mapping:
+                    continue
 
-        # TODO: old bias handling - remove
-        # if amino_acid_bias:
-        #     bias_tensor = self._create_bias_tensor(amino_acid_bias)
-        # else:
-        #     bias_tensor = torch.zeros(
-        #         [21], device=self.device, dtype=torch.float32
-        #     )
-        #
-        # feature_dict_copy["bias"] = bias_tensor[None, None, :].repeat(1, L, 1)
-        # TODO: old bias handling - remove
+                # one-to-many mapping of positions
+                all_pdb_pos = self._entity_pos_to_pdb_mapping[(entity_idx, entity_pos)]
+                for pdb_pos in all_pdb_pos:
+                    for symbol, bias_value in bias_map.items():
+                        bias_tensor[pdb_pos, restype_str_to_int[symbol]] = bias_value
+
+        feature_dict_copy["bias"] = bias_tensor[None, :, :]
 
         # generate sequences using the model
         L = feature_dict_copy["X"].shape[1]  # noqa

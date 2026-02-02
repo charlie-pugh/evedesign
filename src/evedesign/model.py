@@ -124,9 +124,9 @@ class _Core(ABC):
                 start=entity.first_index
             )
             if (
-                    entity.type in BioPolymers and
-                    entity.first_index is not None and
-                    source[entity_idx].rep is not None
+                entity.type in BioPolymers and
+                entity.first_index is not None and
+                source[entity_idx].rep is not None
             )
         ]
 
