@@ -203,7 +203,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return self
 
-    def _validate_instances(
+    def _validate_instances_and_max_length(
         self,
         instances: Sequence[SystemInstance],
     ) -> None:
@@ -318,7 +318,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances_and_max_length(instances)
 
         # Convert any sequence arrays to strings
         sequences = []
@@ -359,7 +359,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                         # Get target tokens (shifted by one position)
                         # +2 to include one more token as target
-                        target_tokens = inputs.input_ids[i, 2:seq_len+2]
+                        target_tokens = inputs.input_ids[i, 1:seq_len+1]
 
                         # Calculate log probabilities
                         token_probs = torch.log_softmax(seq_logits, dim=-1)
@@ -389,7 +389,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         Perform a single mutation scan for the given instance using the Masked marginal probability approach
         """
         self.ready_or_raise()
-        self._validate_instances([instance])
+        self._validate_instances_and_max_length([instance])
 
         if positions is not None and entity is None:
             raise ValueError(
@@ -497,7 +497,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
-        self._validate_instances([instance])
+        self._validate_instances_and_max_length([instance])
         self.system.valid_mutants(
             instance, mutants, deletions=False, insertions=False, raise_invalid=True
         )
@@ -619,7 +619,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         using masked-marginals approach with batching for efficiency
         """
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances_and_max_length(instances)
 
         # Validate input parameters
         if set(entities) != {0}:
@@ -739,7 +739,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         Transform system instances by adding embeddings from the ESM2 model
         """
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances_and_max_length(instances)
 
         # Default to entity 0 if not specified
         entity = 0 if entity is None else entity
