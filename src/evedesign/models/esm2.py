@@ -792,13 +792,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         seq_len = len(self.tokenizer.encode(sequences[i])) - 2
 
                         # Store the embedding (excluding the first token which is the start token)
-                        new_entity.embedding = hidden_states[i,
-                                                             1:seq_len+1].cpu().numpy()
+                        new_entity.embedding = hidden_states[
+                            i, 1:seq_len+1
+                        ].cpu().numpy()
                         # Replace the entity instance in copied system instance
                         new_instance.data = [new_entity]
 
                         # Calculate and store score
-                        logits = outputs.logits[i, :-1]  # exclude last token
+                        logits = outputs.logits[i, 1:seq_len+1]  # exclude last token
                         token_probs = torch.log_softmax(logits, dim=-1)
 
                         # Get the target tokens (shifted by one)
