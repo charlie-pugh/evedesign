@@ -973,6 +973,24 @@ class Entity:
         """
         return self.type in BioPolymers
 
+    def positions(self) -> list[int]:
+        """
+        Enumerate all positions in entity; will be empty
+        if not a biopolymer or rep is None
+
+        Returns
+        -------
+        List of positions
+        """
+        # first_index must be set for biopolymers, just include here to be 100% explicit about
+        # assumptions
+        if not self.type in BioPolymers or self.first_index is None or self.rep is None:
+            return []
+
+        return [
+            pos for pos, _ in enumerate(self.rep, start=self.first_index)
+        ]
+
 
 class EntityInstance:
     """
