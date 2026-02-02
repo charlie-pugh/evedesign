@@ -150,11 +150,17 @@ class GibbsSampler(Generator):
                     f"Scorer {i} system is not equal to first system (all systems must be identical across scorers)"
                 )
 
+            for entity_idx, entity in enumerate(scorers[0].system):
+                if bool(entity.deletions) and not scorer.handles_deletions:
+                    raise ValueError(
+                        f"Scorer {i} does not handle deletions but entity {entity_idx} has deletions = True"
+                    )
+
         if scan_order not in ["random", "sequential"]:
             raise ValueError("Invalid scan order")
 
         if init_strategy not in ["random", "system"]:
-            raise ValueError("invalid initialization strategy")
+            raise ValueError("Invalid initialization strategy")
 
         # make a copy of system for easier access
         self._system = scorers[0].system
@@ -219,7 +225,6 @@ class GibbsSampler(Generator):
         self,
         entities: Sequence[int] | None,
         fixed_pos: EntityPosList | None,
-        deletions: bool,
     ) -> tuple[list[int], list[str], list[tuple[int, int]]]:
         """
         Helper method to verify specified entities and fixed positions, and compute
@@ -230,8 +235,6 @@ class GibbsSampler(Generator):
         entities
             Cf generate() method documentation
         fixed_pos
-            Cf generate() method documentation
-        deletions
             Cf generate() method documentation
 
         Returns
@@ -294,7 +297,7 @@ class GibbsSampler(Generator):
         # set up joint alphabet, merging across all entity types that are designed
         alphabet = Entity.merge_alphabet_symbols([
             self._system[entity_idx].alphabet(
-                include_gap=deletions
+                include_gap=bool(self._system[entity_idx].deletions)
             ) for entity_idx in entities
         ])
 
@@ -304,7 +307,6 @@ class GibbsSampler(Generator):
         self,
         num_designs: int,
         entities: list[int],
-        deletions: bool,
         pos_to_design: list[tuple[int, int]],
     ) -> tuple[np.ndarray, dict[int, int], dict[int, int], np.ndarray, np.ndarray]:
         """
@@ -316,8 +318,6 @@ class GibbsSampler(Generator):
             Number of initialized samples to build
         entities
             Indices of designed entities
-        deletions
-            If true, gap symbol will be included in alphabet for initialization
         pos_to_design
             Variable positions that should be initialized
 
@@ -350,7 +350,9 @@ class GibbsSampler(Generator):
 
         for array_idx, entity_idx in enumerate(entities):
             entity = self._system[entity_idx]
-            alphabet = entity.alphabet(include_gap=deletions)
+            alphabet = entity.alphabet(
+                include_gap=bool(self._system[entity_idx].deletions)
+            )
             alphabet_set = set(alphabet)
 
             # initialize array-based mappings
@@ -419,25 +421,36 @@ class GibbsSampler(Generator):
 
         return sequential_order
 
-    @classmethod
     def _verify_and_update_scores(
-        cls,
+        self,
         scores: pd.DataFrame,
-        deletions: bool,
         scorer_idx: int,
         alphabet: Sequence[str],
         num_designs: int,
     ):
         assert len(scores) == num_designs, "Invalid length of scoring dataframe"
 
-        if deletions:
-            if GAP not in scores.columns:
-                raise ValueError(
-                    f"Scorer {scorer_idx} did not provide values for gap, but deletions=True"
-                )
-        else:
-            if GAP in scores.columns:
-                scores = scores.drop([GAP], axis=1)
+        for entity_idx, entity in enumerate(self.system):
+            try:
+                # if we want deletions, make sure the score column is present
+                if bool(entity.deletions):
+                    entity_rows = scores.loc[pd.IndexSlice[:, entity_idx, :]]
+                    if GAP not in entity_rows.columns:
+                        raise ValueError(
+                            f"Scorer {scorer_idx} did not provide values for gap, but deletions=True"
+                        )
+                    else:
+                        if entity_rows[GAP].isnull().any():
+                            raise ValueError(
+                                f"Scorer {scorer_idx} returned NA values for entity {entity_idx} where deletions=True"
+                            )
+                else:
+                    # if we do not want deletions, but the column is present, blank it out
+                    if GAP in scores.columns:
+                        scores.loc[pd.IndexSlice[:, entity_idx, :], GAP] = np.nan
+            except KeyError:
+                # if entity not found in current score table, we can simply skip it
+                continue
 
         # make sure dataframe has all columns for target alphabet
         # (predictor may return more columns than needed for designed entities, or fewer if an entity leading
@@ -566,12 +579,11 @@ class GibbsSampler(Generator):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
         # verify/update entity selection and extract positions to design
         entities, alphabet, pos_to_design = self._design_params(
-            entities, fixed_pos, deletions
+            entities, fixed_pos
         )
 
         # auxiliary variables for fancy indexing into design array
@@ -588,7 +600,7 @@ class GibbsSampler(Generator):
             samples, entity_to_array_idx, entity_to_len,
             entity_to_array_idx_linear, entity_to_first_index_linear
         ) = self._init_samples(
-            num_designs, entities, deletions, pos_to_design
+            num_designs, entities, pos_to_design
         )
 
         # initialize full instances to pass to scorers from sample array
@@ -661,9 +673,8 @@ class GibbsSampler(Generator):
                         instances, step_ent, step_pos
                     ) * weight
 
-                    # verify conditional score dataframe, and remove gap if present but not sampling deletions
                     s = self._verify_and_update_scores(
-                        s, deletions=deletions, scorer_idx=scorer_idx, alphabet=alphabet, num_designs=num_designs,
+                        s, scorer_idx=scorer_idx, alphabet=alphabet, num_designs=num_designs,
                     )
 
                     # ensure nothing bad happened to row index

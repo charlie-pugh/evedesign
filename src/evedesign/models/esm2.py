@@ -235,7 +235,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
         """
@@ -251,8 +250,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             Positions to keep fixed during design
         temperature
             Initial temperature for sampling
-        deletions
-            Whether to allow deletions
         status_callback
             Optional callback function for progress updates
 
@@ -262,12 +259,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             Generated protein sequence instances
         """
         self.ready_or_raise()
-
-        # Add validation for deletions parameter
-        if deletions:
-            raise ValueError(
-                "ESM2 model does not support deletions (gaps)"
-            )
 
         entities = entities if entities is not None else [0]
         if len(entities) != 1 or entities[0] != 0:
@@ -303,7 +294,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 entities=entities,
                 fixed_pos=fixed_pos,
                 temperature=temperature,
-                deletions=deletions,  # This will now be False because of the validation
                 status_callback=status_callback
             )
 

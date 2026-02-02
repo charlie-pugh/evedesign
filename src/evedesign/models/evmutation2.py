@@ -341,7 +341,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> list[SystemInstance]:
         """
@@ -411,7 +410,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
                 batch_size=self.decoder_batch_size,
                 num_samples=num_designs_adj,
                 temperature=temperature,
-                sample_gaps=deletions,
+                sample_gaps=bool(target.deletions),
                 # min_p=None,  # TODO: implement
             )
 

@@ -226,7 +226,6 @@ class Generator(_Core):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> list[SystemInstance]:
         """
@@ -256,8 +255,6 @@ class Generator(_Core):
             in the mapping must be also included in the "entities" parameter.
         temperature
             Sampling temperature (higher values generate more diversity)
-        deletions
-            If True, allow the model to sample deletions relative to the entities representation
         status_callback
             Callback function to track computation status
 
@@ -1250,7 +1247,6 @@ def system_subset_model(model_class: T) -> T:
             entities: Sequence[int] | None = None,
             fixed_pos: EntityPosList | None = None,
             temperature: float = 1.0,
-            deletions: bool = False,
             status_callback: StatusCallback | None = None
         ) -> list[SystemInstance]:
             self.ready_or_raise()
@@ -1277,7 +1273,6 @@ def system_subset_model(model_class: T) -> T:
                 entities=entities_mapped,
                 fixed_pos=fixed_pos_mapped,
                 temperature=temperature,
-                deletions=deletions,
                 status_callback=status_callback
             )
 

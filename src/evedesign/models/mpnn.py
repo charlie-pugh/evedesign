@@ -475,7 +475,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 0.1,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None,
         amino_acid_bias: dict[str, float] | None = None
     ) -> list[SystemInstance]:
@@ -483,11 +482,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         TODO: extra parameter amino_acid_bias will be moved to system specification
         """
         self.ready_or_raise()
-
-        if deletions:
-            raise ValueError(
-                "LigandMPNN does not support deletions"
-            )
 
         # validate entity selection
         protein_entities = [
