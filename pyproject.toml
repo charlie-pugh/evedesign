@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = ''
 readme = "README.md"
 requires-python = ">=3.12"
-license = "licenseref-proprietary"
+license = "MIT"
 keywords = []
 authors = [
   { name = "Thomas Hopf", email = "thomas.hopf@gmail.com" },
