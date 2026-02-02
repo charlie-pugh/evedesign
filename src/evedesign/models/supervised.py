@@ -254,7 +254,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     @classmethod
     def can_model(cls, system: System, data: LabeledInstanceDataset) -> tuple[bool, str]:
         biopolymer_entities = [
-            entity for entity in system if entity.type_ in BioPolymers
+            entity for entity in system if entity.type in BioPolymers
         ]
 
         if len(biopolymer_entities) == 0:
@@ -308,7 +308,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                 [
                     inst[entity_idx].embedding
                     for entity_idx, entity in enumerate(self.system)
-                    if entity.type_ in BioPolymers
+                    if entity.type in BioPolymers
                 ] for inst in instances_t
             ]
 

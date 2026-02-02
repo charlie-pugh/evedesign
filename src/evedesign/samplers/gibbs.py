@@ -243,7 +243,7 @@ class GibbsSampler(Generator):
         are selected for design
         """
         entities_to_type = {
-            idx: entity.type_ for idx, entity in enumerate(self._system)
+            idx: entity.type for idx, entity in enumerate(self._system)
         }
 
         # determine and verify entities and positions to design

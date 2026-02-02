@@ -169,7 +169,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         if data is not None:
             return False, "Model does not support data parameter (must be None)"
 
-        if len(system) != 1 or system[0].type_ != "protein":
+        if len(system) != 1 or system[0].type != "protein":
             return False, "Can only handle single-component protein system"
 
         target = system[0]

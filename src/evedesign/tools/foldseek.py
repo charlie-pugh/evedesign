@@ -735,7 +735,7 @@ def find_structures_foldseek(
     # search entities one by one
     for idx, entity in enumerate(system):
         # only search for protein entity with defined sequence
-        if entity.type_ != "protein" or not entity.defined_sequence():
+        if entity.type != "protein" or not entity.defined_sequence():
             continue
 
         # skip entities if filter is defined

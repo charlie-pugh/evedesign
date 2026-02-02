@@ -702,12 +702,12 @@ class Entity:
             If True, allow deletion of fixed-length positions from rep defined on entity.
             Must be None for ligand entities.
         """
-        self.type_ = type
+        self.type = type
         self.rep = _rep_to_np_array(rep)
-        self.id_ = id
+        self.id = id
         self.copies = copies
 
-        if self.type_ not in BioPolymers and sequences is not None:
+        if self.type not in BioPolymers and sequences is not None:
             raise ValueError(
                 "Sequence record only supported for biopolymer entities"
             )
@@ -730,7 +730,7 @@ class Entity:
         self.insertions = insertions
         self.deletions = deletions
 
-        if self.type_ in BioPolymers:
+        if self.type in BioPolymers:
             if self.ligand_rep_type is not None:
                 raise ValueError(
                     "ligand_rep_type can only be specified for ligand entities"
@@ -738,7 +738,7 @@ class Entity:
 
             if first_index is None or first_index < 1:
                 raise ValueError(
-                    f"first_index must be specified for type {self.type_} and must be >= 1"
+                    f"first_index must be specified for type {self.type} and must be >= 1"
                 )
 
             # verify that polymer sequence is valid if specified (including mask)
@@ -754,7 +754,7 @@ class Entity:
                 if not valid_seq:
                     raise ValueError(f"Invalid sequence: {invalid}")
 
-        elif self.type_ == "ligand":
+        elif self.type == "ligand":
             if self.sequences is not None:
                 raise ValueError(
                     "Cannot specify sequences for ligand entities"
@@ -784,23 +784,23 @@ class Entity:
         # do not compare sequences and structures are these are auxiliary resources
         # for modeling the entity
         return (
-            self.type_ == other.type_ and
-            np.all(self.rep == other.rep) and
-            self.id_ == other.id_ and
-            self.copies == other.copies and
-            self.first_index == other.first_index and
-            self.ligand_rep_type == other.ligand_rep_type and
-            self.interactions == other.interactions and
-            self.atom_bonds == other.atom_bonds and
-            self.modifications == other.modifications and
-            self.symmetry == other.symmetry and
-            self.secondary_structure == other.secondary_structure and
-            self.cyclic == other.cyclic and
-            self.min_length == other.min_length and
-            self.max_length == other.max_length and
-            self.residue_bias == other.residue_bias and
-            self.insertions == other.insertions and
-            self.deletions == other.deletions
+                self.type == other.type and
+                np.all(self.rep == other.rep) and
+                self.id == other.id and
+                self.copies == other.copies and
+                self.first_index == other.first_index and
+                self.ligand_rep_type == other.ligand_rep_type and
+                self.interactions == other.interactions and
+                self.atom_bonds == other.atom_bonds and
+                self.modifications == other.modifications and
+                self.symmetry == other.symmetry and
+                self.secondary_structure == other.secondary_structure and
+                self.cyclic == other.cyclic and
+                self.min_length == other.min_length and
+                self.max_length == other.max_length and
+                self.residue_bias == other.residue_bias and
+                self.insertions == other.insertions and
+                self.deletions == other.deletions
         )
 
     def serialize(self) -> dict[str, Any]:
@@ -812,8 +812,8 @@ class Entity:
         Serialized entity represented as dict
         """
         return {
-            "id": self.id_,
-            "type": self.type_,
+            "id": self.id,
+            "type": self.type,
             "rep": "".join(self.rep) if self.rep is not None else None,
             "copies": self.copies,
             "first_index": self.first_index,
@@ -886,11 +886,11 @@ class Entity:
         True if protein/nucleotide sequence with some defined length
         """
         return (
-            self.type_ in BioPolymers and
-            self.rep is not None and
-            len(self.rep) > 0 and
-            self.first_index is not None and
-            valid_sequence(
+                self.type in BioPolymers and
+                self.rep is not None and
+                len(self.rep) > 0 and
+                self.first_index is not None and
+                valid_sequence(
                 self.rep,
                 self.alphabet(include_gap=True, include_inserts=False),
                 allow_mask=True
@@ -916,21 +916,21 @@ class Entity:
         -------
         Alphabet for representing primary sequence of entity
         """
-        if self.type_ == "protein":
+        if self.type == "protein":
             a = VALID_AA_OR_GAP_SORTED if include_gap else VALID_AA_SORTED
             if include_inserts:
                 a = a + [symbol.lower() for symbol in VALID_AA_SORTED]
-        elif self.type_ == "dna":
+        elif self.type == "dna":
             a = VALID_DNA_OR_GAP_SORTED if include_gap else VALID_DNA_SORTED
             if include_inserts:
                 a = a + [symbol.lower() for symbol in VALID_DNA_SORTED]
-        elif self.type_ == "rna":
+        elif self.type == "rna":
             a = VALID_RNA_OR_GAP_SORTED if include_gap else VALID_RNA_SORTED
             if include_inserts:
                 a = a + [symbol.lower() for symbol in VALID_RNA_SORTED]
         else:
             raise NotImplementedError(
-                f"Alphabet for type {self.type_} not implemented"
+                f"Alphabet for type {self.type} not implemented"
             )
 
         return a
@@ -971,7 +971,7 @@ class Entity:
         -------
         True if biopolymer, False otherwise
         """
-        return self.type_ in BioPolymers
+        return self.type in BioPolymers
 
 
 class EntityInstance:
@@ -1358,7 +1358,7 @@ class System(UserList[Entity]):
         valid = len(self.data) == len(instance)
 
         for entity, entity_instance in zip(self.data, instance):
-            if entity.type_ in BioPolymers:
+            if entity.type in BioPolymers:
                 if fixed_length:
                     valid = valid and (
                         entity.rep is None or (
@@ -1457,7 +1457,7 @@ class System(UserList[Entity]):
                 )
             } for entity_idx, entity in enumerate(self.data)
             # only iterate defined reps for biopolymer sequences
-            if entity.type_ in BioPolymers and entity.first_index is not None and instance[entity_idx].rep is not None
+            if entity.type in BioPolymers and entity.first_index is not None and instance[entity_idx].rep is not None
         }
 
         # also record possible positions for insertion including N-terminal of first_index
@@ -1619,9 +1619,9 @@ class System(UserList[Entity]):
 
         return type(self)([
             Entity(
-                type=entity.type_,
+                type=entity.type,
                 rep=entity_instance.normalized_rep(),
-                id=entity.id_,
+                id=entity.id,
                 copies=entity.copies,
                 first_index=entity.first_index,
                 sequences=None,  # do not copy sequences as we would need to realign them

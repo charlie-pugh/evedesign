@@ -223,7 +223,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         # Check that all entities are proteins with structures
         for entity in system:
-            if entity.type_ != "protein":
+            if entity.type != "protein":
                 return False, "Can only handle protein entities"
             if not entity.defined_sequence():
                 return False, "Entity must have defined rep sequence"
@@ -361,7 +361,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         positions = sorted([
             (entity, pos)
             for entity, pos in set(self._pdb_to_entity_mapping.values())
-            if self._system[entity].type_ == "protein"
+            if self._system[entity].type == "protein"
         ])
 
         return positions
@@ -476,7 +476,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         fixed_pos: EntityPosList | None = None,
         temperature: float = 0.1,
         status_callback: StatusCallback | None = None,
-        amino_acid_bias: dict[str, float] | None = None
     ) -> list[SystemInstance]:
         """
         TODO: extra parameter amino_acid_bias will be moved to system specification
@@ -485,7 +484,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         # validate entity selection
         protein_entities = [
-            entity_idx for entity_idx, _ in enumerate(self.system) if self.system[entity_idx].type_ == "protein"
+            entity_idx for entity_idx, _ in enumerate(self.system) if self.system[entity_idx].type == "protein"
         ]
 
         if entities is not None:
@@ -517,14 +516,23 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         # apply amino acid biases (always set bias tensor)
         B, L, _, _ = feature_dict_copy["X"].shape  # noqa
-        if amino_acid_bias:
-            bias_tensor = self._create_bias_tensor(amino_acid_bias)
-        else:
-            bias_tensor = torch.zeros(
-                [21], device=self.device, dtype=torch.float32
-            )
 
-        feature_dict_copy["bias"] = bias_tensor[None, None, :].repeat(1, L, 1)
+        bias_tensor = torch.zeros(
+            [L, 21], device=self.device, dtype=torch.float32
+        )
+        print(bias_tensor.shape, bias_tensor) # TODO: remove
+        feature_dict_copy["bias"] = bias_tensor[None, :, :]
+
+        # TODO: old bias handling - remove
+        # if amino_acid_bias:
+        #     bias_tensor = self._create_bias_tensor(amino_acid_bias)
+        # else:
+        #     bias_tensor = torch.zeros(
+        #         [21], device=self.device, dtype=torch.float32
+        #     )
+        #
+        # feature_dict_copy["bias"] = bias_tensor[None, None, :].repeat(1, L, 1)
+        # TODO: old bias handling - remove
 
         # generate sequences using the model
         L = feature_dict_copy["X"].shape[1]  # noqa
