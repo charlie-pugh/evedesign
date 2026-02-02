@@ -53,8 +53,10 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = True
 
-    required_entity_attributes: list[str] = []
-    optional_entity_attributes: list[str] = []
+    # property handling is all done by predictor and embedder, so return None to indicate that attributes
+    # are irrelevant for model
+    required_entity_attributes: list[str] | None = None
+    optional_entity_attributes: list[str] | None = None
 
     def __init__(
         self,

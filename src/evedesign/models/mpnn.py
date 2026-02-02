@@ -122,8 +122,8 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    required_entity_attributes: list[str] = ["structures"]
-    optional_entity_attributes: list[str] = ["residue_bias"]
+    required_entity_attributes: list[str] | None = ["structures"]
+    optional_entity_attributes: list[str] | None = ["residue_bias"]
 
     def __init__(
         self,

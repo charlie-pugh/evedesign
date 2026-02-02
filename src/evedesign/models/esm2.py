@@ -42,8 +42,8 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    required_entity_attributes: list[str] = []
-    optional_entity_attributes: list[str] = []
+    required_entity_attributes: list[str] | None = []
+    optional_entity_attributes: list[str] | None = []
 
     def __init__(
         self,

@@ -725,14 +725,15 @@ class BaseModel(_Core):
     @property
     @abstractmethod
     # required attributes on Entity that must be specified; type, rep, id and first_index are always mandatory on System
-    # and can be left out here
-    def required_entity_attributes(self) -> list[str]:
+    # and can be left out here. If attributes have no direct relevance to model, should be set to None.
+    def required_entity_attributes(self) -> list[str] | None:
         pass
 
     @property
     @abstractmethod
-    # optional attributes on Entity that can but do not have to be specified
-    def optional_entity_attributes(self) -> list[str]:
+    # optional attributes on Entity that can but do not have to be specified.  If attributes have no direct
+    # relevance to model, should be set to None.
+    def optional_entity_attributes(self) -> list[str] | None:
         pass
 
     @property

@@ -41,8 +41,8 @@ class LinearSeqDistRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutat
     handles_deletions: bool = True
     handles_insertions: bool = False
 
-    required_entity_attributes: list[str] = []
-    optional_entity_attributes: list[str] = []
+    required_entity_attributes: list[str] | None = []
+    optional_entity_attributes: list[str] | None = []
 
     def __init__(
         self,

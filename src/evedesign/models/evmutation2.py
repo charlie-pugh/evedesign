@@ -45,8 +45,8 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    required_entity_attributes: list[str] = ["sequences"]
-    optional_entity_attributes: list[str] = ["deletions"]
+    required_entity_attributes: list[str] | None = ["sequences"]
+    optional_entity_attributes: list[str] | None = ["deletions"]
 
     def __init__(
         self,
