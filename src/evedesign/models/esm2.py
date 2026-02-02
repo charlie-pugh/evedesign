@@ -1,5 +1,5 @@
 from os import PathLike
-from typing import Self, Sequence
+from typing import Literal, Self, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -8,11 +8,11 @@ from loguru import logger
 import torch
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.system import System, SystemInstance, EntityInstance, Mutant
 from evedesign.utils import model_param_context
-from evedesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 from evedesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
 
 try:
@@ -25,6 +25,8 @@ except ImportError:
 class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
     """
     Wrapper class around ESM2 model
+
+    Note: warnings upon loading can be ignored (https://github.com/huggingface/transformers/issues/39405)
     """
     available = IMPORT_AVAILABLE
     name: str = "ESM2"
@@ -40,15 +42,15 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = False
+    required_entity_attributes: list[str] | None = []
+    optional_entity_attributes: list[str] | None = []
 
     def __init__(
         self,
-        model_name: str | None = None,
+        model_name: Literal[
+            "esm2_t6_8M_UR50D", "esm2_t12_35M_UR50D", "esm2_t30_150M_UR50D",
+            "esm2_t33_650M_UR50D", "esm2_t36_3B_UR50D", "esm2_t48_15B_UR50D"
+        ] = "esm2_t33_650M_UR50D",
         model_dir_path: str | PathLike | None = None,
         batch_size: BatchSize = 64,
         keep_model_after_build: bool = False,
@@ -62,12 +64,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         if not self.available:
             raise ValueError(
                 "transformers package could not be imported. Is it installed already?"
-            )
-
-        # Validate model specification parameters
-        if (model_name is None and model_dir_path is None) or (model_name is not None and model_dir_path is not None):
-            raise ValueError(
-                "Must specify exactly one of model_name or model_file_path, but not both"
             )
 
         self.model_name = model_name
@@ -119,7 +115,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         if data is not None:
             return False, "Model does not support data parameter (must be None)"
 
-        if len(system) != 1 or system[0].type_ != "protein":
+        if len(system) != 1 or system[0].type != "protein":
             return False, "Can only handle single-component protein system"
 
         target = system[0]
@@ -133,31 +129,11 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return True, ""
 
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: None = None,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
-        # return RequiredResources(
-        #     min_gpu_cores=1,
-        #     min_gpu_memory_per_core=16000,
-        #     min_cpu_cores=1,
-        #     min_cpu_memory_per_core=16000,
-        #     max_batch_size=512,
-        #     time=1,
-        # )
-
     def _load_model(self):
         if self.model is not None:
             return
 
-        if self.model_name is not None:
+        if self.model_dir_path is None:
             # Load from HuggingFace hub
             try:
                 # For remote loading from HuggingFace
@@ -172,7 +148,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 raise ValueError(
                     f"Failed to load model {self.model_name} from HuggingFace: {e}"
                 )
-        elif self.model_dir_path is not None:
+        else:
             # Load from local file path
             try:
                 # For local loading from a directory
@@ -224,7 +200,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
         return self
 
-    def _validate_instances(
+    def _validate_instances_and_max_length(
         self,
         instances: Sequence[SystemInstance],
     ) -> None:
@@ -256,7 +232,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
         """
@@ -272,8 +247,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             Positions to keep fixed during design
         temperature
             Initial temperature for sampling
-        deletions
-            Whether to allow deletions
         status_callback
             Optional callback function for progress updates
 
@@ -283,12 +256,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
             Generated protein sequence instances
         """
         self.ready_or_raise()
-
-        # Add validation for deletions parameter
-        if deletions:
-            raise ValueError(
-                "ESM2 model does not support deletions (gaps)"
-            )
 
         entities = entities if entities is not None else [0]
         if len(entities) != 1 or entities[0] != 0:
@@ -324,7 +291,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 entities=entities,
                 fixed_pos=fixed_pos,
                 temperature=temperature,
-                deletions=deletions,  # This will now be False because of the validation
                 status_callback=status_callback
             )
 
@@ -349,7 +315,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances_and_max_length(instances)
 
         # Convert any sequence arrays to strings
         sequences = []
@@ -390,7 +356,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
 
                         # Get target tokens (shifted by one position)
                         # +2 to include one more token as target
-                        target_tokens = inputs.input_ids[i, 2:seq_len+2]
+                        target_tokens = inputs.input_ids[i, 1:seq_len+1]
 
                         # Calculate log probabilities
                         token_probs = torch.log_softmax(seq_logits, dim=-1)
@@ -420,7 +386,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         Perform a single mutation scan for the given instance using the Masked marginal probability approach
         """
         self.ready_or_raise()
-        self._validate_instances([instance])
+        self._validate_instances_and_max_length([instance])
 
         if positions is not None and entity is None:
             raise ValueError(
@@ -528,7 +494,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         status_callback: StatusCallback | None = None
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         self.ready_or_raise()
-        self._validate_instances([instance])
+        self._validate_instances_and_max_length([instance])
         self.system.valid_mutants(
             instance, mutants, deletions=False, insertions=False, raise_invalid=True
         )
@@ -650,7 +616,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         using masked-marginals approach with batching for efficiency
         """
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances_and_max_length(instances)
 
         # Validate input parameters
         if set(entities) != {0}:
@@ -770,7 +736,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         Transform system instances by adding embeddings from the ESM2 model
         """
         self.ready_or_raise()
-        self._validate_instances(instances)
+        self._validate_instances_and_max_length(instances)
 
         # Default to entity 0 if not specified
         entity = 0 if entity is None else entity
@@ -823,13 +789,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                         seq_len = len(self.tokenizer.encode(sequences[i])) - 2
 
                         # Store the embedding (excluding the first token which is the start token)
-                        new_entity.embedding = hidden_states[i,
-                                                             1:seq_len+1].cpu().numpy()
+                        new_entity.embedding = hidden_states[
+                            i, 1:seq_len+1
+                        ].cpu().numpy()
                         # Replace the entity instance in copied system instance
                         new_instance.data = [new_entity]
 
                         # Calculate and store score
-                        logits = outputs.logits[i, :-1]  # exclude last token
+                        logits = outputs.logits[i, 1:seq_len+1]  # exclude last token
                         token_probs = torch.log_softmax(logits, dim=-1)
 
                         # Get the target tokens (shifted by one)

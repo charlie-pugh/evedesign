@@ -383,7 +383,7 @@ def add_sequences_mmseqs2(
     protein_entity_reps = [
         (idx, "".join(entity.rep))
         for idx, entity in enumerate(system)
-        if entity.type_ == "protein" and entity.defined_sequence()
+        if entity.type == "protein" and entity.defined_sequence()
     ]
     if not protein_entity_reps:
         return system.copy()

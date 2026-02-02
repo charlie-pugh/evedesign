@@ -448,7 +448,7 @@ class DNAChiselCodonOptimizer(ProteinToDnaOptimizer):
         if not 0 <= entity <= len(system):
             raise ValueError("Invalid entity index")
 
-        if system[entity].type_ != "protein":
+        if system[entity].type != "protein":
             raise ValueError("Can only optimize protein entities")
 
         # make sure all sequences are uppercase to simplify later handling

@@ -9,12 +9,12 @@ import torch
 from loguru import logger
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer
 )
-from evedesign.system import System, SystemInstance, EntityPosList
+from evedesign.system import System, SystemInstance
 from evedesign.structure import Structure
 from evedesign.utils import ensure_sequence, model_param_context
-from evedesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 
 # Import the LigandMPNN modules
 from evedesign.models.ligandmpnn.data_utils import (
@@ -122,16 +122,13 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = True
+    required_entity_attributes: list[str] | None = ["structures"]
+    optional_entity_attributes: list[str] | None = ["residue_bias"]
 
     def __init__(
         self,
         model_name: Literal[tuple(MODEL_URLS.keys())],  # noqa
-        model_file_path: str | None = None,
+        model_file_path: str | os.PathLike | None = None,
         batch_size: BatchSize = 1,
         use_ligand_context: bool = True,
         ligand_cutoff: float = 6.0,
@@ -223,7 +220,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         # Check that all entities are proteins with structures
         for entity in system:
-            if entity.type_ != "protein":
+            if entity.type != "protein":
                 return False, "Can only handle protein entities"
             if not entity.defined_sequence():
                 return False, "Entity must have defined rep sequence"
@@ -231,18 +228,6 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
                 return False, "All entities must have 3D structures"
 
         return True, ""
-
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: None = None,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
 
     def _load_model(self):
         """
@@ -373,7 +358,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         positions = sorted([
             (entity, pos)
             for entity, pos in set(self._pdb_to_entity_mapping.values())
-            if self._system[entity].type_ == "protein"
+            if self._system[entity].type == "protein"
         ])
 
         return positions
@@ -468,42 +453,19 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         return chain_mask
 
-    def _create_bias_tensor(self, amino_acid_bias: dict[str, float]) -> torch.Tensor:
-        """
-        Create bias tensor from amino acid bias dictionary.
-        """
-        bias_tensor = torch.zeros(
-            [21], device=self.device, dtype=torch.float32
-        )
-        for aa, bias in amino_acid_bias.items():
-            if aa in restype_str_to_int:
-                bias_tensor[restype_str_to_int[aa]] = bias
-
-        return bias_tensor
-
     def generate(
         self,
         num_designs: int,
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 0.1,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None,
-        amino_acid_bias: dict[str, float] | None = None
     ) -> list[SystemInstance]:
-        """
-        TODO: extra parameter amino_acid_bias will be moved to system specification
-        """
         self.ready_or_raise()
-
-        if deletions:
-            raise ValueError(
-                "LigandMPNN does not support deletions"
-            )
 
         # validate entity selection
         protein_entities = [
-            entity_idx for entity_idx, _ in enumerate(self.system) if self.system[entity_idx].type_ == "protein"
+            entity_idx for entity_idx, _ in enumerate(self.system) if self.system[entity_idx].type == "protein"
         ]
 
         if entities is not None:
@@ -535,14 +497,23 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
 
         # apply amino acid biases (always set bias tensor)
         B, L, _, _ = feature_dict_copy["X"].shape  # noqa
-        if amino_acid_bias:
-            bias_tensor = self._create_bias_tensor(amino_acid_bias)
-        else:
-            bias_tensor = torch.zeros(
-                [21], device=self.device, dtype=torch.float32
-            )
 
-        feature_dict_copy["bias"] = bias_tensor[None, None, :].repeat(1, L, 1)
+        bias_tensor = torch.zeros(
+            [L, 21], device=self.device, dtype=torch.float32
+        )
+        for entity_idx, entity in enumerate(self.system):
+            expanded_bias = entity.expand_residue_bias()
+            for entity_pos, bias_map in expanded_bias.items():
+                if (entity_idx, entity_pos) not in self._entity_pos_to_pdb_mapping:
+                    continue
+
+                # one-to-many mapping of positions
+                all_pdb_pos = self._entity_pos_to_pdb_mapping[(entity_idx, entity_pos)]
+                for pdb_pos in all_pdb_pos:
+                    for symbol, bias_value in bias_map.items():
+                        bias_tensor[pdb_pos, restype_str_to_int[symbol]] = bias_value
+
+        feature_dict_copy["bias"] = bias_tensor[None, :, :]
 
         # generate sequences using the model
         L = feature_dict_copy["X"].shape[1]  # noqa

@@ -140,7 +140,7 @@ class Sequences:
         seqs: abc.Sequence[Sequence],
         aligned: bool = False,
         type: BioPolymer = "protein",  # noqa
-        weights: list[float] | None = None,
+        weights: abc.Sequence[float] | None = None,
         format: Literal["a3m", "a2m", "fasta"] | None = None,  # noqa
     ):
         self.seqs = seqs
@@ -233,7 +233,7 @@ class Sequences:
 
 def valid_sequence(
     seq: str | RepSequence,
-    alphabet: list[str],
+    alphabet: abc.Sequence[str],
     allow_mask: bool = False,
 ) -> tuple[bool, list[tuple[int, str]]]:
     """

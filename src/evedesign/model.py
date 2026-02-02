@@ -4,8 +4,8 @@ from typing import Self, Sequence, Any, TypeVar
 import numpy as np
 import pandas as pd
 from evedesign.dataset import LabeledInstanceDataset
-from evedesign.system import System, SystemInstance, Entity, EntityInstance, EntityPosList, Mutant, Mutation
-from evedesign.types import StatusCallback, ModelStats, BioPolymers
+from evedesign.system import System, SystemInstance, Entity, EntityInstance, Mutant, Mutation
+from evedesign.types import StatusCallback, ModelStats, BioPolymers, EntityPosList
 
 
 class _Core(ABC):
@@ -15,6 +15,12 @@ class _Core(ABC):
     Note: this class should not be implemented directly but rather through one of its
      more specific subclasses like Generator
     """
+    @property
+    @abstractmethod
+    # plain-text name of method
+    def name(self) -> str:
+        pass
+
     @property
     @abstractmethod
     # citation strings for method
@@ -124,7 +130,7 @@ class _Core(ABC):
                 start=entity.first_index
             )
             if (
-                entity.type_ in BioPolymers and
+                entity.type in BioPolymers and
                 entity.first_index is not None and
                 source[entity_idx].rep is not None
             )
@@ -226,7 +232,6 @@ class Generator(_Core):
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> list[SystemInstance]:
         """
@@ -256,8 +261,6 @@ class Generator(_Core):
             in the mapping must be also included in the "entities" parameter.
         temperature
             Sampling temperature (higher values generate more diversity)
-        deletions
-            If True, allow the model to sample deletions relative to the entities representation
         status_callback
             Callback function to track computation status
 
@@ -721,32 +724,16 @@ class BaseModel(_Core):
     """
     @property
     @abstractmethod
-    # plain-text name of method
-    def name(self) -> str:
+    # required attributes on Entity that must be specified; type, rep, id and first_index are always mandatory on System
+    # and can be left out here. If attributes have no direct relevance to model, should be set to None.
+    def required_entity_attributes(self) -> list[str] | None:
         pass
 
     @property
     @abstractmethod
-    # whether model has long-running build step (e.g. EVE VAE)
-    def requires_heavy_build(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    # whether model needs unaligned sequences as input
-    def requires_seqs(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    # whether model needs aligned sequences as input
-    def requires_msa(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    # whether model needs 3D structures as input
-    def requires_3d(self) -> bool:
+    # optional attributes on Entity that can but do not have to be specified.  If attributes have no direct
+    # relevance to model, should be set to None.
+    def optional_entity_attributes(self) -> list[str] | None:
         pass
 
     @property
@@ -819,39 +806,6 @@ class BaseModel(_Core):
         can_model, can_model_msg = cls.can_model(system, data)
         if not can_model:
             raise ValueError(can_model_msg)
-
-    @classmethod
-    @abstractmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: Any,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        """
-        Estimate the required resources to perform computations on molecular system
-
-        Parameters
-        ----------
-        system
-            Molecular system to be modelled
-        data
-            Arbitrary additional data specific to model that is not a descriptive property of system itself
-            (cf. documentation for build() method)
-        use_gpu
-            Set to True if you want to estimate resources making use of GPU
-            (only for models supporting GPU-based computations)
-        build
-            Set as True to estimate resources for model building. Set as False to
-            estimate resources for inference (scoring / sampling).
-
-        Returns
-        -------
-        RequiredResources
-            CPU/GPU/RAM requirements for running computations on molecular system
-        """
-        pass
 
     @abstractmethod
     def build(
@@ -1283,7 +1237,6 @@ def system_subset_model(model_class: T) -> T:
             entities: Sequence[int] | None = None,
             fixed_pos: EntityPosList | None = None,
             temperature: float = 1.0,
-            deletions: bool = False,
             status_callback: StatusCallback | None = None
         ) -> list[SystemInstance]:
             self.ready_or_raise()
@@ -1310,7 +1263,6 @@ def system_subset_model(model_class: T) -> T:
                 entities=entities_mapped,
                 fixed_pos=fixed_pos_mapped,
                 temperature=temperature,
-                deletions=deletions,
                 status_callback=status_callback
             )
 
@@ -1327,17 +1279,6 @@ def system_subset_model(model_class: T) -> T:
                 instance.data = entity_instances
 
             return designs
-
-        @classmethod
-        def required_resources(
-            cls,
-            system: System,
-            data: Any,
-            use_gpu: bool = True,
-            build: bool = True,
-        ) -> RequiredResources:
-            # will drop required_resources altogether, don't implement
-            raise NotImplementedError()
 
     # remove methods which are not present on parent (eg transform) so it behaves
     # exactly the same to the outside world

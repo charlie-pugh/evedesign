@@ -11,12 +11,12 @@ from loguru import logger
 import torch
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, RequiredResources, MutationScorer, ConditionalMutationScorer, Transformer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from evedesign.system import System, SystemInstance, EntityInstance, EntityPosList, Mutant
+from evedesign.system import System, SystemInstance, EntityInstance, Mutant
 from evedesign.constants import MASK
 from evedesign.utils import ensure_sequence, model_param_context
-from evedesign.types import DeviceType, StatusCallback, BatchSize
+from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 
 try:
     from evmutation2 import model, features, parsers  # noqa
@@ -45,11 +45,8 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = True
-    requires_msa: bool = True
-    requires_3d: bool = False
+    required_entity_attributes: list[str] | None = ["sequences"]
+    optional_entity_attributes: list[str] | None = ["deletions"]
 
     def __init__(
         self,
@@ -169,7 +166,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         if data is not None:
             return False, "Model does not support data parameter (must be None)"
 
-        if len(system) != 1 or system[0].type_ != "protein":
+        if len(system) != 1 or system[0].type != "protein":
             return False, "Can only handle single-component protein system"
 
         target = system[0]
@@ -192,27 +189,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         #  and is alignment compatible with a3m format
 
         return True, ""
-
-    @classmethod
-    def required_resources(
-        cls,
-        system: System,
-        data: None = None,
-        use_gpu: bool = True,
-        build: bool = True,
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
-        # TODO: implement meaningful requirements depending on target size instead of made up values
-        # return RequiredResources(
-        #     min_gpu_cores=1,
-        #     min_gpu_memory_per_core=16000,
-        #     min_cpu_cores=1,
-        #     min_cpu_memory_per_core=16000,
-        #     max_batch_size=512,
-        #     time=1,
-        # )
 
     def _load_model(self):
         # avoid reloading if already loaded
@@ -362,7 +338,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
         entities: Sequence[int] | None = None,
         fixed_pos: EntityPosList | None = None,
         temperature: float = 1.0,
-        deletions: bool = False,
         status_callback: StatusCallback | None = None
     ) -> list[SystemInstance]:
         """
@@ -432,7 +407,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
                 batch_size=self.decoder_batch_size,
                 num_samples=num_designs_adj,
                 temperature=temperature,
-                sample_gaps=deletions,
+                sample_gaps=bool(target.deletions),
                 # min_p=None,  # TODO: implement
             )
 

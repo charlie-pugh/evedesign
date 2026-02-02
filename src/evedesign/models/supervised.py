@@ -12,7 +12,7 @@ from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
 from evedesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
 from evedesign.system import System, SystemInstance
-from evedesign.model import Transformer, Scorer, RequiredResources, SupervisedBaseModel, MutationScorer, \
+from evedesign.model import Transformer, Scorer, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer
 from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
 
@@ -53,11 +53,10 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = True
 
-    # molecular model properties
-    requires_heavy_build: bool = False
-    requires_seqs: bool = False
-    requires_msa: bool = False
-    requires_3d: bool = False
+    # property handling is all done by predictor and embedder, so return None to indicate that attributes
+    # are irrelevant for model
+    required_entity_attributes: list[str] | None = None
+    optional_entity_attributes: list[str] | None = None
 
     def __init__(
         self,
@@ -232,15 +231,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     def system(self) -> System | None:
         return self._system
 
-    @classmethod
-    def required_resources(
-        cls, system: System, data: Any, use_gpu: bool = True,
-        build: bool = True
-    ) -> RequiredResources:
-        raise NotImplementedError(
-            "Resource estimation not yet implemented"
-        )
-
     def positions(
         self,
         instance: SystemInstance | None = None,
@@ -263,7 +253,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     @classmethod
     def can_model(cls, system: System, data: LabeledInstanceDataset) -> tuple[bool, str]:
         biopolymer_entities = [
-            entity for entity in system if entity.type_ in BioPolymers
+            entity for entity in system if entity.type in BioPolymers
         ]
 
         if len(biopolymer_entities) == 0:
@@ -317,7 +307,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                 [
                     inst[entity_idx].embedding
                     for entity_idx, entity in enumerate(self.system)
-                    if entity.type_ in BioPolymers
+                    if entity.type in BioPolymers
                 ] for inst in instances_t
             ]
 

@@ -279,7 +279,7 @@ class SequenceSpaceProjection(Analyzer, ABC):
 
         # make sure only entities are selected that projection method can handle (protein, DNA, ...)
         for checked_entity in entities:
-            entity_type = system[checked_entity].type_
+            entity_type = system[checked_entity].type
             if entity_type not in self.acceptable_entity_types:
                 raise ValueError(
                     f"Entity {checked_entity} is of type {entity_type} but only the following are "

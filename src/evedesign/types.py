@@ -1,9 +1,13 @@
-from typing import Literal, Callable, Any, TypedDict, NotRequired
+from typing import Literal, Callable, Any, TypedDict, NotRequired, Mapping, Sequence
 import numpy as np
 
 BioPolymers = {"protein", "dna", "rna"}
 BioPolymer = Literal["protein", "dna", "rna"]
-EntityType = BioPolymer
+EntityType = BioPolymer | Literal["ligand"]
+LigandRepType = Literal["smiles", "ccd", "user_ccd"]
+BondType = Literal["covalent", "hydrogen", "vdw", "ionic"]
+SecondaryStructureType = Literal["H", "E", "C"]  # helix, sheet, coil
+SymmetryType = Literal["C", "D", "T", "O", "I"]
 DeviceType = Literal["cpu", "cuda", "mps"]
 BatchSize = int | Literal["auto"] | None
 
@@ -51,3 +55,9 @@ class ModelStats(TypedDict):
 Status = Literal["running", "done", "failed"]
 StatusCallback = Callable[[Status, float | None, str | None], Any]
 RepSequence = np.ndarray[tuple[int], np.dtype["U1"]]
+Embedding = np.ndarray[
+    tuple[int, int], np.dtype[float]
+] | np.ndarray[
+    tuple[int], np.dtype[float]
+]
+EntityPosList = Mapping[int, Sequence[int]]
