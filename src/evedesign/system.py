@@ -671,6 +671,8 @@ class Entity:
             Structure chains representing this entity. Use dict with structure identifiers
             as keys to supply multiple different structures; use list to supply multiple copies
             of the chain within the structure (homooligomer)
+        ligand_rep_type
+            Type of ligand rep specification (ligands only)
         interactions
             Positive/negative interactions within and between entities
         atom_bonds:
