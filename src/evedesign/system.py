@@ -757,16 +757,17 @@ class Entity:
                     raise ValueError(f"Invalid sequence: {invalid}")
 
         elif self.type == "ligand":
-            if self.sequences is not None:
+            if self.ligand_rep_type is None:
                 raise ValueError(
-                    "Cannot specify sequences for ligand entities"
+                    "ligand_rep_type must be specified for ligand entities"
                 )
 
             if (
                 self.first_index is not None or self.deletions or
                 self.cyclic is not None or self.min_length is not None or
                 self.max_length is not None or self.insertions is not None or
-                self.modifications is not None or self.residue_bias is not None
+                self.modifications is not None or self.residue_bias is not None or
+                self.sequences is not None
             ):
                 raise ValueError(
                     "first_index, deletions, cyclic, min_length, max_length, insertions, modifications, residue_bias "
