@@ -9,6 +9,7 @@ from typing import Sequence, Literal
 import numpy as np
 from numba import prange, jit
 from sklearn.manifold import MDS
+from sklearn.decomposition import PCA
 from evedesign.analysis import Analyzer
 from evedesign.tools.mmseqs2 import filter_sequences_mmseqs
 
@@ -702,6 +703,62 @@ class SequenceSpaceMDS(SequenceSpaceProjectionAligned):
         )
 
         return embedding.fit_transform(dist_matrix)
+
+
+class SequenceSpacePCA(SequenceSpaceProjectionAligned):
+    """
+    Sequence space projection with principal component analysis (PCA)
+    """
+    def __init__(
+        self,
+        num_components: int = 2,
+        include_system_sequences: bool = True,
+        system_sequence_fragment_filter: float | None = 0.7,
+        pca_kwargs: dict | None = None
+    ):
+        """
+        Initialize new sequence space projector using multidimensional scaling (MDS)
+
+        Parameters
+        ----------
+        num_components
+            Number of components to project sequences to (typically 2)
+        include_system_sequences
+            If True, include sequences from system for analyzing designs in context of
+            available sequence information
+        system_sequence_fragment_filter
+            Only keep system sequences that have a non-gap symbol aligned to
+            the target sequence for at least the given fraction of positions.
+            Will be ignored if system sequences are not aligned; use None to
+            disable filtering.
+        pca_kwargs
+            Keyword arguments forwarded to constructor of sklearn.decomposition.PCA
+        """
+        super().__init__(
+            num_components=num_components,
+            include_system_sequences=include_system_sequences,
+            system_sequence_fragment_filter=system_sequence_fragment_filter,
+        )
+
+        self.pca_kwargs = pca_kwargs
+        self._embedder = None
+
+    def _project(
+        self,
+        dist_matrix: np.ndarray[tuple[int, int], float]
+    ) -> np.ndarray[tuple[int, int], float]:
+        if self.pca_kwargs is None:
+            params = {}
+        else:
+            params = self.pca_kwargs
+
+        # following https://github.com/debbiemarkslab/sequenceMDS
+        self._embedder = PCA(
+            n_components=self.num_components,
+            **params,
+        )
+
+        return self._embedder.fit_transform(dist_matrix)
 
 
 class SequenceSpaceUMAP(SequenceSpaceProjectionAligned):

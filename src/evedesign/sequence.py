@@ -134,6 +134,9 @@ class Sequences:
     This class only intends to be a thin wrapper around different alignment formats
     to connect input sequences to the different types of formats expected by individual methods,
     rather than a full-fledged class for computations on sequence alignments
+
+    Note: weights are a property of sequence list (relative weights of sequences to each other),
+     not of individual sequences on purpose.
     """
     def __init__(
         self,
