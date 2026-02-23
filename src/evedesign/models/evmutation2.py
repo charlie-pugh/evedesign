@@ -392,11 +392,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
             else:
                 num_designs_adj = num_designs
 
-            logger.warning(
-                "Sampling using a preliminary inefficient O(N^3) implementation which needs to be "
-                "improved to O(N^2) for production use"
-            )
-
             # note: method has @torch.inference_mode() so no_grad not necessary here
             # TODO: update sampling method to update generation status dynamically with callback
             designs, _ = self.model.decoder.sample_inefficient(
