@@ -7,7 +7,6 @@ from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 import torch
 
 from evedesign.model import (
@@ -392,11 +391,6 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
             else:
                 num_designs_adj = num_designs
 
-            logger.warning(
-                "Sampling using a preliminary inefficient O(N^3) implementation which needs to be "
-                "improved to O(N^2) for production use"
-            )
-
             # note: method has @torch.inference_mode() so no_grad not necessary here
             # TODO: update sampling method to update generation status dynamically with callback
             designs, _ = self.model.decoder.sample_inefficient(
@@ -678,17 +672,23 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
                     batch_size=self.decoder_batch_size,
                 )
 
-            # assemble multiple scores and average logits; careful not to resort dataframe so
-            # we keep the original mutant order
-            effects = pd.concat(
+            effects_merged = pd.concat(
                 effects, axis=0, names=["encoder_sample"]
+            ).assign(
+                # need to handle duplicated mutants, otherwise will be merged
+                # together which means output score vector would have different
+                # length as input list of mutants
+                mutant_repeat=lambda x: x.groupby(
+                    level=["encoder_sample", "mutant", "sample_num"], sort=False
+                ).cumcount()
+            ).set_index(
+                "mutant_repeat", append=True
             ).groupby(
-                level="mutant",
-                sort=False,
+                level=["mutant", "mutant_repeat"], sort=False
             ).mean()
 
         # return as simple 1D numpy array
-        return effects.score.values
+        return effects_merged.score.values
 
     def score_conditional(
         self,

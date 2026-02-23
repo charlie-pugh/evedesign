@@ -31,9 +31,9 @@ mpnn = ["prody"]
 umap = ["umap-learn"]
 
 [project.urls]
-Documentation = "https://github.com/thomashopf/evedesign#readme"
-Issues = "https://github.com/thomashopf/evedesign/issues"
-Source = "https://github.com/thomashopf/evedesign"
+Documentation = "https://github.com/evedesignbio/evedesign#readme"
+Issues = "https://github.com/evedesignbio/evedesign/issues"
+Source = "https://github.com/evedesignbio/evedesign"
 
 [tool.hatch.version]
 path = "src/evedesign/__about__.py"
