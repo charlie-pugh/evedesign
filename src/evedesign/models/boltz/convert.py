@@ -1,0 +1,3 @@
+"""
+Structure <> BoltzGen format conversion 
+"""
