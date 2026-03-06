@@ -930,6 +930,10 @@ def system_subset_model(model_class: T) -> T:
 
         # _Core properties
         @property
+        def name(self) -> str:
+            return self.model.name
+
+        @property
         # citation strings for method
         def citations(self) -> list[str]:
             return self.model.citations
@@ -973,26 +977,12 @@ def system_subset_model(model_class: T) -> T:
 
         # BaseModel properties
         @property
-        def name(self) -> str:
-            return self.model.name
+        def required_entity_attributes(self) -> list[str] | None:
+            return self.model.required_entity_attributes
 
         @property
-        # whether model has long-running build step (e.g. EVE VAE)
-        def requires_heavy_build(self) -> bool:
-            return self.model.requires_heavy_build
-
-        @property
-        # whether model needs unaligned sequences as input
-        def requires_seqs(self) -> bool:
-            return self.model.requires_seqs
-
-        @property
-        def requires_msa(self) -> bool:
-            return self.model.requires_msa
-
-        @property
-        def requires_3d(self) -> bool:
-            return self.model.requires_3d
+        def optional_entity_attributes(self) -> list[str] | None:
+            return self.model.optional_entity_attributes
 
         @property
         def ready(self) -> str:
