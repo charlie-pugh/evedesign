@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Self, Sequence, Any, TypeVar
+from typing import Self, Sequence, Any
 import numpy as np
 import pandas as pd
 from evedesign.dataset import LabeledInstanceDataset
@@ -312,7 +312,7 @@ class Scorer(_Core):
 class ConditionalMutationScorer(_Core, ABC):
     """
     Interface implemented by classes that can compute conditional probabilities
-    P(x_i | x_\i) to be used e.g. for Gibbs sampling even if not
+    P(x_i | x_\\i) to be used e.g. for Gibbs sampling even if not
     able to compute full P(x_1, ..., x_n)
 
     This class also serves as a mixin to provide a default implementation using the Scorer scorer() method
@@ -894,14 +894,14 @@ class SupervisedBaseModel(BaseModel):
         pass
 
 
-T = TypeVar("T")
-
-
-def system_subset_model(model_class: T) -> T:
+def system_subset_model(model_class):
     """
     Factory function to dynamically modify a model so it can seamlessly operate on a subset
     of entities in a system (e.g. to apply single-protein LLM to binder designed in complex
     of a target structure)
+
+    TODO: need to add proper type hinting here; updated signature change of build()
+      not compatible with system_subset_model(model_class: T) -> T
 
     Parameters
     ----------
