@@ -141,7 +141,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         return True, ""
 
     def _load_model(self) -> None:
-        """TODO: CHANGE TO Boltzgen framework
+        """TODO: CHANGE TO BOLTZFOLD framework
         Load Boltz-2 model weights onto device.
         """
         if self.model is not None:
