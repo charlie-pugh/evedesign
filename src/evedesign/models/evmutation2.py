@@ -32,7 +32,7 @@ class EVmutation2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, 
     """
     available = IMPORT_AVAILABLE
     name: str = "EVmutation2"
-    citations: list[str] = ["unpublished"]
+    citations: list[str] = ["doi:10.64898/2026.03.17.712115"]
 
     # core properties
     requires_target: bool = True
