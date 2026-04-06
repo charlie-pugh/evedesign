@@ -8,7 +8,10 @@ ignored with a warning.
 """
 
 from os import PathLike
-from typing import Any, Literal
+from typing import Any, Literal, Self, Sequence
+
+import numpy as np
+import torch
 
 try:
     from boltz.main import process_inputs  # noqa
@@ -20,8 +23,8 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 from evedesign.model import BaseModel, Transformer, Scorer
-from evedesign.system import System
-from evedesign.types import DeviceType, BatchSize
+from evedesign.system import System, SystemInstance
+from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 
 class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
@@ -110,3 +113,34 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                 return False, f"Entity {i} must have a defined sequence"
 
         return True, ""
+
+    def build(
+        self,
+        system: System,
+        data: None = None,
+        status_callback: StatusCallback | None = None,
+    ) -> Self:
+        """Validate system and register for folding."""
+        self.can_model_or_raise(system, data)
+        self._system = system
+        return self
+
+    def _release_cache(self):
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            torch.mps.empty_cache()
+
+    def _delete_model(self):
+        self.model = None
+        self._release_cache()
+
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None,
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        raise NotImplementedError(
+            "Confidence scores are returned as a side effect of "
+            "transform(). Call transform() instead."
+        )
