@@ -30,7 +30,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     Confidence scores are returned as a side effect of transform().
     """
     available = IMPORT_AVAILABLE
-    name: str = "BoltzFold"
+    name: str = "Boltz2"
     citations: list[str] = []
 
     # core properties
