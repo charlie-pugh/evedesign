@@ -7,17 +7,25 @@ yet implemented. Structures present on entities will be
 ignored with a warning.
 """
 
+import os
+from dataclasses import asdict
 from os import PathLike
+from pathlib import Path
 from typing import Any, Literal, Self, Sequence
 
 import numpy as np
 import torch
+from loguru import logger
 
 try:
-    from boltz.main import process_inputs  # noqa
-    from boltz.model.models.boltz2 import Boltz2  # noqa
-    from boltz.data.module.inferencev2 import Boltz2InferenceDataModule  # noqa
-    from boltz.data.types import Manifest  # noqa
+    from boltz.main import (
+        download_boltz2,
+        Boltz2DiffusionParams,
+        PairformerArgsV2,
+        MSAModuleArgs,
+        BoltzSteeringParams,
+    )
+    from boltz.model.models.boltz2 import Boltz2
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -134,6 +142,56 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     def _delete_model(self):
         self.model = None
         self._release_cache()
+
+    def _load_model(self):
+        """Download weights if needed and load Boltz-2 into memory."""
+        if self.model is not None:
+            return
+
+        cache = Path(
+            os.environ.get("BOLTZ_CACHE", "~/.boltz")
+        ).expanduser()
+        cache.mkdir(parents=True, exist_ok=True)
+
+        # Boltz-2 downloads weights on first use and caches them locally.
+        download_boltz2(cache)
+        checkpoint = cache / "boltz2_conf.ckpt"
+
+        diffusion_params = Boltz2DiffusionParams()
+        diffusion_params.step_scale = 1.5
+
+        predict_args = {
+            "recycling_steps": self.recycling_steps,
+            "sampling_steps": self.sampling_steps,
+            "diffusion_samples": self.diffusion_samples,
+            "max_parallel_samples": None, 
+            "write_confidence_summary": True,
+            "write_full_pae": False,
+            "write_full_pde": False,
+        }
+
+        self.model = Boltz2.load_from_checkpoint(
+            checkpoint,
+            strict=True,
+            predict_args=predict_args,
+            map_location="cpu",
+            diffusion_process_args=asdict(diffusion_params),
+            ema=False,
+            use_kernels="cuda" in str(self.device),  # different from default
+            pairformer_args=asdict(PairformerArgsV2()),
+            msa_args=asdict(MSAModuleArgs(use_paired_feature=True)), # diferent from default    
+            steering_args=asdict(BoltzSteeringParams()),
+        )
+        self.model.to(self.device)
+        self.model.eval()
+        logger.info(f"Boltz-2 loaded from {checkpoint}")
+
+    def transform(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None,
+    ) -> list[SystemInstance]:
+        raise NotImplementedError
 
     def score(
         self,
