@@ -8,7 +8,7 @@ ignored with a warning.
 """
 
 from os import PathLike
-from typing import Literal
+from typing import Any, Literal
 
 try:
     from boltz.main import process_inputs  # noqa
@@ -20,6 +20,7 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 from evedesign.model import BaseModel, Transformer, Scorer
+from evedesign.system import System
 from evedesign.types import DeviceType, BatchSize
 
 
@@ -80,3 +81,32 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
 
         self._system = None
         self.model = None
+
+    @property
+    def ready(self):
+        return self._system is not None
+
+    @property
+    def system(self) -> System | None:
+        return self._system
+
+    @classmethod
+    def can_model(cls, system: System, data: Any = None) -> tuple[bool, str]:
+        if data is not None:
+            return False, "Model does not support data parameter (must be None)"
+
+        if len(system) == 0:
+            return False, "System must have at least one entity"
+
+        for i, entity in enumerate(system):
+            if entity.type != "protein":
+                return False, (
+                    f"Entity {i} has type '{entity.type}'. "
+                    "Only protein entities are supported. "
+                    "DNA/RNA/ligand coming soon."
+                )
+
+            if not entity.defined_sequence():
+                return False, f"Entity {i} must have a defined sequence"
+
+        return True, ""
