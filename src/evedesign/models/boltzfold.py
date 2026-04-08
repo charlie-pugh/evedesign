@@ -8,6 +8,7 @@ ignored with a warning.
 """
 
 import os
+import shutil
 from dataclasses import asdict
 from os import PathLike
 from pathlib import Path
@@ -20,17 +21,27 @@ from loguru import logger
 try:
     from boltz.main import (
         download_boltz2,
+        process_inputs,
         Boltz2DiffusionParams,
         PairformerArgsV2,
         MSAModuleArgs,
         BoltzSteeringParams,
     )
     from boltz.model.models.boltz2 import Boltz2
+    from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
+    from boltz.data.types import Manifest
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
 
+import tempfile
+
 from evedesign.model import BaseModel, Transformer, Scorer
+from evedesign.utils import model_param_context
+from evedesign.models.boltz.convert import (
+    _chain_to_entity_map,
+    system_instance_to_yaml,
+)
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, StatusCallback, BatchSize
 
@@ -143,18 +154,24 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self.model = None
         self._release_cache()
 
+    def _ensure_weights(self) -> Path:
+        """
+        Download Boltz-2 weights and supporting data on first use.
+        Returns the cache directory path.
+        """
+        cache = Path(
+            os.environ.get("BOLTZ_CACHE", "~/.boltz")
+        ).expanduser()
+        cache.mkdir(parents=True, exist_ok=True)
+        download_boltz2(cache)
+        return cache
+
     def _load_model(self):
         """Download weights if needed and load Boltz-2 into memory."""
         if self.model is not None:
             return
 
-        cache = Path(
-            os.environ.get("BOLTZ_CACHE", "~/.boltz")
-        ).expanduser()
-        cache.mkdir(parents=True, exist_ok=True)
-
-        # Boltz-2 downloads weights on first use and caches them locally.
-        download_boltz2(cache)
+        cache = self._ensure_weights()
         checkpoint = cache / "boltz2_conf.ckpt"
 
         diffusion_params = Boltz2DiffusionParams()
@@ -189,9 +206,155 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     def transform(
         self,
         instances: Sequence[SystemInstance],
+        entity: int | None = None,
+        use_msa: bool | None = None,
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
-        raise NotImplementedError
+        """
+        Fold each instance's sequences into 3D structures via Boltz-2.
+
+        Currently folds all entities in the system together as a complex.
+        When entity is specified, only that entity should be folded in
+        isolation and the resulting structure merged back into the full
+        SystemInstance — this is not yet implemented.
+        """
+        self.ready_or_raise()
+
+        if use_msa is None:
+            use_msa = self.use_msa
+
+        # Validate all instances against the system
+        for instance in instances:
+            self._system.valid_instance(
+                instance,
+                validate_reps=True,
+                require_reps=True,
+                fixed_length=self.requires_fixed_length,
+                allow_deletions=self.handles_deletions,
+                raise_invalid=True,
+            )
+
+        if entity is not None:
+            raise NotImplementedError(
+                "Per-entity folding is not yet implemented. "
+                "Pass entity=None to fold all entities as a complex."
+            )
+
+        fold_system = self._system
+        fold_instances = list(instances)
+
+        # Map chain IDs back to entity indices for output reconstruction
+        chain_to_entity = _chain_to_entity_map(fold_system)
+
+        # Write one YAML per instance into a shared temp directory
+        tmp_dir = Path(tempfile.mkdtemp(prefix="boltzfold_"))
+        yaml_paths: list[Path] = []
+        record_ids: list[str] = []
+        for inst_idx, instance in enumerate(fold_instances):
+            record_id = f"instance_{inst_idx}"
+            yaml_path = tmp_dir / f"{record_id}" / "input.yaml"
+            system_instance_to_yaml(
+                fold_system, instance, yaml_path,
+                use_msa=use_msa,
+                use_msa_server=self.use_msa_server,
+            )
+            yaml_paths.append(yaml_path)
+            record_ids.append(record_id)
+
+        try:
+            processed_dir = tmp_dir / "processed"
+            cache = self._ensure_weights()
+            mol_dir = cache / "mols"
+
+            process_inputs(
+                data=yaml_paths,
+                out_dir=tmp_dir,
+                ccd_path=cache / "ccd.pkl",  # unused in boltz2 mode but required by signature
+                mol_dir=mol_dir,
+                msa_server_url="https://api.colabfold.com",
+                msa_pairing_strategy="greedy",
+                use_msa_server=self.use_msa_server,
+                boltz2=True,
+            )
+
+            manifest = Manifest.load(processed_dir / "manifest.json")
+            if not manifest.records:
+                logger.warning(
+                    "No records were processed — returning input copies"
+                )
+                return [inst.copy() for inst in fold_instances]
+
+            data_module = Boltz2InferenceDataModule(
+                manifest=manifest,
+                target_dir=processed_dir / "structures",
+                msa_dir=processed_dir / "msa",
+                mol_dir=mol_dir,
+                num_workers=0,
+                constraints_dir=(
+                    processed_dir / "constraints"
+                    if (processed_dir / "constraints").exists()
+                    else None
+                ),
+                template_dir=(
+                    processed_dir / "templates"
+                    if (processed_dir / "templates").exists()
+                    else None
+                ),
+                extra_mols_dir=(
+                    processed_dir / "mols"
+                    if (processed_dir / "mols").exists()
+                    else None
+                ),
+            )
+            data_module.setup(stage="predict")
+            dataloader = data_module.predict_dataloader()
+
+            record_id_to_idx = {
+                rid: i for i, rid in enumerate(record_ids)
+            }
+            structures_dir = processed_dir / "structures"
+
+            with model_param_context(
+                self._load_model, self._delete_model,
+                self.keep_model_after_pred,
+            ):
+                with torch.no_grad():
+                    for batch_idx, batch in enumerate(dataloader):
+                        batch_device = {
+                            k: v.to(self.device)
+                            if isinstance(v, torch.Tensor) else v
+                            for k, v in batch.items()
+                        }
+                        pred_dict = self.model.predict_step(
+                            batch_device, batch_idx=batch_idx
+                        )
+                        record = batch["record"][0]
+                        logger.info(
+                            f"record: {record.id} — "
+                            f"pred_dict keys: {list(pred_dict.keys())}"
+                        )
+                        if "coords" in pred_dict:
+                            logger.info(
+                                f"coords shape: "
+                                f"{pred_dict['coords'].shape}"
+                            )
+                        if "masks" in pred_dict:
+                            logger.info(
+                                f"masks shape: "
+                                f"{pred_dict['masks'].shape}"
+                            )
+
+            # Log everything in tmp_dir for inspection
+            all_files = list(tmp_dir.rglob("*"))
+            logger.info(f"tmp_dir: {tmp_dir}")
+            logger.info(f"Contents ({len(all_files)} files):")
+            for f in sorted(all_files):
+                if f.is_file():
+                    logger.info(f"  {f.relative_to(tmp_dir)} ({f.stat().st_size} bytes)")
+            return tmp_dir, sorted(all_files)
+
+        finally:
+            pass  # tmp_dir preserved for inspection
 
     def score(
         self,

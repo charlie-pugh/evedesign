@@ -45,6 +45,19 @@ def _get_chain_ids(system: System) -> list[str]:
     return [_get_chain_id(i) for i in range(total)]
 
 
+def _chain_to_entity_map(system: System) -> dict[str, int]:
+    """Maps each Boltz-2 chain ID back to its evedesign entity index."""
+    chain_ids = _get_chain_ids(system)
+    result: dict[str, int] = {}
+    pointer = 0
+    for entity_idx, entity in enumerate(system):
+        copies = entity.copies if entity.copies is not None else 1
+        for chain_id in chain_ids[pointer:pointer + copies]:
+            result[chain_id] = entity_idx
+        pointer += copies
+    return result
+
+
 # A3M writer
 # a3m format is a simple extension of FASTA that allows for insertions in the MSA.
 def _write_a3m(
