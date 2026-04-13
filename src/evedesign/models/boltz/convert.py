@@ -11,9 +11,11 @@ is not yet implemented. Structures are ignored with a warning.
 from pathlib import Path
 
 import yaml
+import json
 from loguru import logger
 
-from evedesign.system import Entity, EntityInstance, System, SystemInstance
+from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap
+from evedesign.structure import StructureFile
 
 # 1. evedesign Entity --> to Boltz-2 YAML
 
@@ -191,3 +193,112 @@ def system_instance_to_yaml(
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
     return output_path
+
+
+def prediction_to_instance(
+    record_id: str,
+    predictions_dir: Path,
+    system: System,
+    instance: SystemInstance,
+    chain_to_entity: dict[str, int],
+    score_attribute: str = "iptm",
+) -> SystemInstance:
+    """
+    Parse BoltzWriter output files for one record into a
+    SystemInstance with populated structures and scores.
+
+    Only the best-ranked model (model_0, highest confidence)
+    is parsed and stored in EntityInstance.models.
+
+    NOTE: Boltz-2 always numbers residues from 1 internally.
+    Output residue numbering is remapped to match each
+    entity's first_index before populating EntityInstance.models.
+
+    NOTE: Support for returning all diffusion samples is not
+    yet implemented. When added, the CIF parsing logic should
+    be extracted into a separate _parse_cif_to_chain_map()
+    helper and iterated over all model_{i}.cif files.
+    """
+    # Locate output files for this record
+    record_dir = predictions_dir / record_id
+    if not record_dir.exists():
+        raise ValueError(
+            f"No prediction output found for record "
+            f"'{record_id}' in {predictions_dir}"
+        )
+
+    cif_files = sorted(record_dir.glob("*.cif"))
+    json_files = sorted(record_dir.glob("confidence_*.json"))
+
+    if not cif_files:
+        raise ValueError(
+            f"No .cif files found for record "
+            f"'{record_id}' in {record_dir}"
+        )
+
+    # model_0 is the best-ranked sample (sorted by confidence_score descending)
+    best_cif = cif_files[0]
+    best_json = json_files[0] if json_files else None
+
+    # Load confidence scores for model_0
+    best_confidence = {}
+    if best_json is not None:
+        best_confidence = json.loads(best_json.read_text())
+
+    score = best_confidence.get(score_attribute, None)
+    if score is None and best_confidence:
+        logger.warning(
+            f"'{score_attribute}' not in confidence. "
+            f"Available: {list(best_confidence.keys())}"
+        )
+
+    confidence_val = best_confidence.get("complex_plddt", None)
+
+    # Parse model_0 CIF into per-entity structures, remapped to entity numbering
+    sf = StructureFile(str(best_cif), format="cif")
+    full_structure = sf.get_model()
+
+    entity_models: dict[int, StructureChainMap] = {}
+    for chain_id in full_structure.chains():
+        if chain_id not in chain_to_entity:
+            logger.warning(
+                f"Chain '{chain_id}' not in "
+                f"chain_to_entity mapping — skipping"
+            )
+            continue
+
+        entity_idx = chain_to_entity[chain_id]
+        entity = system[entity_idx]
+
+        chain_structure = full_structure.get_chain(chain_id)
+
+        # Boltz numbers residues from 1; remap to entity.first_index
+        n = len(entity.rep)
+        mapping = {
+            i: i + entity.first_index - 1
+            for i in range(1, n + 1)
+        }
+        remapped = chain_structure.remap(mapping)
+
+        if entity_idx not in entity_models:
+            entity_models[entity_idx] = {}
+        entity_models[entity_idx][chain_id] = remapped
+
+    # Build output EntityInstance objects (shallow copy, add structures)
+    new_entity_instances = []
+    for i, entity_instance in enumerate(instance):
+        new_ei = EntityInstance(
+            rep=entity_instance.rep.copy(),
+            embedding=entity_instance.embedding,
+            models=entity_models.get(i, None),
+        )
+        new_entity_instances.append(new_ei)
+
+    metadata = best_confidence
+
+    return SystemInstance(
+        new_entity_instances,
+        score=score,
+        confidence=confidence_val,
+        metadata=metadata,
+    )
