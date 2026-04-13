@@ -30,6 +30,7 @@ try:
     from boltz.model.models.boltz2 import Boltz2
     from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
     from boltz.data.types import Manifest
+    from boltz.data.write.writer import BoltzWriter
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -76,7 +77,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
         sampling_steps: int = 200,
-        diffusion_samples: int = 1,
+        diffusion_samples: int = 5,
         recycling_steps: int = 3,
         use_msa_server: bool = False,
         use_msa: bool = True,
@@ -248,11 +249,12 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
 
         # Write one YAML per instance into a shared temp directory
         tmp_dir = Path(tempfile.mkdtemp(prefix="boltzfold_"))
+        (tmp_dir / "inputs").mkdir()
         yaml_paths: list[Path] = []
         record_ids: list[str] = []
         for inst_idx, instance in enumerate(fold_instances):
             record_id = f"instance_{inst_idx}"
-            yaml_path = tmp_dir / f"{record_id}" / "input.yaml"
+            yaml_path = tmp_dir / "inputs" / f"{record_id}.yaml"
             system_instance_to_yaml(
                 fold_system, instance, yaml_path,
                 use_msa=use_msa,
@@ -314,6 +316,16 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
             }
             structures_dir = processed_dir / "structures"
 
+            predictions_dir = tmp_dir / "predictions"
+            predictions_dir.mkdir(exist_ok=True)
+
+            writer = BoltzWriter(
+                data_dir=str(structures_dir),
+                output_dir=str(predictions_dir),
+                output_format="mmcif",
+                boltz2=True,
+            )
+
             with model_param_context(
                 self._load_model, self._delete_model,
                 self.keep_model_after_pred,
@@ -328,33 +340,37 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         pred_dict = self.model.predict_step(
                             batch_device, batch_idx=batch_idx
                         )
-                        record = batch["record"][0]
-                        logger.info(
-                            f"record: {record.id} — "
-                            f"pred_dict keys: {list(pred_dict.keys())}"
-                        )
-                        if "coords" in pred_dict:
-                            logger.info(
-                                f"coords shape: "
-                                f"{pred_dict['coords'].shape}"
+                        if not pred_dict.get("exception", False):
+                            writer.write_on_batch_end(
+                                trainer=None,
+                                pl_module=None,
+                                prediction=pred_dict,
+                                batch_indices=[],
+                                batch=batch,
+                                batch_idx=batch_idx,
+                                dataloader_idx=0,
                             )
-                        if "masks" in pred_dict:
-                            logger.info(
-                                f"masks shape: "
-                                f"{pred_dict['masks'].shape}"
+                        else:
+                            record = batch["record"][0]
+                            logger.warning(
+                                f"Prediction failed for record {record.id}"
                             )
 
-            # Log everything in tmp_dir for inspection
-            all_files = list(tmp_dir.rglob("*"))
-            logger.info(f"tmp_dir: {tmp_dir}")
-            logger.info(f"Contents ({len(all_files)} files):")
+            all_files = list(predictions_dir.rglob("*"))
+            logger.info(f"Boltz-2 output written to: {predictions_dir}")
+            logger.info(f"Files written ({len(all_files)}):")
             for f in sorted(all_files):
                 if f.is_file():
-                    logger.info(f"  {f.relative_to(tmp_dir)} ({f.stat().st_size} bytes)")
-            return tmp_dir, sorted(all_files)
+                    logger.info(
+                        f"  {f.relative_to(predictions_dir)} "
+                        f"({f.stat().st_size} bytes)"
+                    )
+            return predictions_dir, sorted(
+                [f for f in all_files if f.is_file()]
+            )
 
         finally:
-            pass  # tmp_dir preserved for inspection
+            pass  # caller is responsible for tmp_dir cleanup
 
     def score(
         self,
