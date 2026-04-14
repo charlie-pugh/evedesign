@@ -198,7 +198,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
             ema=False,
             use_kernels="cuda" in str(self.device),  # different from default
             pairformer_args=asdict(PairformerArgsV2()),
-            msa_args=asdict(MSAModuleArgs(use_paired_feature=True)), # diferent from default    
+            msa_args=asdict(MSAModuleArgs(use_paired_feature=True)), # different from default
             steering_args=asdict(BoltzSteeringParams()),
         )
         self.model.to(self.device)
