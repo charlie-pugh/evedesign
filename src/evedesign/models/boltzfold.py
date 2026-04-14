@@ -216,9 +216,16 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         Fold each instance's sequences into 3D structures via Boltz-2.
 
         Currently folds all entities in the system together as a complex.
-        When entity is specified, only that entity should be folded in
-        isolation and the resulting structure merged back into the full
-        SystemInstance — this is not yet implemented.
+
+        Not yet implemented:
+        - Per-entity folding: when entity is not None, only that entity
+          should be folded in isolation and the result merged back into
+          the full SystemInstance.
+        - Multiple diffusion samples: when diffusion_samples > 1, only
+          the best-ranked sample (model_0) is returned. Support for
+          returning all samples as a list[SystemInstance] is planned.
+        - Template conditioning: Entity.structures is ignored. Passing
+          known structures as Boltz-2 templates is not yet supported.
         """
         self.ready_or_raise()
 
