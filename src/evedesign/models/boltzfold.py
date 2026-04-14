@@ -282,10 +282,11 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
 
             manifest = Manifest.load(processed_dir / "manifest.json")
             if not manifest.records:
-                logger.warning(
-                    "No records were processed — returning input copies"
+                raise ValueError(
+                    "Boltz-2 processed no records from the input YAMLs. "
+                    "Check that input sequences are valid proteins and "
+                    "that Boltz-2 dependencies are correctly installed."
                 )
-                return [inst.copy() for inst in fold_instances]
 
             data_module = Boltz2InferenceDataModule(
                 manifest=manifest,
