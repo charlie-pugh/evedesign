@@ -294,7 +294,9 @@ def prediction_to_instance(
         )
         new_entity_instances.append(new_ei)
 
-    metadata = best_confidence
+    metadata = {
+        "boltz_confidence": best_confidence,
+    }
 
     return SystemInstance(
         new_entity_instances,

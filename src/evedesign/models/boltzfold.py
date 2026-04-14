@@ -84,7 +84,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         use_msa: bool = True,
         score_attribute: Literal[
             "iptm", "ptm", "confidence_score", "complex_plddt"
-        ] = "ptm",
+        ] = "confidence_score",
     ):
         if not self.available:
             raise ValueError(
