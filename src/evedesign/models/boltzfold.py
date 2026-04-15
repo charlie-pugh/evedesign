@@ -94,6 +94,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self.model_dir_path = model_dir_path
         self.batch_size = batch_size
         self.keep_model_after_build = keep_model_after_build
+
+        # by default, keep parameters loaded once loaded for prediction purposes to avoid reloading over and over
         self.keep_model_after_pred = True
         self.device = device
         self.sampling_steps = sampling_steps
