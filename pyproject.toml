@@ -28,7 +28,7 @@ dependencies = [
 evmutation2 = ["evmutation2"]
 esm2 = ["transformers"]
 mpnn = ["prody"]
-boltzfold = ["boltz>=2.2,<2.3"]
+boltz2fold = ["boltz>=2.2,<2.3"]
 umap = ["umap-learn"]
 
 [project.urls]
