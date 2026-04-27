@@ -254,35 +254,45 @@ def prediction_to_instance(
 
     confidence_val = best_confidence.get("complex_plddt", None)
 
-    # Parse model_0 CIF into per-entity structures, remapped to entity numbering
-    sf = StructureFile(str(best_cif), format="cif")
-    full_structure = sf.get_model()
-
     entity_models: dict[int, StructureChainMap] = {}
-    for chain_id in full_structure.chains():
-        if chain_id not in chain_to_entity:
-            logger.warning(
-                f"Chain '{chain_id}' not in "
-                f"chain_to_entity mapping — skipping"
-            )
-            continue
 
-        entity_idx = chain_to_entity[chain_id]
-        entity = system[entity_idx]
+    for rank_idx, cif_path in enumerate(cif_files[:1]):
+        rank_key = f"model_{rank_idx}"
+        entity_chains: dict[int, list[Structure]] = {}
 
-        chain_structure = full_structure.get_chain(chain_id)
+        sf = StructureFile(str(cif_path), format="cif")
+        full_structure = sf.get_model()
 
-        # Boltz numbers residues from 1; remap to entity.first_index
-        n = len(entity.rep)
-        mapping = {
-            i: i + entity.first_index - 1
-            for i in range(1, n + 1)
-        }
-        remapped = chain_structure.remap(mapping)
+        for chain_id in full_structure.chains():
+            if chain_id not in chain_to_entity:
+                logger.warning(
+                    f"Chain '{chain_id}' not in "
+                    f"chain_to_entity mapping — skipping"
+                )
+                continue
+            entity_idx = chain_to_entity[chain_id]
+            entity = system[entity_idx]
 
-        if entity_idx not in entity_models:
-            entity_models[entity_idx] = {}
-        entity_models[entity_idx][chain_id] = remapped
+            chain_structure = full_structure.get_chain(chain_id)
+
+            n = len(entity.rep)
+            mapping = {
+                i: i + entity.first_index - 1
+                for i in range(1, n + 1)
+            }
+            remapped = chain_structure.remap(mapping)
+
+            if entity_idx not in entity_chains:
+                entity_chains[entity_idx] = []
+            entity_chains[entity_idx].append(remapped)
+
+        for entity_idx, chains in entity_chains.items():
+            if entity_idx not in entity_models:
+                entity_models[entity_idx] = {}
+            if len(chains) == 1:
+                entity_models[entity_idx][rank_key] = chains[0]
+            else:
+                entity_models[entity_idx][rank_key] = chains
 
     # Build output EntityInstance objects (shallow copy, add structures)
     new_entity_instances = []
