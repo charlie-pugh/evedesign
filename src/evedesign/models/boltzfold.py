@@ -404,9 +404,17 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     def score(
         self,
         instances: Sequence[SystemInstance],
+        score: Literal[
+            "iptm", "ptm", "confidence_score", "complex_plddt"
+        ] | None = None,
         status_callback: StatusCallback | None = None,
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        raise NotImplementedError(
-            "Confidence scores are returned as a side effect of "
-            "transform(). Call transform() instead."
-        )
+        """
+        Will run a new boltz prediction for each instance and return an array of confidence scores.
+        Scores are extracted from the prediction output according to the score_attribute parameter.
+        """
+        if score is not None:
+            self.score_attribute = score
+        transformed = self.transform(instances, status_callback=status_callback)
+        return np.array([inst.score for inst in transformed])
+
