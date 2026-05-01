@@ -157,50 +157,52 @@ class Sequences:
     @classmethod
     def from_file(
         cls, 
-        path: str, 
-        aligned: bool = False, 
+        path: str | Path, 
+        format: Literal["a3m", "a2m", "fasta"] | None = None,
         type: BioPolymer = "protein"
     ) -> Self:
         """
-        Load sequences from an .a3m file. 
+        Load sequences from a file. 
         
-        If aligned=True, lowercase insertions are stripped to maintain 
-        alignment length relative to the query.
+        Verifies consistent match state lengths for the provided format.
+        If remove_inserts=True, lowercase characters are stripped from sequences.
         """
         file_path = Path(path)
-
-        # extension check
-        if file_path.suffix.lower() != ".a3m":
-            raise NotImplementedError(
-                f"File extension '{file_path.suffix}' is not supported. "
-                "Only '.a3m' files are currently implemented."
-            )
-
         seq_list = []
-        expected_length = None
-        
+        expected_match_len = None
+
         with open(file_path, "r") as f:
-            for seq_id, seq_str in read_fasta(f, remove_insertions=aligned):
-                if aligned:
-                    current_len = len(seq_str)
-                    if expected_length is None:
-                        expected_length = current_len
-                    elif current_len != expected_length:
-                        raise ValueError(
-                            f"Inconsistent alignment length in {file_path.name}: "
-                            f"sequence '{seq_id}' has length {current_len} but expected {expected_length} (query len)."
-                        )
+            for seq_id, seq_str in read_fasta(f):
+                match_seq = seq_str.translate(REMOVE_INSERTIONS_TRANSLATION)
+                current_match_len = len(match_seq)
                 
+                if expected_match_len is None:
+                    expected_match_len = current_match_len
+                elif current_match_len != expected_match_len:
+                    raise ValueError(
+                        f"Inconsistent alignment length in {file_path.name}: "
+                        f"'{seq_id}' has {current_match_len} match states, expected {expected_match_len}."
+                    )
+
                 seq_list.append(
                     Sequence(seq=seq_str, id=seq_id, type=type)
                 )
 
         return cls(
             seqs=seq_list,
-            aligned=aligned,
-            type=type,
-            format="a3m"
+            format=format,
         )
+        
+    def remove_inserts(self) -> Self:
+        """
+        Remove any insertions (lowercase letters) from all sequences relative to target
+        """
+        return type(self)(
+            seqs=[s.remove_insertions() for s in self.seqs],
+            aligned=True,
+            weights=self.weights,
+            format=self.format_
+        )        
 
     def serialize(self) -> dict[str, Any]:
         """
@@ -352,7 +354,7 @@ def valid_sequence(
 #     return len(invalid) == 0, invalid
 
 
-def read_fasta(f: TextIO, remove_insertions: bool = False):
+def read_fasta(f: TextIO):
     """
     Generator function to read a FASTA-format file
     (includes aligned FASTA, A2M, A3M formats)
@@ -361,8 +363,6 @@ def read_fasta(f: TextIO, remove_insertions: bool = False):
     ----------
     f : file-like object
         FASTA alignment file
-    remove_insertions : bool
-        strips insertions (lowercase) as file is read if True
 
     Returns
     -------
@@ -373,18 +373,17 @@ def read_fasta(f: TextIO, remove_insertions: bool = False):
     current_id = None
 
     for line in f:
+        # Start reading new entry. If we already have
+        # seen an entry before, return it first.
         if line.startswith(">"):
             if current_id is not None:
-                if remove_insertions:
-                    current_sequence = current_sequence.translate(REMOVE_INSERTIONS_TRANSLATION)
                 yield current_id, current_sequence
 
             current_id = line.rstrip()[1:]
             current_sequence = ""
+
         elif not line.startswith(";"):
             current_sequence += line.rstrip()
 
-    if current_id is not None:
-        if remove_insertions:
-            current_sequence = current_sequence.translate(REMOVE_INSERTIONS_TRANSLATION)
-        yield current_id, current_sequence
+    # Also do not forget last entry in file
+    yield current_id, current_sequence
