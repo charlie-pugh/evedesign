@@ -3,6 +3,7 @@ Biopolymer sequence functionality (protein sequences etc.)
 """
 from string import ascii_lowercase
 from typing import Any, Literal, Self, TextIO
+from pathlib import Path
 from collections import abc
 from evedesign.constants import MASK, GAP
 from evedesign.types import BioPolymer, RepSequence, SequenceMetadata
@@ -154,11 +155,51 @@ class Sequences:
         # TODO: check alignment integrity and/or autodetect properties/format
 
     @classmethod
-    def from_file(cls, f: TextIO):
-         # TODO: parameter for different format types
-         # TODO: callback param for header parsing
-        raise NotImplementedError(
-            "Loading from file not yet implemented"
+    def from_file(
+        cls, 
+        path: str, 
+        aligned: bool = False, 
+        type: BioPolymer = "protein"
+    ) -> Self:
+        """
+        Load sequences from an .a3m file. 
+        
+        If aligned=True, lowercase insertions are stripped to maintain 
+        alignment length relative to the query.
+        """
+        file_path = Path(path)
+
+        # extension check
+        if file_path.suffix.lower() != ".a3m":
+            raise NotImplementedError(
+                f"File extension '{file_path.suffix}' is not supported. "
+                "Only '.a3m' files are currently implemented."
+            )
+
+        seq_list = []
+        expected_length = None
+        
+        with open(file_path, "r") as f:
+            for seq_id, seq_str in read_fasta(f, remove_insertions=aligned):
+                if aligned:
+                    current_len = len(seq_str)
+                    if expected_length is None:
+                        expected_length = current_len
+                    elif current_len != expected_length:
+                        raise ValueError(
+                            f"Inconsistent alignment length in {file_path.name}: "
+                            f"sequence '{seq_id}' has length {current_len} but expected {expected_length} (query len)."
+                        )
+                
+                seq_list.append(
+                    Sequence(seq=seq_str, id=seq_id, type=type)
+                )
+
+        return cls(
+            seqs=seq_list,
+            aligned=aligned,
+            type=type,
+            format="a3m"
         )
 
     def serialize(self) -> dict[str, Any]:
@@ -311,7 +352,7 @@ def valid_sequence(
 #     return len(invalid) == 0, invalid
 
 
-def read_fasta(f: TextIO):
+def read_fasta(f: TextIO, remove_insertions: bool = False):
     """
     Generator function to read a FASTA-format file
     (includes aligned FASTA, A2M, A3M formats)
@@ -320,6 +361,8 @@ def read_fasta(f: TextIO):
     ----------
     f : file-like object
         FASTA alignment file
+    remove_insertions : bool
+        strips insertions (lowercase) as file is read if True
 
     Returns
     -------
@@ -330,17 +373,18 @@ def read_fasta(f: TextIO):
     current_id = None
 
     for line in f:
-        # Start reading new entry. If we already have
-        # seen an entry before, return it first.
         if line.startswith(">"):
             if current_id is not None:
+                if remove_insertions:
+                    current_sequence = current_sequence.translate(REMOVE_INSERTIONS_TRANSLATION)
                 yield current_id, current_sequence
 
             current_id = line.rstrip()[1:]
             current_sequence = ""
-
         elif not line.startswith(";"):
             current_sequence += line.rstrip()
 
-    # Also do not forget last entry in file
-    yield current_id, current_sequence
+    if current_id is not None:
+        if remove_insertions:
+            current_sequence = current_sequence.translate(REMOVE_INSERTIONS_TRANSLATION)
+        yield current_id, current_sequence
