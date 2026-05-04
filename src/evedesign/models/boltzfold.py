@@ -56,7 +56,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     """
     available = IMPORT_AVAILABLE
     name: str = "Boltz2"
-    citations: list[str] = []
+    citations: list[str] = ["doi:10.1101/2025.06.14.659707"]
 
     # core properties
     requires_target: bool = True
