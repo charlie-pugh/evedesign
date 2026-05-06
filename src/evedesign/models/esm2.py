@@ -5,7 +5,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from loguru import logger
-import torch
 
 from evedesign.model import (
     BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
@@ -16,6 +15,7 @@ from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 from evedesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
 
 try:
+    import torch
     from transformers import EsmForMaskedLM, AutoTokenizer  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:

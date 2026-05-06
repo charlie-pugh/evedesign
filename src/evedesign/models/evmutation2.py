@@ -7,7 +7,6 @@ from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
-import torch
 
 from evedesign.model import (
     BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
@@ -18,6 +17,7 @@ from evedesign.utils import ensure_sequence, model_param_context
 from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
 
 try:
+    import torch
     from evmutation2 import model, features, parsers  # noqa
     IMPORT_AVAILABLE = True
 except ImportError:
