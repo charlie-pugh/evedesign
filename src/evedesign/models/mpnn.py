@@ -169,6 +169,11 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         device
             Device to use for computations
         """
+        if not self.available:
+            raise ImportError(
+                "MPNN dependencies could not be imported. Are they installed already?"
+            )
+
         self.model_name = model_name
         self.device = device
         self.batch_size = batch_size

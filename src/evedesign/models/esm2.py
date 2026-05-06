@@ -62,7 +62,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         temperature_schedule: TemperatureSchedule | None = None
     ):
         if not self.available:
-            raise ValueError(
+            raise ImportError(
                 "transformers package could not be imported. Is it installed already?"
             )
 
