@@ -289,12 +289,19 @@ def prediction_to_instance(
 
     score = best_confidence.get(score_attribute, None)
     if score is None and best_confidence:
-        logger.warning(
-            f"'{score_attribute}' not in confidence. "
-            f"Available: {list(best_confidence.keys())}"
+        raise ValueError(
+            f"'{score_attribute}' not found in Boltz-2 "
+            f"confidence output. "
+            f"Available keys: {list(best_confidence.keys())}"
         )
 
     confidence_val = best_confidence.get(confidence_attribute, None)
+    if confidence_val is None and best_confidence:
+        raise ValueError(
+            f"'{confidence_attribute}' not found in Boltz-2 "
+            f"confidence output. "
+            f"Available keys: {list(best_confidence.keys())}"
+        )
 
     entity_models: dict[int, StructureChainMap] = {}
 
