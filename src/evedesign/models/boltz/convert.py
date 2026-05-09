@@ -9,6 +9,7 @@ is not yet implemented. Structures are ignored with a warning.
 """
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 import json
@@ -237,7 +238,12 @@ def prediction_to_instance(
     system: System,
     instance: SystemInstance,
     chain_to_entity: dict[str, int],
-    score_attribute: str = "iptm",
+    score_attribute: Literal[
+        "iptm", "ptm", "confidence_score", "complex_plddt"
+    ] = "confidence_score",
+    confidence_attribute: Literal[
+        "iptm", "ptm", "confidence_score", "complex_plddt"
+    ] = "complex_plddt",
 ) -> SystemInstance:
     """
     Parse BoltzWriter output files for one record into a
@@ -288,7 +294,7 @@ def prediction_to_instance(
             f"Available: {list(best_confidence.keys())}"
         )
 
-    confidence_val = best_confidence.get("complex_plddt", None)
+    confidence_val = best_confidence.get(confidence_attribute, None)
 
     entity_models: dict[int, StructureChainMap] = {}
 

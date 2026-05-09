@@ -84,6 +84,9 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         score_attribute: Literal[
             "iptm", "ptm", "confidence_score", "complex_plddt"
         ] = "confidence_score",
+        confidence_attribute: Literal[
+            "iptm", "ptm", "confidence_score", "complex_plddt"
+        ] = "complex_plddt",
     ):
         if not self.available:
             raise ValueError(
@@ -102,6 +105,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self.recycling_steps = recycling_steps
         self.use_msa = use_msa
         self.score_attribute = score_attribute
+        self.confidence_attribute = confidence_attribute
 
         self._system = None
         self.model = None
@@ -383,6 +387,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                     chain_to_entity=chain_to_entity,
                     instance=fold_instances[inst_idx],
                     score_attribute=self.score_attribute,
+                    confidence_attribute=self.confidence_attribute,
                     )
             # Fill any instances that failed to predict with copies of the input instance
             for i, result in enumerate(results):
