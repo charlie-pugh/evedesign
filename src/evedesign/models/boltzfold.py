@@ -242,15 +242,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
             use_msa = self.use_msa
 
         # Validate all instances against the system
-        for instance in instances:
-            self._system.valid_instance(
-                instance,
-                validate_reps=True,
-                require_reps=True,
-                fixed_length=self.requires_fixed_length,
-                allow_deletions=self.handles_deletions,
-                raise_invalid=True,
-            )
+        self._validate_instances(instances)
 
         if entity is not None:
             raise NotImplementedError(
