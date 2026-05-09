@@ -14,7 +14,7 @@ import yaml
 import json
 from loguru import logger
 
-from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap
+from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap, Structure
 from evedesign.structure import StructureFile
 
 # 1. evedesign Entity --> to Boltz-2 YAML
@@ -82,20 +82,52 @@ def _write_a3m(
     return output_path
 
 
+def _write_csv(
+    entity: Entity,
+    entity_instance: EntityInstance,
+    output_path: Path,
+) -> Path:
+    """
+    Write a Boltz-2 compatible CSV MSA file preserving
+    pairing keys from Sequence.key.
+
+    Format matches what Boltz-2's own server path produces:
+    - Header: key,sequence
+    - Query sequence first with key=0
+    - Paired sequences with integer key (from "pair-{i}")
+    - Unpaired sequences with key=-1
+
+    This format is required for paired MSAs in multi-chain
+    complexes. Boltz-2's CSV parser uses the key column as
+    taxonomy_id to match paired rows across chains.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = ["key,sequence"]
+    # Query sequence is always the first row
+    rows.append(f"0,{''.join(entity_instance.rep)}")
+    for seq in entity.sequences.seqs:
+        if seq.key is not None and seq.key.startswith("pair-"):
+            key = seq.key[len("pair-"):]
+        else:
+            key = "-1"
+        rows.append(f"{key},{seq.seq}")
+    output_path.write_text("\n".join(rows) + "\n")
+    return output_path
+
+
 def _resolve_msa_field(
     entity: Entity,
     entity_instance: EntityInstance,
     chain_id: str,
     yaml_path: Path,
     use_msa: bool,
-    use_msa_server: bool,
 ) -> str | None:
     """
     Decide the msa field value for a single entity in the Boltz-2 YAML.
 
-    Returns None when the field should be omitted (server mode),
-    an absolute path string when a local A3M was written,
-    or "empty" when no MSA is available.
+    Returns an absolute path string when a local MSA file was written
+    (CSV when pairing keys are present, A3M otherwise), or "empty" when
+    no MSA is available.
     """
     # Warn about unsupported template conditioning
     if entity.structures is not None and len(entity.structures) > 0:
@@ -104,23 +136,30 @@ def _resolve_msa_field(
             f"template conditioning is not yet implemented — ignoring."
         )
 
-    # Case 1: let Boltz-2's own MSA server handle it
-    if use_msa_server:
-        return None
-
-    # Case 2: we have local MSA data — write it as A3M
     if (
         use_msa
         and entity.sequences is not None
         and len(entity.sequences.seqs) > 0
     ):
-        a3m_path = _write_a3m(
-            entity, entity_instance,
-            yaml_path.parent / "msa" / f"{chain_id}.a3m",
+        # Use CSV format when pairing keys are present
+        # (multi-chain complexes with paired MSA).
+        # Use A3M for single-sequence or unpaired MSA.
+        has_pairing = any(
+            s.key is not None and s.key.startswith("pair-")
+            for s in entity.sequences.seqs
         )
-        return str(a3m_path.resolve())
+        if has_pairing:
+            msa_path = _write_csv(
+                entity, entity_instance,
+                yaml_path.parent / "msa" / f"{chain_id}.csv",
+            )
+        else:
+            msa_path = _write_a3m(
+                entity, entity_instance,
+                yaml_path.parent / "msa" / f"{chain_id}.a3m",
+            )
+        return str(msa_path.resolve())
 
-    # Case 3: no MSA available or not requested
     return "empty"
 
 
@@ -129,7 +168,6 @@ def system_instance_to_yaml(
     instance: SystemInstance,
     output_path: Path,
     use_msa: bool = True,
-    use_msa_server: bool = False,
 ) -> Path:
     """
     Convert an evedesign System + SystemInstance into a Boltz-2 input YAML.
@@ -143,11 +181,9 @@ def system_instance_to_yaml(
     output_path
         Where to write the YAML file.
     use_msa
-        If True and MSA data is available on the entity, write an .a3m
-        file and reference it. If False, set msa to "empty".
-    use_msa_server
-        If True, omit the msa field entirely so Boltz-2 will query its
-        own MSA server at runtime.
+        If True and MSA data is available on the entity, write a local
+        MSA file (CSV when pairing keys are present, A3M otherwise) and
+        reference it. If False, set msa to "empty".
 
     Returns
     -------
@@ -176,7 +212,7 @@ def system_instance_to_yaml(
 
         msa = _resolve_msa_field(
             entity, entity_instance, first_chain, output_path,
-            use_msa=use_msa, use_msa_server=use_msa_server,
+            use_msa=use_msa,
         )
 
         entry: dict = {"id": id_field, "sequence": seq}

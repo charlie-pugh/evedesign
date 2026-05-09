@@ -68,8 +68,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    required_entity_attributes: list[str] | None = []
-    optional_entity_attributes: list[str] | None = []
+    required_entity_attributes: list[str] | None = ["sequences"]
+    optional_entity_attributes: list[str] | None = ["copies"]
 
     def __init__(
         self,
@@ -80,7 +80,6 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         sampling_steps: int = 200,
         diffusion_samples: int = 5,
         recycling_steps: int = 3,
-        use_msa_server: bool = False,
         use_msa: bool = True,
         score_attribute: Literal[
             "iptm", "ptm", "confidence_score", "complex_plddt"
@@ -101,7 +100,6 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self.sampling_steps = sampling_steps
         self.diffusion_samples = diffusion_samples
         self.recycling_steps = recycling_steps
-        self.use_msa_server = use_msa_server
         self.use_msa = use_msa
         self.score_attribute = score_attribute
 
@@ -268,7 +266,6 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
             system_instance_to_yaml(
                 fold_system, instance, yaml_path,
                 use_msa=use_msa,
-                use_msa_server=self.use_msa_server,
             )
             yaml_paths.append(yaml_path)
             record_ids.append(record_id)
@@ -285,7 +282,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                 mol_dir=mol_dir,
                 msa_server_url="https://api.colabfold.com",
                 msa_pairing_strategy="greedy",
-                use_msa_server=self.use_msa_server,
+                use_msa_server=False,
                 boltz2=True,
             )
 
