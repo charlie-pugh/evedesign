@@ -12,7 +12,7 @@ import shutil
 from dataclasses import asdict
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal, Self, Sequence
+from typing import Any, Literal, Self, Sequence, cast
 
 import numpy as np
 import torch
@@ -287,7 +287,10 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                 boltz2=True,
             )
 
-            manifest = Manifest.load(processed_dir / "manifest.json")
+            manifest = cast(
+                Manifest,
+                Manifest.load(processed_dir / "manifest.json")
+            )
             if not manifest.records:
                 raise ValueError(
                     "Boltz-2 processed no records from the input YAMLs. "
@@ -351,8 +354,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         )
                         if not pred_dict.get("exception", False):
                             writer.write_on_batch_end(
-                                trainer=None,
-                                pl_module=None,
+                                trainer=None,  # type: ignore
+                                pl_module=None,  # type: ignore
                                 prediction=pred_dict,
                                 batch_indices=[],
                                 batch=batch,
