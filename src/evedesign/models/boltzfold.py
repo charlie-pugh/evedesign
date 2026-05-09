@@ -35,6 +35,8 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
+DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/boltz")
+
 import tempfile
 
 from evedesign.model import BaseModel, Transformer, Scorer
@@ -74,6 +76,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     def __init__(
         self,
         model_dir_path: str | PathLike | None = None,
+        cache_dir: str | None = DEFAULT_CACHE_DIR,
         batch_size: BatchSize = 1,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
@@ -94,6 +97,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
             )
 
         self.model_dir_path = model_dir_path
+        self.cache_dir = cache_dir
         self.batch_size = batch_size
         self.keep_model_after_build = keep_model_after_build
 
@@ -164,10 +168,11 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         """
         Download Boltz-2 weights and supporting data on first use.
         Returns the cache directory path.
+
+        The cache directory is set via the cache_dir
+        constructor parameter (default: ~/.cache/boltz).
         """
-        cache = Path(
-            os.environ.get("BOLTZ_CACHE", "~/.boltz")
-        ).expanduser()
+        cache = Path(self.cache_dir).expanduser()
         cache.mkdir(parents=True, exist_ok=True)
         download_boltz2(cache)
         return cache
