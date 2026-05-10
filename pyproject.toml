@@ -21,15 +21,21 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy"
+  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy", "pyyaml", "requests"
 ]
 
 [project.optional-dependencies]
 evmutation2 = ["evmutation2"]
 esm2 = ["transformers"]
 mpnn = ["prody"]
+# boltz2fold: CPU/MPS install (default)
+# boltz2fold-cuda: adds CUDA-12 extras (cuequivariance_*)
+# — only works on CUDA-12 systems with compatible torch build
 boltz2fold = ["boltz>=2.2,<2.3"]
+boltz2fold-cuda = ["boltz[cuda]>=2.2,<2.3"]
 umap = ["umap-learn"]
+notebooks = ["py3Dmol"]
+test = ["pytest"]
 
 [project.urls]
 Documentation = "https://github.com/evedesignbio/evedesign#readme"
