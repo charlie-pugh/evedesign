@@ -378,25 +378,17 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         f"({f.stat().st_size} bytes)"
                     )
 
-            results = [None]*len(fold_instances)
+            results = [None] * len(fold_instances)
             for record_id, inst_idx in record_id_to_idx.items():
                 results[inst_idx] = prediction_to_instance(
                     record_id=record_id,
                     predictions_dir=predictions_dir,
                     system=fold_system,
-                    chain_to_entity=chain_to_entity,
                     instance=fold_instances[inst_idx],
+                    chain_to_entity=chain_to_entity,
                     score_attribute=self.score_attribute,
                     confidence_attribute=self.confidence_attribute,
-                    )
-            # Fill any instances that failed to predict with copies of the input instance
-            for i, result in enumerate(results):
-                if result is None:
-                    logger.warning(
-                        f"No prediction found for instance {i} (record {record_ids[i]}). "
-                        "Filling with input instance copy."
-                    )
-                    results[i] = fold_instances[i].copy()
+                )
 
             return results
 
