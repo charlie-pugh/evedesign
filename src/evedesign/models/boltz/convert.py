@@ -278,15 +278,22 @@ def prediction_to_instance(
             f"'{record_id}' in {record_dir}"
         )
 
-    # model_0 is the best-ranked sample (sorted by confidence_score descending)
-    best_cif = cif_files[0]
-    best_json = json_files[0] if json_files else None
+    # Load all per-rank confidence JSONs
+    all_confidence: dict[str, dict] = {}
+    for rank_idx, json_path in enumerate(json_files):
+        rank_key = f"model_{rank_idx}"
+        all_confidence[rank_key] = json.loads(
+            json_path.read_text()
+        )
 
-    # Load confidence scores for model_0
-    best_confidence = {}
-    if best_json is not None:
-        best_confidence = json.loads(best_json.read_text())
+    # The score and confidence on SystemInstance are
+    # taken from model_0 (best ranked by Boltz-2)
+    best_confidence = all_confidence.get("model_0", {})
 
+    # SystemInstance.score holds the score_attribute
+    # value (e.g. "confidence_score") of the best-ranked
+    # diffusion sample (model_0). Per-sample scores for
+    # all ranks are stored in metadata["scores"].
     score = best_confidence.get(score_attribute, None)
     if score is None and best_confidence:
         raise ValueError(
@@ -295,6 +302,9 @@ def prediction_to_instance(
             f"Available keys: {list(best_confidence.keys())}"
         )
 
+    # SystemInstance.confidence holds the
+    # confidence_attribute value (e.g. "complex_plddt")
+    # of the best-ranked diffusion sample (model_0).
     confidence_val = best_confidence.get(confidence_attribute, None)
     if confidence_val is None and best_confidence:
         raise ValueError(
@@ -305,7 +315,7 @@ def prediction_to_instance(
 
     entity_models: dict[int, StructureChainMap] = {}
 
-    for rank_idx, cif_path in enumerate(cif_files[:1]):
+    for rank_idx, cif_path in enumerate(cif_files):
         rank_key = f"model_{rank_idx}"
         entity_chains: dict[int, list[Structure]] = {}
 
@@ -354,7 +364,7 @@ def prediction_to_instance(
         new_entity_instances.append(new_ei)
 
     metadata = {
-        "boltz_confidence": best_confidence,
+        "scores": all_confidence,
     }
 
     return SystemInstance(

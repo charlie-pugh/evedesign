@@ -62,7 +62,7 @@ def test_transform_single_protein():
     """Single protein folds and returns structure and scores."""
     s = System([Protein(rep=SEQ, id='EcCM', first_index=2)])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
     assert len(results) == 1
@@ -76,7 +76,7 @@ def test_transform_residue_numbering():
     """Output residue numbering matches entity.first_index."""
     s = System([Protein(rep=SEQ, id='EcCM', first_index=2)])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
     structure = ensure_sequence(
@@ -90,7 +90,7 @@ def test_transform_multiple_instances():
     """Two instances of same system fold independently."""
     s = System([Protein(rep=SEQ, id='test')])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     results = m.transform([
         s.rep_to_instance(),
@@ -102,28 +102,38 @@ def test_transform_multiple_instances():
 
 
 def test_transform_diffusion_samples():
-    """diffusion_samples=3 runs and returns best model only."""
+    """diffusion_samples=3 returns 3 ranked models."""
     s = System([Protein(rep=SEQ, id='test')])
     m = BoltzFoldTransformer(
-        device='cpu', diffusion_samples=3,
+        device='cpu', diffusion_samples=3, sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
-    assert results[0][0].models is not None
-    assert "model_0" in results[0][0].models
+    models = results[0][0].models
+    assert models is not None
+    # diffusion_samples=3 should produce 3 ranked models
+    assert "model_0" in models
+    assert "model_1" in models
+    assert "model_2" in models
     assert results[0].score is not None
+    # Per-sample confidences in metadata
+    scores = results[0].metadata["scores"]
+    assert len(scores) == 3
+    assert "model_0" in scores
+    assert "model_1" in scores
+    assert "model_2" in scores
 
 
 def test_transform_homo_oligomer():
     """Homo-oligomer copies=2 returns list of 2 chain structures."""
     s = System([Protein(rep='MAST', id='homo', copies=2)])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
     assert len(results[0]) == 1
     ei = results[0][0]
     assert ei.models is not None
-    assert list(ei.models.keys()) == ["model_0"]
+    assert "model_0" in ei.models
     chains_list = ensure_sequence(ei.models["model_0"])
     assert len(chains_list) == 2
     chain_letters = sorted(s.chains()[0] for s in chains_list)
@@ -138,7 +148,7 @@ def test_transform_with_msa_sequences():
     ])
     s = System([Protein(rep='MAST', id='test', sequences=seqs)])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
     assert results[0][0].models is not None
@@ -148,7 +158,7 @@ def test_transform_score_returns_array():
     """score() runs transform internally and returns an ndarray of per-instance scores."""
     s = System([Protein(rep=SEQ, id='test')])
     m = BoltzFoldTransformer(
-        device='cpu' 
+        device='cpu', sampling_steps=100,
     ).build(s)
     scores = m.score([s.rep_to_instance()])
     assert isinstance(scores, np.ndarray)
@@ -168,7 +178,7 @@ def test_transform_a2b():
         user_agent="evedesign-test/test@example.com",
     )
     m = BoltzFoldTransformer(
-        device='cpu', use_msa=True,
+        device='cpu', use_msa=True, sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
     assert len(results) == 1
@@ -177,8 +187,8 @@ def test_transform_a2b():
     ei1 = results[0][1]
     assert ei0.models is not None
     assert ei1.models is not None
-    assert list(ei0.models.keys()) == ["model_0"]
-    assert list(ei1.models.keys()) == ["model_0"]
+    assert "model_0" in ei0.models
+    assert "model_0" in ei1.models
     ei0_chains = ensure_sequence(ei0.models["model_0"])
     ei1_chains = ensure_sequence(ei1.models["model_0"])
     assert len(ei0_chains) == 2, \
@@ -205,15 +215,15 @@ def test_transform_a2b2():
         user_agent="evedesign-test/test@example.com",
     )
     m = BoltzFoldTransformer(
-        device='cpu', use_msa=True,
+        device='cpu', use_msa=True, sampling_steps=100,
     ).build(s)
     results = m.transform([s.rep_to_instance()])
     assert len(results) == 1
     assert len(results[0]) == 2
     ei0 = results[0][0]
     ei1 = results[0][1]
-    assert list(ei0.models.keys()) == ["model_0"]
-    assert list(ei1.models.keys()) == ["model_0"]
+    assert "model_0" in ei0.models
+    assert "model_0" in ei1.models
     ei0_chains = ensure_sequence(ei0.models["model_0"])
     ei1_chains = ensure_sequence(ei1.models["model_0"])
     assert len(ei0_chains) == 2
@@ -238,7 +248,7 @@ def test_score_returns_array():
     """score() returns a numpy array of floats."""
     s = System([Protein(rep="MAST", id='test')])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     scores = m.score([s.rep_to_instance()])
     assert isinstance(scores, np.ndarray)
@@ -252,7 +262,7 @@ def test_score_multiple_instances():
     """score() returns one value per instance in input order."""
     s = System([Protein(rep="MAST", id='test')])
     m = BoltzFoldTransformer(
-        device='cpu'
+        device='cpu', sampling_steps=100,
     ).build(s)
     instances = [s.rep_to_instance(), s.rep_to_instance()]
     scores = m.score(instances)
@@ -267,11 +277,11 @@ def test_score_attribute_confidence_score():
     s = System([Protein(rep="MAST", id='test')])
 
     m_ptm = BoltzFoldTransformer(
-        device='cpu',
+        device='cpu', sampling_steps=100,
         score_attribute='ptm',
     ).build(s)
     m_conf = BoltzFoldTransformer(
-        device='cpu',
+        device='cpu', sampling_steps=100,
         score_attribute='confidence_score',
     ).build(s)
 
