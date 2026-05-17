@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any, Literal, Self, Sequence, cast
 
 import numpy as np
-import torch
 from loguru import logger
 
 try:
+    import torch
     from boltz.main import (
         download_boltz2,
         process_inputs,
