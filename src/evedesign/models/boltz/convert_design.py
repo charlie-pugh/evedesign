@@ -12,6 +12,11 @@ BoltzGen file conventions. boltzgen.py calls these
 functions without importing boltzgen directly.
 """
 
+from evedesign.models.boltz.chains import (
+    _chain_to_entity_map,
+    _get_chain_id,
+    _get_chain_ids,
+)
 from evedesign.system import (
     Entity,
 )

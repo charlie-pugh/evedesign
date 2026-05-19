@@ -25,6 +25,7 @@ except ImportError:
 from evedesign.model import BaseModel, Generator
 from evedesign.models.boltz.convert_design import (
     _is_design_entity,
+    _chain_to_entity_map,
 )
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, EntityPosList, StatusCallback
