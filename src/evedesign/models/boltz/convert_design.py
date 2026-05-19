@@ -76,3 +76,82 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
     if entity.rep is not None:
         return str(len(entity.rep))
     return "60..120"
+
+
+# ─── YAML entity emitters ─────────────────────────
+
+
+def _emit_design_entity(
+    entity: Entity,
+    chain_ids: list[str],
+    pointer: int,
+) -> tuple[dict, int]:
+    """
+    Emit a YAML entity dict for a designable entity.
+
+    For proteins, emits:
+        {"protein": {"id": "A", "sequence": "60..100", ...}}
+
+    For homo-oligomers (copies > 1), id becomes a list:
+        {"protein": {"id": ["A", "B"], "sequence": ...}}
+
+    For ligands, emits:
+        {"ligand": {"id": "A", "smiles": "..."}} or
+        {"ligand": {"id": "A", "ccd": "..."}}
+
+    Returns the YAML dict and the updated chain ID pointer.
+    """
+    copies = (
+        entity.copies if entity.copies is not None
+        else 1
+    )
+    id_field = (
+        chain_ids[pointer]
+        if copies == 1
+        else chain_ids[pointer:pointer + copies]
+    )
+
+    # Ligand entity
+    if entity.type == "ligand":
+        if (
+            entity.ligand_rep_type == "smiles"
+            and entity.rep is not None
+        ):
+            entry = {
+                "ligand": {
+                    "id": id_field,
+                    "smiles": "".join(entity.rep)
+                }
+            }
+        elif (
+            entity.ligand_rep_type == "ccd"
+            and entity.rep is not None
+        ):
+            entry = {
+                "ligand": {
+                    "id": id_field,
+                    "ccd": "".join(entity.rep)
+                }
+            }
+        else:
+            # Designable ligand with no rep — default to UNK
+            entry = {
+                "ligand": {"id": id_field, "ccd": "UNK"}
+            }
+        return entry, pointer + copies
+
+    # Protein / DNA / RNA — use type if valid, else protein
+    seq_spec = _entity_to_sequence_spec(entity)
+    entity_type = (
+        entity.type
+        if entity.type in ("protein", "dna", "rna")
+        else "protein"
+    )
+
+    entry_inner: dict = {
+        "id": id_field,
+        "sequence": seq_spec,
+    }
+
+    entry = {entity_type: entry_inner}
+    return entry, pointer + copies
