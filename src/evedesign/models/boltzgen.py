@@ -12,6 +12,7 @@ The boltzgen package pins cuequivariance_* dependencies that do
 not install on macOS or CPU-only Linux.
 """
 import shutil
+from pathlib import Path
 from typing import Any, Self, Sequence
 
 from loguru import logger
@@ -206,6 +207,60 @@ class BoltzGenGenerator(BaseModel, Generator):
         self.can_model_or_raise(system, data)
         self._system = system
         return self
+
+    def _build_cli_command(
+        self,
+        yaml_path: Path,
+        output_dir: Path,
+        num_designs: int,
+    ) -> list[str]:
+        """
+        Build the boltzgen CLI command from the
+        generator's configuration and per-call args.
+
+        Returns the command as a list of strings
+        suitable for subprocess.run.
+        """
+        cmd = [
+            "boltzgen", "run",
+            str(yaml_path),
+            "--output", str(output_dir),
+            "--protocol", self.protocol,
+            "--num_designs", str(num_designs),
+            "--num_workers", str(self.num_workers),
+            "--inverse_fold_num_sequences",
+            str(self.inverse_fold_num_sequences),
+            "--budget", str(self.budget),
+        ]
+        cmd += [
+            "--design_checkpoints"
+        ] + self.design_checkpoints
+        cmd += [
+            "--inverse_fold_checkpoint",
+            self.inverse_fold_checkpoint,
+        ]
+        cmd += [
+            "--folding_checkpoint",
+            self.folding_checkpoint,
+        ]
+
+        if self.num_devices is not None:
+            cmd += ["--devices", str(self.num_devices)]
+        if self.diffusion_batch_size is not None:
+            cmd += [
+                "--diffusion_batch_size",
+                str(self.diffusion_batch_size),
+            ]
+        if self.step_scale is not None:
+            cmd += ["--step_scale", self.step_scale]
+        if self.noise_scale is not None:
+            cmd += ["--noise_scale", self.noise_scale]
+        if self.alpha is not None:
+            cmd += ["--alpha", str(self.alpha)]
+        if self.skip_inverse_folding:
+            cmd += ["--skip_inverse_folding"]
+
+        return cmd
 
     def generate(
         self,
