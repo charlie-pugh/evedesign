@@ -20,6 +20,8 @@ try:
 except ImportError:
     IMPORT_AVAILABLE = False
 
+from evedesign.model import BaseModel, Generator
+
 
 # Default checkpoint references (HuggingFace)
 DEFAULT_DESIGN_CHECKPOINTS = [
@@ -41,3 +43,41 @@ PROTOCOLS = [
     "antibody-anything",
     "protein-redesign",
 ]
+
+
+class BoltzGenGenerator(BaseModel, Generator):
+    """
+    Wraps BoltzGen diffusion-based de novo structure
+    design into the evedesign Generator interface.
+
+    Generates de novo protein backbones conditioned
+    on a target structure. Returns SystemInstance
+    objects with structures populated.
+
+    For sequence design after backbone generation use
+    LigandMPNN. For refolding use BoltzFoldTransformer.
+    """
+    available = IMPORT_AVAILABLE
+    name: str = "BoltzGen"
+    citations: list[str] = ["doi.org/10.1101/2025.11.20.689494"]
+
+    # core properties
+    requires_target: bool = False
+    requires_fixed_length: bool = False
+    handles_deletions: bool = False
+    handles_insertions: bool = False
+    requires_gpu: bool = False
+    supports_gpu: bool = True
+    supports_gpu_parallel: bool = True
+    supports_cpu_parallel: bool = False
+
+    required_entity_attributes: list[str] | None = None
+    optional_entity_attributes: list[str] | None = [
+        "structures",
+        "secondary_structure",
+        "interactions",
+        "atom_bonds",
+        "copies",
+        "min_length",
+        "max_length",
+    ]
