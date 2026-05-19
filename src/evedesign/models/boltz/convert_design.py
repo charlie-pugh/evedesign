@@ -13,6 +13,9 @@ functions without importing boltzgen directly.
 """
 from pathlib import Path
 
+import yaml
+from loguru import logger
+
 from evedesign.models.boltz.chains import (
     _chain_to_entity_map,
     _get_chain_id,
@@ -20,6 +23,7 @@ from evedesign.models.boltz.chains import (
 )
 from evedesign.system import (
     Entity,
+    System,
 )
 
 
@@ -228,3 +232,69 @@ def _emit_context_entity(
 
     entry = {"file": file_entry}
     return entry, pointer + copies
+
+
+# ─── Top-level System → YAML ─────────────────────
+
+
+def system_to_boltzgen_yaml(
+    system: System,
+    output_path: Path,
+) -> Path:
+    """
+    Convert an evedesign System into a BoltzGen design
+    specification YAML file.
+
+    Each entity in the system is classified as either:
+    - Designable (rep=None or min_length/max_length set)
+      → emitted as a sequence/length spec via
+      _emit_design_entity
+    - Context (has a fixed structure attached)
+      → emitted as a file: reference via
+      _emit_context_entity (the structure CIF is
+      written to output_path.parent / structures/)
+
+    Returns the output_path for chaining.
+    """
+    tmp_dir = output_path.parent
+    chain_ids = _get_chain_ids(system)
+    pointer = 0
+
+    entities_list: list[dict] = []
+
+    n_design = sum(
+        1 for e in system if _is_design_entity(e)
+    )
+    n_context = len(system) - n_design
+    logger.info(
+        f"System has {len(system)} entities: "
+        f"{n_design} designable, {n_context} context"
+    )
+
+    for entity_idx, entity in enumerate(system):
+        if _is_design_entity(entity):
+            entry, pointer = _emit_design_entity(
+                entity, chain_ids, pointer,
+            )
+        else:
+            entry, pointer = _emit_context_entity(
+                entity,
+                entity_idx,
+                chain_ids,
+                pointer,
+                tmp_dir,
+            )
+        entities_list.append(entry)
+
+    yaml_data: dict = {"entities": entities_list}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        yaml.dump(
+            yaml_data,
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+
+    return output_path
