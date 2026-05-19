@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any, Literal, Self, Sequence, cast
 
 import numpy as np
-import torch
 from loguru import logger
 
 try:
+    import torch
     from boltz.main import (
         download_boltz2,
         process_inputs,
@@ -398,17 +398,22 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
     def score(
         self,
         instances: Sequence[SystemInstance],
-        score: Literal[
-            "iptm", "ptm", "confidence_score", "complex_plddt"
-        ] | None = None,
         status_callback: StatusCallback | None = None,
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
         """
-        Will run a new boltz prediction for each instance and return an array of confidence scores.
-        Scores are extracted from the prediction output according to the score_attribute parameter.
+        Run Boltz-2 prediction for each instance and
+        return an array of confidence scores.
+
+        Uses self.score_attribute (set at construction)
+        to select which metric to return. To use a
+        different metric, construct a new instance with
+        the desired score_attribute.
         """
-        if score is not None:
-            self.score_attribute = score
-        transformed = self.transform(instances, status_callback=status_callback)
-        return np.array([inst.score for inst in transformed])
+        transformed = self.transform(
+            instances,
+            status_callback=status_callback,
+        )
+        return np.array(
+            [inst.score for inst in transformed]
+        )
 

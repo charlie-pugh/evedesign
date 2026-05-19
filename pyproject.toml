@@ -17,6 +17,8 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
@@ -35,7 +37,11 @@ boltz2fold = ["boltz>=2.2,<2.3"]
 boltz2fold-cuda = ["boltz[cuda]>=2.2,<2.3"]
 umap = ["umap-learn"]
 notebooks = ["py3Dmol"]
-test = ["pytest"]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
 
 [project.urls]
 Documentation = "https://github.com/evedesignbio/evedesign#readme"

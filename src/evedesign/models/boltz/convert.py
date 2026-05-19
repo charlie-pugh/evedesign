@@ -17,6 +17,7 @@ from loguru import logger
 
 from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap, Structure
 from evedesign.structure import StructureFile
+from evedesign.types import Score
 
 # 1. evedesign Entity --> to Boltz-2 YAML
 
@@ -353,23 +354,40 @@ def prediction_to_instance(
             else:
                 entity_models[entity_idx][rank_key] = chains
 
-    # Build output EntityInstance objects (shallow copy, add structures)
+    # Build output EntityInstance objects by copying inputs
+    # and attaching the predicted structures
     new_entity_instances = []
     for i, entity_instance in enumerate(instance):
-        new_ei = EntityInstance(
-            rep=entity_instance.rep.copy(),
-            embedding=entity_instance.embedding,
-            models=entity_models.get(i, None),
-        )
+        new_ei = entity_instance.copy()
+        new_ei.models = entity_models.get(i, None)
         new_entity_instances.append(new_ei)
 
-    metadata = {
-        "scores": all_confidence,
-    }
+    # Flatten per-rank confidence metrics into list[Score]
+    # so metadata["scores"] matches the typed Metadata schema.
+    # index = diffusion sample rank (0 = best).
+    scores_list: list[Score] = []
+    for rank_key, conf_dict in all_confidence.items():
+        rank_idx = int(rank_key.removeprefix("model_"))
+        for metric_name, value in conf_dict.items():
+            if not isinstance(value, (int, float)):
+                continue
+            scores_list.append({
+                "index": rank_idx,
+                "name": metric_name,
+                "weight": 1.0,
+                "score": float(value),
+                "ref_score": None,
+            })
 
-    return SystemInstance(
-        new_entity_instances,
-        score=score,
-        confidence=confidence_val,
-        metadata=metadata,
-    )
+    new_instance = instance.copy()
+    new_instance.data = new_entity_instances
+    new_instance.score = score
+    new_instance.confidence = confidence_val
+
+    # Merge Boltz scores into existing metadata so caller-attached
+    # keys (e.g. provenance) survive the transform.
+    if new_instance.metadata is None:
+        new_instance.metadata = {}
+    new_instance.metadata["scores"] = scores_list
+
+    return new_instance
