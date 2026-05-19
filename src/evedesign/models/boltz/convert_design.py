@@ -11,6 +11,7 @@ NOTE: This module is the only place that knows about
 BoltzGen file conventions. boltzgen.py calls these
 functions without importing boltzgen directly.
 """
+from pathlib import Path
 
 from evedesign.models.boltz.chains import (
     _chain_to_entity_map,
@@ -154,4 +155,76 @@ def _emit_design_entity(
     }
 
     entry = {entity_type: entry_inner}
+    return entry, pointer + copies
+
+
+def _emit_context_entity(
+    entity: Entity,
+    entity_idx: int,
+    chain_ids: list[str],
+    pointer: int,
+    tmp_dir: Path,
+) -> tuple[dict, int]:
+    """
+    Emit a YAML entity dict for a context entity
+    (fixed structure target).
+
+    Writes the entity's structure to a CIF file in
+    tmp_dir/structures/ and references it from the YAML.
+
+    Falls back to a protein sequence-only entry if
+    no structure is available.
+
+    Returns the YAML dict and the updated chain ID
+    pointer.
+    """
+    copies = (
+        entity.copies if entity.copies is not None
+        else 1
+    )
+
+    # Fallback: no structure attached → emit as
+    # sequence-only protein entry
+    if (
+        entity.structures is None
+        or len(entity.structures) == 0
+    ):
+        id_field = (
+            chain_ids[pointer]
+            if copies == 1
+            else chain_ids[pointer:pointer + copies]
+        )
+        seq = (
+            "".join(entity.rep)
+            if entity.rep is not None
+            else "A" * 10
+        )
+        entry = {
+            "protein": {"id": id_field, "sequence": seq}
+        }
+        return entry, pointer + copies
+
+    # Write the structure to a CIF in tmp_dir/structures/
+    cif_path = (
+        tmp_dir / "structures" / f"entity_{entity_idx}.cif"
+    )
+    cif_path.parent.mkdir(parents=True, exist_ok=True)
+
+    first_key = next(iter(entity.structures))
+    model = entity.structures[first_key]
+    if isinstance(model, list):
+        model = model[0]
+    model.to_file(str(cif_path), format="cif")
+
+    # Build the file entry — currently includes only
+    # the chain for entity_idx (no binding-site or
+    # interaction constraints yet — those will be
+    # added in a later prompt)
+    chain_id = chain_ids[pointer]
+    file_entry: dict = {
+        "path": str(cif_path.resolve()),
+        "include": [{"chain": {"id": chain_id}}],
+    }
+
+    entry = {"file": file_entry}
     return entry, pointer + copies
