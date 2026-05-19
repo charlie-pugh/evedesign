@@ -12,6 +12,7 @@ The boltzgen package pins cuequivariance_* dependencies that do
 not install on macOS or CPU-only Linux.
 """
 import shutil
+from typing import Any, Self, Sequence
 
 from loguru import logger
 
@@ -22,8 +23,11 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 from evedesign.model import BaseModel, Generator
-from evedesign.system import System
-from evedesign.types import DeviceType
+from evedesign.models.boltz.convert_design import (
+    _is_design_entity,
+)
+from evedesign.system import System, SystemInstance
+from evedesign.types import DeviceType, EntityPosList, StatusCallback
 
 
 # Default checkpoint references (HuggingFace)
@@ -150,3 +154,73 @@ class BoltzGenGenerator(BaseModel, Generator):
     @property
     def system(self) -> System | None:
         return self._system
+
+    @classmethod
+    def can_model(
+        cls,
+        system: System,
+        data: Any = None,
+    ) -> tuple[bool, str]:
+        """
+        Check if the system is suitable for BoltzGen
+        de novo design.
+
+        Requires at least one designable entity
+        (rep=None or min_length/max_length specified).
+        """
+        if data is not None:
+            return False, (
+                "BoltzGen does not accept a data "
+                "parameter (must be None)"
+            )
+
+        has_design = False
+        for i, entity in enumerate(system):
+            if entity.type not in ("protein", "ligand"):
+                return False, (
+                    f"Entity {i} has type "
+                    f"'{entity.type}'. Only protein "
+                    "and ligand entities are currently "
+                    "supported."
+                )
+            if _is_design_entity(entity):
+                has_design = True
+
+        if not has_design:
+            return False, (
+                "No designable entities found. At least "
+                "one entity must have rep=None or "
+                "min_length/max_length set to be designed."
+            )
+
+        return True, ""
+
+    def build(
+        self,
+        system: System,
+        data: None = None,
+        status_callback: StatusCallback | None = None,
+    ) -> Self:
+        """Validate system and register for generation."""
+        self.can_model_or_raise(system, data)
+        self._system = system
+        return self
+
+    def generate(
+        self,
+        num_designs: int,
+        entities: Sequence[int] | None = None,
+        fixed_pos: EntityPosList | None = None,
+        temperature: float = 1.0,
+        status_callback: StatusCallback | None = None,
+    ) -> list[SystemInstance]:
+        """
+        Generate N de novo designs via BoltzGen.
+
+        NOT YET IMPLEMENTED — will be filled in once
+        the input/output conversion layer is in place.
+        """
+        raise NotImplementedError(
+            "BoltzGenGenerator.generate() implementation "
+            "is pending convert_design.py + CLI wiring"
+        )
