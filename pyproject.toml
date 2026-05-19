@@ -35,6 +35,9 @@ mpnn = ["prody"]
 # — only works on CUDA-12 systems with compatible torch build
 boltz2fold = ["boltz>=2.2,<2.3"]
 boltz2fold-cuda = ["boltz[cuda]>=2.2,<2.3"]
+# boltzgen: CUDA-12 only — pins cuequivariance_* and
+# numpy==2.0.2, will not install on macOS or CPU-only
+boltzgen = ["boltzgen"]
 umap = ["umap-learn"]
 notebooks = ["py3Dmol"]
 
