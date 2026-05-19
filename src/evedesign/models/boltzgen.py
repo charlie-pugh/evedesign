@@ -13,6 +13,7 @@ not install on macOS or CPU-only Linux.
 """
 import shutil
 
+from loguru import logger
 
 try:
     # boltzgen is CLI-only — we only check it is on PATH
@@ -21,6 +22,8 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 from evedesign.model import BaseModel, Generator
+from evedesign.system import System
+from evedesign.types import DeviceType
 
 
 # Default checkpoint references (HuggingFace)
@@ -81,3 +84,69 @@ class BoltzGenGenerator(BaseModel, Generator):
         "min_length",
         "max_length",
     ]
+
+    def __init__(
+        self,
+        protocol: str = "protein-anything",
+        device: DeviceType = "cuda",
+        num_devices: int | None = None,
+        num_workers: int = 1,
+        diffusion_batch_size: int | None = None,
+        design_checkpoints: list[str] | None = None,
+        inverse_fold_checkpoint: str | None = None,
+        folding_checkpoint: str | None = None,
+        skip_inverse_folding: bool = False,
+        inverse_fold_num_sequences: int = 1,
+        step_scale: str | None = None,
+        noise_scale: str | None = None,
+        budget: int = 30,
+        alpha: float | None = None,
+    ):
+        if not self.available:
+            logger.warning(
+                "boltzgen CLI not found on PATH. "
+                "Install via: pip install boltzgen "
+                "(generate() will fail until boltzgen is installed)"
+            )
+
+        if protocol not in PROTOCOLS:
+            raise ValueError(
+                f"Unknown protocol '{protocol}', "
+                f"valid options: {PROTOCOLS}"
+            )
+
+        self.protocol = protocol
+        self.device = device
+        self.num_devices = num_devices
+        self.num_workers = num_workers
+        self.diffusion_batch_size = diffusion_batch_size
+        self.design_checkpoints = (
+            design_checkpoints
+            or DEFAULT_DESIGN_CHECKPOINTS
+        )
+        self.inverse_fold_checkpoint = (
+            inverse_fold_checkpoint
+            or DEFAULT_INVERSE_FOLD_CHECKPOINT
+        )
+        self.folding_checkpoint = (
+            folding_checkpoint
+            or DEFAULT_FOLDING_CHECKPOINT
+        )
+        self.skip_inverse_folding = skip_inverse_folding
+        self.inverse_fold_num_sequences = (
+            inverse_fold_num_sequences
+        )
+        self.step_scale = step_scale
+        self.noise_scale = noise_scale
+        self.budget = budget
+        self.alpha = alpha
+
+        self._system = None
+
+    @property
+    def ready(self) -> bool:
+        return self._system is not None
+
+    @property
+    def system(self) -> System | None:
+        return self._system
