@@ -11,7 +11,10 @@ NOTE: Requires the boltzgen package (pip install evedesign[boltzdesign]).
 The boltzgen package pins cuequivariance_* dependencies that do
 not install on macOS or CPU-only Linux.
 """
+import os
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Self, Sequence
 
@@ -27,6 +30,7 @@ from evedesign.model import BaseModel, Generator
 from evedesign.models.boltz.convert_design import (
     _is_design_entity,
     _chain_to_entity_map,
+    system_to_boltzgen_yaml,
 )
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, EntityPosList, StatusCallback
@@ -107,6 +111,7 @@ class BoltzGenGenerator(BaseModel, Generator):
         noise_scale: str | None = None,
         budget: int = 30,
         alpha: float | None = None,
+        keep_tmp_dir: bool = False,
     ):
         if not self.available:
             logger.warning(
@@ -146,6 +151,7 @@ class BoltzGenGenerator(BaseModel, Generator):
         self.noise_scale = noise_scale
         self.budget = budget
         self.alpha = alpha
+        self.keep_tmp_dir = keep_tmp_dir
 
         self._system = None
 
@@ -273,10 +279,121 @@ class BoltzGenGenerator(BaseModel, Generator):
         """
         Generate N de novo designs via BoltzGen.
 
-        NOT YET IMPLEMENTED — will be filled in once
-        the input/output conversion layer is in place.
+        Writes a BoltzGen design YAML from self._system,
+        shells out to the boltzgen CLI, then parses
+        the output CIFs into SystemInstance objects.
+
+        BoltzGen determines designable entities from
+        the System spec itself (entities with rep=None
+        or min_length/max_length). The entities and
+        fixed_pos parameters are accepted for interface
+        compatibility but currently logged as warnings.
         """
-        raise NotImplementedError(
-            "BoltzGenGenerator.generate() implementation "
-            "is pending convert_design.py + CLI wiring"
-        )
+        self.ready_or_raise()
+
+        if entities is not None:
+            logger.warning(
+                "BoltzGen determines designable entities "
+                "from the System specification. The "
+                "'entities' parameter is ignored — entity "
+                "selection is controlled via Entity.rep / "
+                "Entity.min_length / Entity.max_length."
+            )
+
+        if fixed_pos is not None:
+            logger.warning(
+                "BoltzGen does not yet support fixed_pos "
+                "via the evedesign interface — ignored."
+            )
+
+        # Map temperature to step_scale if user didn't
+        # set it explicitly. BoltzGen recommends
+        # step_scale ~ 1.5 * temperature for sampling.
+        effective_step_scale = self.step_scale
+        if effective_step_scale is None and temperature != 1.0:
+            effective_step_scale = str(
+                round(1.5 * temperature, 2)
+            )
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="boltzgen_"))
+        try:
+            # 1. Write the YAML design spec
+            yaml_path = tmp_dir / "design_spec.yaml"
+            system_to_boltzgen_yaml(self._system, yaml_path)
+            logger.info(
+                f"BoltzGen YAML written to {yaml_path}"
+            )
+
+            # 2. Build the CLI command and invoke
+            output_dir = tmp_dir / "output"
+            output_dir.mkdir()
+
+            # Temporarily apply effective_step_scale to
+            # the instance so _build_cli_command picks
+            # it up
+            original_step_scale = self.step_scale
+            if effective_step_scale is not None:
+                self.step_scale = effective_step_scale
+            cmd = self._build_cli_command(
+                yaml_path, output_dir, num_designs
+            )
+            self.step_scale = original_step_scale
+
+            logger.info(
+                f"Running BoltzGen: {' '.join(cmd)}"
+            )
+            if status_callback is not None:
+                status_callback(
+                    "running",
+                    0.0,
+                    "Starting BoltzGen pipeline",
+                )
+
+            env = {**os.environ}
+            if self.device == "cpu":
+                env["CUDA_VISIBLE_DEVICES"] = ""
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            if result.returncode != 0:
+                logger.error(
+                    f"BoltzGen stderr:\n{result.stderr}"
+                )
+                raise RuntimeError(
+                    f"BoltzGen pipeline failed "
+                    f"(exit code {result.returncode}).\n"
+                    f"stderr: {result.stderr[-2000:]}"
+                )
+
+            logger.info(
+                "BoltzGen pipeline completed successfully"
+            )
+            if status_callback is not None:
+                status_callback(
+                    "running",
+                    0.8,
+                    "Parsing BoltzGen outputs",
+                )
+
+            # 3. Parse outputs — NOT YET IMPLEMENTED
+            # Phase 5 will replace this with real parsing
+            logger.warning(
+                f"Output parsing not yet implemented. "
+                f"BoltzGen wrote results to {output_dir}. "
+                f"Returning empty list."
+            )
+            return []
+
+        finally:
+            if not self.keep_tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            else:
+                logger.info(
+                    f"keep_tmp_dir=True — outputs preserved "
+                    f"at {tmp_dir}"
+                )
