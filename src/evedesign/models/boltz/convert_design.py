@@ -418,3 +418,106 @@ def _parse_single_design(
                 pass
 
     return instance
+
+
+def parse_design_output(
+    output_dir: Path,
+    system: System,
+    chain_to_entity: dict[str, int],
+    metrics_csv_name: str = "aggregate_metrics_analyze.csv",
+) -> list[SystemInstance]:
+    """
+    Parse a BoltzGen output directory into a list of
+    SystemInstance objects.
+
+    output_dir must be the directory passed to
+    boltzgen via --output (the parent containing
+    intermediate_designs/ etc.).
+
+    Each design CIF in intermediate_designs/ is parsed
+    into one SystemInstance via _parse_single_design.
+    Per-design metrics from aggregate_metrics_analyze.csv
+    are attached to each instance's metadata when
+    available.
+
+    Returns an empty list with a warning if no designs
+    are found.
+    """
+    designs_dir = output_dir / "intermediate_designs"
+
+    if not designs_dir.exists():
+        logger.warning(
+            f"BoltzGen designs directory not found: "
+            f"{designs_dir}"
+        )
+        return []
+
+    # Find design CIFs — pattern: design_spec_<idx>.cif
+    # at the top level of intermediate_designs/
+    cif_files = sorted(
+        p for p in designs_dir.glob("design_spec_*.cif")
+        if p.is_file()
+    )
+
+    if not cif_files:
+        logger.warning(
+            f"No design CIFs found in {designs_dir}"
+        )
+        return []
+
+    # Load per-design metrics from CSV if present
+    metrics_by_id: dict[str, dict] = {}
+    metrics_path = designs_dir / metrics_csv_name
+    if metrics_path.exists():
+        try:
+            import pandas as pd
+            df = pd.read_csv(metrics_path)
+            if "id" in df.columns:
+                for _, row in df.iterrows():
+                    metrics_by_id[str(row["id"])] = (
+                        row.to_dict()
+                    )
+                logger.info(
+                    f"Loaded metrics for "
+                    f"{len(metrics_by_id)} designs "
+                    f"from {metrics_csv_name}"
+                )
+            else:
+                logger.warning(
+                    f"{metrics_csv_name} has no 'id' "
+                    f"column — metrics not attached"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Could not load metrics CSV "
+                f"{metrics_path}: {e}"
+            )
+    else:
+        logger.info(
+            f"No metrics CSV at {metrics_path} — "
+            "designs will have no metrics in metadata"
+        )
+
+    # Parse each CIF into a SystemInstance
+    instances: list[SystemInstance] = []
+    for cif_path in cif_files:
+        design_id = cif_path.stem  # "design_spec_0"
+        metrics_row = metrics_by_id.get(design_id)
+        try:
+            instance = _parse_single_design(
+                cif_path=cif_path,
+                system=system,
+                chain_to_entity=chain_to_entity,
+                metrics_row=metrics_row,
+            )
+            instances.append(instance)
+        except Exception as e:
+            logger.warning(
+                f"Failed to parse {cif_path.name}: {e}"
+            )
+
+    logger.info(
+        f"Parsed {len(instances)} BoltzGen designs "
+        f"from {designs_dir}"
+    )
+    return instances
