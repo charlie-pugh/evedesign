@@ -28,8 +28,9 @@ except ImportError:
 
 from evedesign.model import BaseModel, Generator
 from evedesign.models.boltz.convert_design import (
-    _is_design_entity,
     _chain_to_entity_map,
+    _is_design_entity,
+    parse_design_output,
     system_to_boltzgen_yaml,
 )
 from evedesign.system import System, SystemInstance
@@ -380,14 +381,22 @@ class BoltzGenGenerator(BaseModel, Generator):
                     "Parsing BoltzGen outputs",
                 )
 
-            # 3. Parse outputs — NOT YET IMPLEMENTED
-            # Phase 5 will replace this with real parsing
-            logger.warning(
-                f"Output parsing not yet implemented. "
-                f"BoltzGen wrote results to {output_dir}. "
-                f"Returning empty list."
+            # 3. Parse outputs into list[SystemInstance]
+            chain_to_entity = _chain_to_entity_map(self._system)
+            instances = parse_design_output(
+                output_dir=output_dir,
+                system=self._system,
+                chain_to_entity=chain_to_entity,
             )
-            return []
+
+            if status_callback is not None:
+                status_callback(
+                    "done",
+                    1.0,
+                    f"{len(instances)} designs parsed",
+                )
+
+            return instances
 
         finally:
             if not self.keep_tmp_dir:
