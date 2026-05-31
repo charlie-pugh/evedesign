@@ -13,6 +13,7 @@ functions without importing boltzgen directly.
 """
 from pathlib import Path
 
+import numpy as np
 import yaml
 from loguru import logger
 
@@ -23,7 +24,9 @@ from evedesign.models.boltz.chains import (
 )
 from evedesign.system import (
     Entity,
+    EntityInstance,
     System,
+    SystemInstance,
 )
 
 
@@ -67,7 +70,8 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
     2. min_length only → "min"
     3. max_length only → "max"
     4. rep is set → len(rep) (fixed length matching rep)
-    5. Fallback → "60..120"
+    5. Fallback → "80..140" (matches BoltzGen's vanilla
+       binder default; emits a warning when triggered)
     """
     if (
         entity.min_length is not None
@@ -80,7 +84,15 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
         return str(entity.max_length)
     if entity.rep is not None:
         return str(len(entity.rep))
-    return "60..120"
+    logger.warning(
+        "Designable entity has no min_length, "
+        "max_length, or rep — defaulting to "
+        "BoltzGen's vanilla binder range '80..140'. "
+        "Set min_length/max_length on the Entity "
+        "to suppress this warning and control the "
+        "design length range explicitly."
+    )
+    return "80..140"
 
 
 # ─── YAML entity emitters ─────────────────────────
@@ -298,3 +310,111 @@ def system_to_boltzgen_yaml(
         )
 
     return output_path
+
+
+# ─── Output parsing ─────────────────────────────────
+
+
+def _parse_single_design(
+    cif_path: Path,
+    system: System,
+    chain_to_entity: dict[str, int],
+    metrics_row: dict | None = None,
+) -> SystemInstance:
+    """
+    Parse a single BoltzGen output CIF into a
+    SystemInstance.
+
+    Each chain in the CIF is matched against
+    chain_to_entity to find which evedesign entity
+    it belongs to. Sequence and structure are extracted
+    for designed entities; original entity.rep is kept
+    for context entities that have no chain in the CIF.
+
+    metrics_row (optional) — a dict from the BoltzGen
+    metrics CSV. Used to populate instance.metadata
+    and instance.score (using iptm, falling back to
+    ptm, falling back to complex_plddt).
+    """
+    from evedesign.structure import Structure, StructureFile
+
+    sf = StructureFile(str(cif_path), format="cif")
+    full_structure = sf.get_model()
+
+    # Group chains by entity index based on chain_to_entity
+    entity_chains: dict[int, list[Structure]] = {}
+    for chain_id in full_structure.chains():
+        if chain_id not in chain_to_entity:
+            logger.warning(
+                f"Chain '{chain_id}' in {cif_path.name} "
+                f"not in chain_to_entity mapping — skipping"
+            )
+            continue
+        entity_idx = chain_to_entity[chain_id]
+        chain_structure = full_structure.get_chain(chain_id)
+        entity_chains.setdefault(entity_idx, []).append(
+            chain_structure
+        )
+
+    # Build EntityInstance for each entity
+    entity_instances = []
+    for entity_idx, entity in enumerate(system):
+        chains = entity_chains.get(entity_idx)
+
+        if chains is None or len(chains) == 0:
+            # Entity missing from CIF — preserve its
+            # original rep
+            rep = (
+                entity.rep.copy()
+                if entity.rep is not None
+                else None
+            )
+            entity_instances.append(EntityInstance(rep=rep))
+            continue
+
+        # Extract sequence from the primary chain
+        primary_chain = chains[0]
+        res_df = primary_chain.res_df()
+        if "res_name_oneletter" in res_df.columns:
+            seq_array = np.array(
+                list(res_df["res_name_oneletter"].fillna("X")),
+                dtype="U1",
+            )
+        else:
+            seq_array = np.array(
+                ["X"] * len(res_df), dtype="U1"
+            )
+
+        # Build the models dict — single chain or
+        # homo-oligomer list
+        if len(chains) == 1:
+            models = {"model_0": chains[0]}
+        else:
+            models = {"model_0": chains}
+
+        entity_instances.append(
+            EntityInstance(rep=seq_array, models=models)
+        )
+
+    instance = SystemInstance(entity_instances)
+
+    # Attach metadata
+    design_id = cif_path.stem  # e.g. "design_spec_0"
+    instance.metadata = {"boltzgen_design_id": design_id}
+
+    if metrics_row is not None:
+        instance.metadata["boltzgen_metrics"] = metrics_row
+        # Use iptm as primary score, fall back through
+        # ptm and complex_plddt
+        score_val = (
+            metrics_row.get("iptm")
+            or metrics_row.get("ptm")
+            or metrics_row.get("complex_plddt")
+        )
+        if score_val is not None:
+            try:
+                instance.score = float(score_val)
+            except (ValueError, TypeError):
+                pass
+
+    return instance
