@@ -11,6 +11,7 @@ NOTE: This module is the only place that knows about
 BoltzGen file conventions. boltzgen.py calls these
 functions without importing boltzgen directly.
 """
+import re
 from pathlib import Path
 
 import numpy as np
@@ -433,68 +434,119 @@ def parse_design_output(
     output_dir: Path,
     system: System,
     chain_to_entity: dict[str, int],
-    metrics_csv_name: str = "aggregate_metrics_analyze.csv",
+    return_all: bool = False,
 ) -> list[SystemInstance]:
     """
     Parse a BoltzGen output directory into a list of
     SystemInstance objects.
 
-    output_dir must be the directory passed to
-    boltzgen via --output (the parent containing
-    intermediate_designs/ etc.).
+    By default returns the **Diverse set**: the
+    budget-filtered, diversity-selected designs from
+    final_ranked_designs/final_<N>_designs/. This
+    matches BoltzGen's "final output" convention as
+    documented in boltzgen.task.filter.filter.Filter.
 
-    Each design CIF in intermediate_designs/ is parsed
-    into one SystemInstance via _parse_single_design.
-    Per-design metrics from aggregate_metrics_analyze.csv
-    are attached to each instance's metadata when
-    available.
+    With return_all=True, returns every design listed
+    in all_designs_metrics.csv (the full post-analysis
+    set, before diversity filtering). Useful when you
+    want to apply custom filtering downstream.
 
-    Returns an empty list with a warning if no designs
-    are found.
+    Parameters
+    ----------
+    output_dir : Path
+        BoltzGen --output directory (the parent of
+        final_ranked_designs/).
+    system : System
+        Template system used for chain → entity routing.
+    chain_to_entity : dict[str, int]
+        Mapping from chain ID to entity index.
+    return_all : bool, default False
+        If False (default), return only the Diverse set
+        (--budget designs). If True, return all designs
+        in all_designs_metrics.csv (with CIFs sourced
+        from intermediate_designs/).
+
+    Returns
+    -------
+    list[SystemInstance]
+        Each instance has structures + metrics + score
+        + confidence populated. For Diverse set,
+        metadata["boltzgen_rank"] gives the
+        quality+diversity rank (1 = best).
     """
-    designs_dir = output_dir / "intermediate_designs"
+    ranked_dir = output_dir / "final_ranked_designs"
 
-    if not designs_dir.exists():
+    if not ranked_dir.exists():
         logger.warning(
-            f"BoltzGen designs directory not found: "
-            f"{designs_dir}"
+            f"BoltzGen final_ranked_designs not found "
+            f"at {ranked_dir}. Did BoltzGen finish?"
         )
         return []
 
-    # Find design CIFs — pattern: design_spec_<idx>.cif
-    # at the top level of intermediate_designs/
-    cif_files = sorted(
-        p for p in designs_dir.glob("design_spec_*.cif")
-        if p.is_file()
+    if return_all:
+        return _parse_all_designs(
+            output_dir, ranked_dir, system, chain_to_entity
+        )
+    return _parse_diverse_set(
+        ranked_dir, system, chain_to_entity
     )
 
-    if not cif_files:
+
+def _parse_diverse_set(
+    ranked_dir: Path,
+    system: System,
+    chain_to_entity: dict[str, int],
+) -> list[SystemInstance]:
+    """
+    Parse the Diverse set: budget-filtered designs in
+    final_<N>_designs/, ranked rank01..rankN, with
+    metrics from final_designs_metrics_<N>.csv.
+    """
+    # Find the final_<N>_designs subdir
+    final_dirs = sorted(
+        d for d in ranked_dir.glob("final_*_designs")
+        if d.is_dir()
+    )
+    if not final_dirs:
         logger.warning(
-            f"No design CIFs found in {designs_dir}"
+            f"No final_<N>_designs directory in "
+            f"{ranked_dir}"
         )
         return []
+    if len(final_dirs) > 1:
+        logger.warning(
+            f"Multiple final_<N>_designs directories "
+            f"in {ranked_dir}: "
+            f"{[d.name for d in final_dirs]}. Using "
+            "the first."
+        )
+    final_designs_dir = final_dirs[0]
 
-    # Load per-design metrics from CSV if present
-    metrics_by_id: dict[str, dict] = {}
-    metrics_path = designs_dir / metrics_csv_name
-    if metrics_path.exists():
+    # Find the matching metrics CSV
+    metrics_files = sorted(
+        ranked_dir.glob("final_designs_metrics_*.csv")
+    )
+    metrics_by_design_id: dict[str, dict] = {}
+    if metrics_files:
+        metrics_path = metrics_files[0]
         try:
             import pandas as pd
             df = pd.read_csv(metrics_path)
             if "id" in df.columns:
-                for _, row in df.iterrows():
-                    metrics_by_id[str(row["id"])] = (
-                        row.to_dict()
-                    )
+                metrics_by_design_id = {
+                    str(row["id"]): row.to_dict()
+                    for _, row in df.iterrows()
+                }
                 logger.info(
                     f"Loaded metrics for "
-                    f"{len(metrics_by_id)} designs "
-                    f"from {metrics_csv_name}"
+                    f"{len(metrics_by_design_id)} "
+                    f"Diverse-set designs from "
+                    f"{metrics_path.name}"
                 )
             else:
                 logger.warning(
-                    f"{metrics_csv_name} has no 'id' "
-                    f"column — metrics not attached"
+                    f"{metrics_path.name} has no 'id' "
+                    "column"
                 )
         except Exception as e:
             logger.warning(
@@ -502,22 +554,127 @@ def parse_design_output(
                 f"{metrics_path}: {e}"
             )
     else:
-        logger.info(
-            f"No metrics CSV at {metrics_path} — "
-            "designs will have no metrics in metadata"
+        logger.warning(
+            f"No final_designs_metrics_*.csv in "
+            f"{ranked_dir}"
         )
 
-    # Parse each CIF into a SystemInstance
+    # Parse each rank-prefixed CIF
+    rank_pattern = re.compile(
+        r"rank(\d+)_(design_spec_\d+)\.cif$"
+    )
+
+    cif_entries = []
+    for p in sorted(final_designs_dir.glob("*.cif")):
+        m = rank_pattern.match(p.name)
+        if m is None:
+            logger.debug(
+                f"Skipping unexpected file in "
+                f"{final_designs_dir.name}: {p.name}"
+            )
+            continue
+        cif_entries.append(
+            (int(m.group(1)), m.group(2), p)
+        )
+
+    if not cif_entries:
+        logger.warning(
+            f"No rank<N>_design_spec_<M>.cif files in "
+            f"{final_designs_dir}"
+        )
+        return []
+
+    cif_entries.sort(key=lambda x: x[0])
+
     instances: list[SystemInstance] = []
-    for cif_path in cif_files:
-        design_id = cif_path.stem  # "design_spec_0"
-        metrics_row = metrics_by_id.get(design_id)
+    for rank_num, design_id, cif_path in cif_entries:
+        metrics_row = metrics_by_design_id.get(design_id)
         try:
             instance = _parse_single_design(
                 cif_path=cif_path,
                 system=system,
                 chain_to_entity=chain_to_entity,
                 metrics_row=metrics_row,
+            )
+            if instance.metadata is None:
+                instance.metadata = {}
+            instance.metadata["boltzgen_rank"] = rank_num
+            instances.append(instance)
+        except Exception as e:
+            logger.warning(
+                f"Failed to parse {cif_path.name}: {e}"
+            )
+
+    logger.info(
+        f"Parsed {len(instances)} BoltzGen designs "
+        f"(Diverse set) from {final_designs_dir}"
+    )
+    return instances
+
+
+def _parse_all_designs(
+    output_dir: Path,
+    ranked_dir: Path,
+    system: System,
+    chain_to_entity: dict[str, int],
+) -> list[SystemInstance]:
+    """
+    Parse the full all_designs_metrics.csv set: every
+    design that survived the analysis step. CIFs are
+    sourced from intermediate_designs/.
+    """
+    all_metrics_path = ranked_dir / "all_designs_metrics.csv"
+    if not all_metrics_path.exists():
+        logger.warning(
+            f"all_designs_metrics.csv not found at "
+            f"{all_metrics_path}"
+        )
+        return []
+
+    try:
+        import pandas as pd
+        df = pd.read_csv(all_metrics_path)
+    except Exception as e:
+        logger.warning(
+            f"Could not load {all_metrics_path}: {e}"
+        )
+        return []
+
+    if "id" not in df.columns:
+        logger.warning(
+            "all_designs_metrics.csv has no 'id' column"
+        )
+        return []
+
+    logger.info(
+        f"Loaded metrics for {len(df)} designs from "
+        f"all_designs_metrics.csv (full set)"
+    )
+
+    intermediate_dir = output_dir / "intermediate_designs"
+    if not intermediate_dir.exists():
+        logger.warning(
+            f"intermediate_designs/ not found at "
+            f"{intermediate_dir}"
+        )
+        return []
+
+    instances: list[SystemInstance] = []
+    for _, row in df.iterrows():
+        design_id = str(row["id"])
+        cif_path = intermediate_dir / f"{design_id}.cif"
+        if not cif_path.exists():
+            logger.warning(
+                f"Metrics row for {design_id} but no "
+                f"CIF at {cif_path}"
+            )
+            continue
+        try:
+            instance = _parse_single_design(
+                cif_path=cif_path,
+                system=system,
+                chain_to_entity=chain_to_entity,
+                metrics_row=row.to_dict(),
             )
             instances.append(instance)
         except Exception as e:
@@ -527,6 +684,7 @@ def parse_design_output(
 
     logger.info(
         f"Parsed {len(instances)} BoltzGen designs "
-        f"from {designs_dir}"
+        f"(full all_designs set) from "
+        f"{intermediate_dir}"
     )
     return instances
