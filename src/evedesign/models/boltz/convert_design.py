@@ -417,6 +417,15 @@ def _parse_single_design(
             except (ValueError, TypeError):
                 pass
 
+        # Confidence — matches BoltzFold's default of
+        # complex_plddt for cross-model consistency
+        confidence_val = metrics_row.get("complex_plddt")
+        if confidence_val is not None:
+            try:
+                instance.confidence = float(confidence_val)
+            except (ValueError, TypeError):
+                pass
+
     return instance
 
 
