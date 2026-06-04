@@ -21,7 +21,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy"
+  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy", "proteingym-base @ git+https://github.com/ProteinGym/proteingym-base.git"
 ]
 
 [project.optional-dependencies]
@@ -37,6 +37,9 @@ Source = "https://github.com/evedesignbio/evedesign"
 
 [tool.hatch.version]
 path = "src/evedesign/__about__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.envs.types]
 extra-dependencies = [
