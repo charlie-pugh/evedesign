@@ -21,7 +21,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy", "proteingym-base @ git+https://github.com/ProteinGym/proteingym-base.git"
+  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy"
 ]
 
 [project.optional-dependencies]
@@ -29,6 +29,7 @@ evmutation2 = ["evmutation2"]
 esm2 = ["transformers"]
 mpnn = ["prody"]
 umap = ["umap-learn"]
+proteingym = ["proteingym-base @ git+https://github.com/ProteinGym/proteingym-base.git"]
 
 [project.urls]
 Documentation = "https://github.com/evedesignbio/evedesign#readme"
