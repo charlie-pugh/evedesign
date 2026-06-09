@@ -13,11 +13,17 @@ from proteingym.base.sequence import SequenceType
 
 
 def wildtype_or_none(dataset: Dataset) -> str | None:
-    """
-    Extract wildtype sequence from dataset if available to set Entity rep, which
-    needs to be set to None otherwise
+    """Extract the wildtype sequence from a dataset to set rep.
 
-    Note the reference_sequence computed field on Dataset fails with StopIteration error
+    Parameters
+    ----------
+    dataset : Dataset
+        ProteinGym dataset to extract the wildtype sequence from.
+
+    Returns
+    -------
+    str or None
+        The wildtype sequence if available, otherwise None.
     """
     wt = [
         seq for seq in dataset.sequences if seq.type == SequenceType.WILD_TYPE
@@ -30,53 +36,85 @@ def wildtype_or_none(dataset: Dataset) -> str | None:
 
 
 def msa_to_sequences(dataset: Dataset) -> sequence.Sequences | None:
-    """
-    Convert the first MSA in the dataset into an evedesign ``Sequences`` object,
-    or return None if the dataset has no MSAs.
+    """Convert the first MSA in a dataset into an evedesign Sequences object.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        ProteinGym dataset to extract the MSA from.
+
+    Returns
+    -------
+    sequence.Sequences or None
+        The first MSA as an evedesign Sequences object, or None if the
+        dataset has no MSAs.
+
+    Raises
+    ------
+    NotImplementedError
+        If the MSA region start is different from 1.
     """
     if len(dataset.msas) == 0:
         return None
 
     # this case is non-trivial scientifically yet highly relevant; discuss first before implementing...
-    if dataset.msas[0].sequence_start is not None and dataset.msas[0].sequence_start != 1:
-        raise NotImplementedError(
-            "MSA region start different from 1"
-        )
+    #if dataset.msas[0].sequence_start is not None and dataset.msas[0].sequence_start != 1:
+    #    raise NotImplementedError(
+    #        "MSA region start different from 1"
+    #    )
 
     # take first MSA by default for now
     first_msa = dataset.msas[0].value
 
     # TODO: length of weights and sequences not equal, presumaby invalid sequence
     #  filtered out - but no straightforward way to match them back together?
-    # if len(dataset.msa_weights) == 0:
-    #     weights = None
-    # else:
-    #    weights = dataset.msa_weights[0].value
-    #
-    # assert len(weights) == len(first_msa), "MSA and weights length does not match"
+    if len(dataset.msa_weights) == 0:
+        weights = None
+    else:
+        weights = dataset.msa_weights[0].value
+        assert len(weights) == len(first_msa), "MSA and weights length does not match"
 
     return sequence.Sequences(
         seqs=[sequence.Sequence(seq=str(seq), id=None) for seq in first_msa],
         aligned=True,
         type="protein",
-        # weights=weights,
+        weights=weights,
         format="a3m", # everything will be a3m
     )
 
 
 def update_structure(atom_array: AtomArray) -> Structure:
-    """
-    Wrap a ProteinGym structure (a biotite ``AtomArray``) into the evedesign
-    ``Structure`` model -- assumes monomers
+    """Wrap a ProteinGym structure into the evedesign Structure model.
+
+    Assumes monomers.
+
+    Parameters
+    ----------
+    atom_array : AtomArray
+        ProteinGym structure as a biotite AtomArray.
+
+    Returns
+    -------
+    Structure
+        The wrapped evedesign Structure.
     """
     s = Structure(atom_array)
     assert len(s.chains()) == 1
-    return s.get_chain(s.chains()[0])
+    return s
 
 
 def seqs_to_instances(sequences: Sequence[str]) -> list[SystemInstance]:
-    """
-    Transform standard string-based sequences into evedesign instances
+    """Transform standard string-based sequences into evedesign instances.
+
+    Parameters
+    ----------
+    sequences : Sequence[str]
+        String-based sequences to transform.
+
+    Returns
+    -------
+    list[SystemInstance]
+        The sequences wrapped as evedesign instances.
     """
     return [
         SystemInstance([
@@ -87,12 +125,21 @@ def seqs_to_instances(sequences: Sequence[str]) -> list[SystemInstance]:
 
 
 def system_from_dataset(dataset: Dataset) -> System:
-    """
-    Build an evedesign System from a ProteinGym Dataset.
+    """Build an evedesign System from a ProteinGym Dataset.
 
     We default to a single-component protein system as there are no other cases
     in ProteinGym (yet...) and assume structure numbering matches the rep
     sequence and first_index by convention.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        ProteinGym dataset to build the System from.
+
+    Returns
+    -------
+    System
+        An evedesign System with a single Protein.
     """
     return System([
         Protein(
@@ -119,16 +166,28 @@ def system_from_dataset(dataset: Dataset) -> System:
     ])
 
 
-def _labeled_dataset_from_df(df: pl.DataFrame, target: str) -> LabeledInstanceDataset:
-    """
-    Build a LabeledInstanceDataset from a ProteinGym dataframe slice.
+def labeled_dataset_from_df(df: pl.DataFrame, target: str) -> LabeledInstanceDataset:
+    """Build a LabeledInstanceDataset from a ProteinGym dataframe slice.
 
     TODO: need to handle insertion/deletion datasets properly; sequences are
-    currently treated as full fixed-length substitution sequences. 
+    currently treated as full fixed-length substitution sequences.
 
     Comment:
     these instances have lowercase/gaps, so I guess it will be on each
     individual model to featurize accordingly.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+        ProteinGym dataframe slice containing a sequence column and the
+        target column.
+    target : str
+        Name of the target column to extract labels from.
+
+    Returns
+    -------
+    LabeledInstanceDataset
+        Dataset mapping each sequence instance to its target value.
     """
     sequences = df["sequence"].to_list()
     # missing target values come back as None
@@ -144,34 +203,41 @@ def dataset_to_evedesign(
     subsets: Subsets,
     split: str,
     target: str,
-    test_fold: int | None = None,
+    test_fold: int,
 ) -> tuple[System, LabeledInstanceTrainTestDataset]:
-    """
-    Map a ProteinGym dataset (subset) to evedesign representations, following the
-    train/test conventions of the benchmark training entrypoint.
+    """Map a ProteinGym dataset (subset) to evedesign representations.
 
-    Params
-    subsets:
-        Loaded ProteinGym Subsets object (ex. Subsets.from_path(path))
-    split:
-        Name of the split column in dms csv
-    target:
-        Name of the assay target to extract ex. 'DMS Score'
-    test_fold:
+    Follows the train/test conventions of the benchmark training entrypoint.
+
+    Parameters
+    ----------
+    subsets : Subsets
+        Loaded ProteinGym Subsets object (ex. Subsets.from_path(path)).
+    split : str
+        Name of the split column in the dms csv.
+    target : str
+        Name of the assay target to extract, ex. 'DMS Score'.
+    test_fold : int
         Index of the slice to use as the test set. The remaining folds
         form the training set. If None, the whole dataset is used as the
         training set and the test set is None.
 
-    Gives
-    system:
+    Returns
+    -------
+    system : System
         evedesign System with a single Protein. We default to a
         single-component protein system as there are no other cases in ProteinGym
         (yet), and assume structure numbering matches the rep sequence and
-        first_index by convention
-    data:
-        LabeledInstanceTrainTestDataset mapping each assay sequence (as a
-        SystemInstance) to its target value, split into train/test sets according
-        to test_fold
+        first_index by convention.
+    data : LabeledInstanceTrainTestDataset
+        Dataset mapping each assay sequence (as a SystemInstance) to its target
+        value, split into train/test sets according to test_fold.
+
+    Raises
+    ------
+    ValueError
+        If target is not present in the dataset assay targets, or if
+        test_fold is out of range for the given split.
     """
 
     subset_split = subsets[split]
@@ -186,29 +252,25 @@ def dataset_to_evedesign(
             f"valid options are: {', '.join(valid_targets)}"
         )
 
-    if test_fold is None:
-        training_set = _labeled_dataset_from_df(dataset.to_df(), target)
-        test_set = None
-    else:
-        n_folds = len(subset_split.slices)
-        if not 0 <= test_fold < n_folds:
-            raise ValueError(
-                f"test_fold {test_fold} is out of range for split '{split}' "
-                f"with {n_folds} folds"
-            )
+    n_folds = len(subset_split.slices)
+    if not 0 <= test_fold < n_folds:
+        raise ValueError(
+            f"test_fold {test_fold} is out of range for split '{split}' "
+            f"with {n_folds} folds"
+        )
 
-        # test set is the requested fold; training set is everything else
-        test_df = dataset[subset_split.slices[test_fold]].to_df()
-        test_set = _labeled_dataset_from_df(test_df, target)
+    # test set is the requested fold; training set is everything else
+    test_df = dataset[subset_split.slices[test_fold]].to_df()
+    test_set = labeled_dataset_from_df(test_df, target)
 
-        train_dfs = [
-            dataset[subset_split.slices[i]].to_df()
-            for i in range(n_folds)
-            if i != test_fold
-        ]
+    train_dfs = [
+        dataset[subset_split.slices[i]].to_df()
+        for i in range(n_folds)
+        if i != test_fold
+    ]
 
-        train_df = pl.concat(train_dfs) if train_dfs else test_df
-        training_set = _labeled_dataset_from_df(train_df, target)
+    train_df = pl.concat(train_dfs) if train_dfs else test_df
+    training_set = labeled_dataset_from_df(train_df, target)
 
     data = LabeledInstanceTrainTestDataset(
         training_set=training_set,
