@@ -31,6 +31,7 @@ evmutation2 = ["torch", "evmutation2"]
 esm2 = ["torch", "transformers"]
 mpnn = ["torch", "prody"]
 umap = ["umap-learn"]
+proteingym = ["proteingym-base @ git+https://github.com/ProteinGym/proteingym-base.git"]
 
 [project.urls]
 Documentation = "https://github.com/evedesignbio/evedesign#readme"
@@ -39,6 +40,9 @@ Source = "https://github.com/evedesignbio/evedesign"
 
 [tool.hatch.version]
 path = "src/evedesign/__about__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.envs.types]
 extra-dependencies = [
