@@ -57,17 +57,9 @@ def msa_to_sequences(dataset: Dataset) -> sequence.Sequences | None:
     if len(dataset.msas) == 0:
         return None
 
-    # this case is non-trivial scientifically yet highly relevant; discuss first before implementing...
-    #if dataset.msas[0].sequence_start is not None and dataset.msas[0].sequence_start != 1:
-    #    raise NotImplementedError(
-    #        "MSA region start different from 1"
-    #    )
-
     # take first MSA by default for now
     first_msa = dataset.msas[0].value
 
-    # TODO: length of weights and sequences not equal, presumaby invalid sequence
-    #  filtered out - but no straightforward way to match them back together?
     if len(dataset.msa_weights) == 0:
         weights = None
     else:
@@ -168,9 +160,6 @@ def system_from_dataset(dataset: Dataset) -> System:
 
 def labeled_dataset_from_df(df: pl.DataFrame, target: str) -> LabeledInstanceDataset:
     """Build a LabeledInstanceDataset from a ProteinGym dataframe slice.
-
-    TODO: need to handle insertion/deletion datasets properly; sequences are
-    currently treated as full fixed-length substitution sequences.
 
     Comment:
     these instances have lowercase/gaps, so I guess it will be on each
