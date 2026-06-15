@@ -190,9 +190,9 @@ def labeled_dataset_from_df(df: pl.DataFrame, target: str) -> LabeledInstanceDat
 
 def dataset_to_evedesign(
     subsets: Subsets,
-    split: str,
+    split: str | None,
     target: str,
-    test_fold: int,
+    test_fold: int | None,
 ) -> tuple[System, LabeledInstanceTrainTestDataset]:
     """Map a ProteinGym dataset (subset) to evedesign representations.
 
@@ -202,14 +202,15 @@ def dataset_to_evedesign(
     ----------
     subsets : Subsets
         Loaded ProteinGym Subsets object (ex. Subsets.from_path(path)).
-    split : str
-        Name of the split column in the dms csv.
+    split : str or None
+        Name of the split column in the dms csv. Unused when test_fold is
+        None (the unsupervised case), so may be passed as None there.
     target : str
         Name of the assay target to extract, ex. 'DMS Score'.
-    test_fold : int
+    test_fold : int or None
         Index of the slice to use as the test set. The remaining folds
-        form the training set. If None, the whole dataset is used as the
-        training set and the test set is None.
+        form the training set. If None (unsupervised), the whole dataset 
+        is used as the training set and the test set is None.
 
     Returns
     -------
@@ -229,8 +230,7 @@ def dataset_to_evedesign(
         test_fold is out of range for the given split.
     """
 
-    subset_split = subsets[split]
-    dataset = subset_split.dataset
+    dataset = subsets.dataset
 
     system = system_from_dataset(dataset)
 
@@ -240,6 +240,17 @@ def dataset_to_evedesign(
             f"Target '{target}' is not present in dataset assay targets, "
             f"valid options are: {', '.join(valid_targets)}"
         )
+
+    # zero-shot case
+    if test_fold is None:
+        training_set = labeled_dataset_from_df(dataset.to_df(), target)
+        data = LabeledInstanceTrainTestDataset(
+            training_set=training_set,
+            test_set=None,
+        )
+        return system, data
+
+    subset_split = subsets[split]
 
     n_folds = len(subset_split.slices)
     if not 0 <= test_fold < n_folds:
