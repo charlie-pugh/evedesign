@@ -19,7 +19,7 @@ class LabeledInstanceDataset:
         self,
         instances: Sequence[SystemInstance],
         labels: dict[str, Sequence[float | None]],
-        splits: DatasetSplitMap = None,
+        splits: DatasetSplitMap | None = None,
     ):
         """
         Create new dataset of instances ("X") and corresponding labels ("y")
@@ -86,7 +86,7 @@ class LabeledInstanceDataset:
         self,
         name: str | None,
         drop_missing: bool = True
-    ) -> tuple[list[SystemInstance], list[float | None], DatasetSplitMap]:
+    ) -> tuple[list[SystemInstance], list[float | None], DatasetSplitMap | None]:
         """
         Select a single series from dataset
 
@@ -147,34 +147,3 @@ class LabeledInstanceDataset:
             splits_mapped = None
 
         return instances_filt, series_filt, splits_mapped
-
-
-# TODO: remove class entirely after refactor completed
-class LabeledInstanceTrainTestDataset:
-    def __init__(
-        self,
-        training_set: LabeledInstanceDataset,
-        test_set: LabeledInstanceDataset | None = None
-    ):
-        """
-        Training/test dataset split
-
-        Parameters
-        ----------
-        training_set
-            Labeled instances belonging to training data
-        test_set
-            Labeled instances belonging to test data. Can be None if no explicit
-            test set is specified.
-        """
-        if test_set is not None:
-            if set(training_set.names) != set(test_set.names):
-                raise ValueError(
-                    "Training and test data must contain the same series names"
-                )
-
-        # make sure datasets agree
-        self.training_set = training_set
-        self.test_set = test_set
-
-        raise ValueError("This class has been deprecated")

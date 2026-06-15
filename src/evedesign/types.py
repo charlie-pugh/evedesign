@@ -56,7 +56,7 @@ class DatasetSplit(TypedDict):
     test: Sequence[int]
     val: NotRequired[Sequence[int]]
 
-DatasetSplitMap = dict[str, DatasetSplit] | None
+DatasetSplitMap = dict[str, DatasetSplit]
 
 # status, progress (optional), message (optional)
 Status = Literal["running", "done", "failed"]

@@ -4,7 +4,7 @@ import polars as pl
 from biotite.structure import AtomArray
 
 from evedesign import sequence
-from evedesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
+from evedesign.dataset import LabeledInstanceDataset
 from evedesign.structure import Structure
 from evedesign.system import EntityInstance, Protein, System, SystemInstance
 
@@ -193,7 +193,7 @@ def dataset_to_evedesign(
     split: str | None,
     target: str,
     test_fold: int | None,
-) -> tuple[System, LabeledInstanceTrainTestDataset]:
+) -> tuple[System, LabeledInstanceDataset | None, LabeledInstanceDataset | None]:
     """Map a ProteinGym dataset (subset) to evedesign representations.
 
     Follows the train/test conventions of the benchmark training entrypoint.
@@ -219,9 +219,12 @@ def dataset_to_evedesign(
         single-component protein system as there are no other cases in ProteinGym
         (yet), and assume structure numbering matches the rep sequence and
         first_index by convention.
-    data : LabeledInstanceTrainTestDataset
-        Dataset mapping each assay sequence (as a SystemInstance) to its target
-        value, split into train/test sets according to test_fold.
+    training_data : LabeledInstanceDataset
+        Training dataset mapping each assay sequence (as a SystemInstance) to its target
+        value (split into train/test sets according to test_fold)
+    test_data : LabeledInstanceDataset
+        Test dataset mapping each assay sequence (as a SystemInstance) to its target
+        value (split into train/test sets according to test_fold)
 
     Raises
     ------
@@ -241,14 +244,10 @@ def dataset_to_evedesign(
             f"valid options are: {', '.join(valid_targets)}"
         )
 
-    # zero-shot case
+    # zero-shot case, assign everything to test set
     if test_fold is None:
-        training_set = labeled_dataset_from_df(dataset.to_df(), target)
-        data = LabeledInstanceTrainTestDataset(
-            training_set=training_set,
-            test_set=None,
-        )
-        return system, data
+        test_set = labeled_dataset_from_df(dataset.to_df(), target)
+        return system, None, test_set
 
     subset_split = subsets[split]
 
@@ -272,9 +271,4 @@ def dataset_to_evedesign(
     train_df = pl.concat(train_dfs) if train_dfs else test_df
     training_set = labeled_dataset_from_df(train_df, target)
 
-    data = LabeledInstanceTrainTestDataset(
-        training_set=training_set,
-        test_set=test_set,
-    )
-
-    return system, data
+    return system, training_set, test_set
