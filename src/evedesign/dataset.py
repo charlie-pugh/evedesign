@@ -1,5 +1,7 @@
+from itertools import combinations
 from typing import Sequence
 from evedesign.system import SystemInstance
+from evedesign.types import DatasetSplitMap
 
 
 class LabeledInstanceDataset:
@@ -9,13 +11,15 @@ class LabeledInstanceDataset:
 
     Missing labels must be encoded with None (do not use NaN as this will break JSON serialization)
 
-    # TODO: add utility method to create from dataframe
-    # TODO: add utility method for creating train/test split
+    TODO: add utility method to create from dataframe/pgdata
+    TODO: add global train/val split
+    TODO: allow to instantiate splits with "cv", "random_train_test", etc. or add utility method
     """
     def __init__(
         self,
         instances: Sequence[SystemInstance],
         labels: dict[str, Sequence[float | None]],
+        splits: DatasetSplitMap = None,
     ):
         """
         Create new dataset of instances ("X") and corresponding labels ("y")
@@ -27,6 +31,9 @@ class LabeledInstanceDataset:
         labels
             Map from value name to a sequence of values. Each sequence must have exactly
             the same length as instances. Missing values must be encoded with None.
+        splits
+            Sequence of train/validation/test splits (e.g. single train/test split,
+            cross-validation, ...) for model evaluation
         """
         if len(labels) == 0:
             raise ValueError(
@@ -39,8 +46,30 @@ class LabeledInstanceDataset:
                     f"Length of instances and values for series {name} does not agree for training set"
                 )
 
+        # validate splits if defined
+        if splits is not None:
+            for split_name, split in splits.items():
+                # check all train/val/test subsets
+                for subset_name, subset_indices in split.items():
+                    invalid_idx = [
+                        index for index in subset_indices if index < 0 or index >= len(instances)
+                    ]
+                    if len(invalid_idx) > 0:
+                        raise ValueError(
+                            f"Subset {subset_name} contains out-of-bound indices: {invalid_idx}"
+                        )
+
+                # check there is no overlap between train/val/test within each split
+                for (s1_name, s1), (s2_name, s2) in combinations(split.items(), r=2):
+                    overlap = set(s1).intersection(set(s2))
+                    if len(overlap) > 0:
+                        raise ValueError(
+                            f"Elements overlap between {s1_name} and {s2_name}: {overlap}"
+                        )
+
         self.instances = instances
         self.labels = labels
+        self._splits = splits
 
     @property
     def names(self) -> list[str]:
@@ -57,7 +86,7 @@ class LabeledInstanceDataset:
         self,
         name: str | None,
         drop_missing: bool = True
-    ) -> tuple[list[SystemInstance], list[float | None]]:
+    ) -> tuple[list[SystemInstance], list[float | None], DatasetSplitMap]:
         """
         Select a single series from dataset
 
@@ -97,9 +126,30 @@ class LabeledInstanceDataset:
             value for value in series if value is not None or not drop_missing
         ]
 
-        return instances_filt, series_filt
+        # adjust splits to filtered list, as indices might change to due element removal
+        if self._splits is not None:
+            # index mapping for retained elements
+            index_map = {
+                old_index: new_index
+                for (new_index, old_index) in
+                enumerate(index for index, value in enumerate(series) if value is not None or not drop_missing)
+            }
+
+            splits_mapped = {
+                split_name: {
+                    subset_name: [
+                        index_map[index] for index in subset if index in index_map
+                    ] for subset_name, subset in split.items()
+                }
+                for split_name, split in self._splits.items()
+            }
+        else:
+            splits_mapped = None
+
+        return instances_filt, series_filt, splits_mapped
 
 
+# TODO: remove class entirely after refactor completed
 class LabeledInstanceTrainTestDataset:
     def __init__(
         self,
@@ -126,3 +176,5 @@ class LabeledInstanceTrainTestDataset:
         # make sure datasets agree
         self.training_set = training_set
         self.test_set = test_set
+
+        raise ValueError("This class has been deprecated")
