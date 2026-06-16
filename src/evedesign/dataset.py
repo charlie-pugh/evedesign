@@ -1,8 +1,9 @@
 from itertools import combinations
 from typing import Sequence, Literal
+import numpy as np
 from sklearn.model_selection import KFold
 from evedesign.system import SystemInstance
-from evedesign.types import DatasetSplitMap
+from evedesign.types import DatasetSplit, DatasetSplitMap
 
 
 class LabeledInstanceDataset:
@@ -10,16 +11,15 @@ class LabeledInstanceDataset:
     Basic mapping of instances to one or multiple labels in "long" format (map from string key to values).
     Can be used for regression and classification tasks.
 
-    Missing labels must be encoded with None (do not use NaN as this will break JSON serialization)
-
-    TODO: add global train/val split
-    TODO: allow to instantiate splits with "cv", "random_train_test", etc. or add utility method
+    Missing labels must be encoded with None (do not use NaN as this will break JSON serialization). Datasets
+    also may not contain -inf or inf values to allow JSON serialization.
     """
     def __init__(
         self,
         instances: Sequence[SystemInstance],
         labels: dict[str, Sequence[float | None]],
         splits: DatasetSplitMap | tuple[[Literal["cv"]], int] | None = None,
+        final_train_val_split: DatasetSplit | None = None,
     ):
         """
         Create new dataset of instances ("X") and corresponding labels ("y")
@@ -42,6 +42,10 @@ class LabeledInstanceDataset:
             When using select() drop_missing=True, affected datapoints will be removed from
             splits. If requiring exactly balanced splits, it is best to exclude those
             datapoints before instantiating the LabeledInstanceDataset.
+        final_train_val_split:
+            Training/validation set split for final model training on full dataset (not to be
+            used for evaluation). Whether this split will be used is dependent on the implementation
+            of the model that is fitted to the dataset.
         """
         if len(labels) == 0:
             raise ValueError(
@@ -53,6 +57,39 @@ class LabeledInstanceDataset:
                 raise ValueError(
                     f"Length of instances and values for series {name} does not agree for training set"
                 )
+
+            if not np.isfinite(series).all():
+                raise ValueError(
+                    f"Series {name} contains non-finite values (nan, inf or -inf)"
+                )
+
+        def _validate_split_or_raise(split_to_check, required_keys, split_name):
+            for k in required_keys:
+                if k not in split_to_check:
+                    raise ValueError("Missing required split key '{}'".format(k))
+
+            # check all train/val/test subsets
+            all_indices = set()
+            for subset_name, subset_indices in split_to_check.items():
+                invalid_idx = [
+                    index for index in subset_indices if index < 0 or index >= len(instances)
+                ]
+                if len(invalid_idx) > 0:
+                    raise ValueError(
+                        f"Subset {subset_name} contains out-of-bound indices: {invalid_idx}"
+                    )
+                all_indices.update(subset_indices)
+
+            if len(all_indices) != len(instances):
+                raise ValueError(f"Split {split_name} does not contain full dataset")
+
+            # check there is no overlap between train/val/test within each split
+            for (s1_name, s1), (s2_name, s2) in combinations(split_to_check.items(), r=2):
+                overlap = set(s1).intersection(set(s2))
+                if len(overlap) > 0:
+                    raise ValueError(
+                        f"Elements overlap between {s1_name} and {s2_name}: {overlap}"
+                    )
 
         # validate splits if defined
         if splits is not None:
@@ -72,31 +109,24 @@ class LabeledInstanceDataset:
                 }
             elif isinstance(splits, dict):
                 for split_name, split in splits.items():
-                    # check all train/val/test subsets
-                    for subset_name, subset_indices in split.items():
-                        invalid_idx = [
-                            index for index in subset_indices if index < 0 or index >= len(instances)
-                        ]
-                        if len(invalid_idx) > 0:
-                            raise ValueError(
-                                f"Subset {subset_name} contains out-of-bound indices: {invalid_idx}"
-                            )
-
-                    # check there is no overlap between train/val/test within each split
-                    for (s1_name, s1), (s2_name, s2) in combinations(split.items(), r=2):
-                        overlap = set(s1).intersection(set(s2))
-                        if len(overlap) > 0:
-                            raise ValueError(
-                                f"Elements overlap between {s1_name} and {s2_name}: {overlap}"
-                            )
+                    # validation split must always contain train and test
+                    _validate_split_or_raise(
+                        split, required_keys=["train", "test"], split_name=split_name
+                    )
             else:
                 raise ValueError(
                     "Invalid split specification"
                 )
 
+        if final_train_val_split is not None:
+            _validate_split_or_raise(
+                final_train_val_split, required_keys=["train", "val"], split_name="final_train_val_split"
+            )
+
         self.instances = instances
         self.labels = labels
         self._splits = splits
+        self.final_train_val_split = final_train_val_split
 
     @property
     def names(self) -> list[str]:
@@ -113,7 +143,7 @@ class LabeledInstanceDataset:
         self,
         name: str | None,
         drop_missing: bool = True
-    ) -> tuple[list[SystemInstance], list[float | None], DatasetSplitMap | None]:
+    ) -> tuple[list[SystemInstance], list[float | None], DatasetSplitMap | None, DatasetSplit | None]:
         """
         Select a single series from dataset
 
@@ -154,14 +184,15 @@ class LabeledInstanceDataset:
         ]
 
         # adjust splits to filtered list, as indices might change to due element removal
-        if self._splits is not None:
-            # index mapping for retained elements
-            index_map = {
-                old_index: new_index
-                for (new_index, old_index) in
-                enumerate(index for index, value in enumerate(series) if value is not None or not drop_missing)
-            }
+        # index mapping for retained elements
+        index_map = {
+            old_index: new_index
+            for (new_index, old_index) in
+            enumerate(index for index, value in enumerate(series) if value is not None or not drop_missing)
+        }
 
+        # map evaluation splits
+        if self._splits is not None:
             splits_mapped = {
                 split_name: {
                     subset_name: [
@@ -173,4 +204,14 @@ class LabeledInstanceDataset:
         else:
             splits_mapped = None
 
-        return instances_filt, series_filt, splits_mapped
+        # map final train/val split
+        if self.final_train_val_split is not None:
+            final_split_mapped = {
+                subset_name: [
+                    index_map[index] for index in subset if index in index_map
+                ] for subset_name, subset in self.final_train_val_split.items()
+            }
+        else:
+            final_split_mapped = None
+
+        return instances_filt, series_filt, splits_mapped, final_split_mapped

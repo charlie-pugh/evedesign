@@ -53,7 +53,7 @@ class ModelStats(TypedDict):
 
 class DatasetSplit(TypedDict):
     train: Sequence[int]
-    test: Sequence[int]
+    test: NotRequired[Sequence[int]]
     val: NotRequired[Sequence[int]]
 
 DatasetSplitMap = dict[str, DatasetSplit]

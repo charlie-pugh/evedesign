@@ -421,8 +421,9 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
                 "system does not agree to embedder or scorer"
             )
 
-        # retrieve target series, do not use missing values
-        instances, values, splits = data.select(
+        # retrieve target series, do not use missing values; we drop the test/val split as not used
+        # by this model implementation
+        instances, values, splits, _ = data.select(
             self.target_name, drop_missing=True
         )
 
