@@ -3,32 +3,47 @@ import numpy as np
 
 from evedesign.model import BaseModel, Transformer
 from evedesign.system import Entity, System, SystemInstance
-from evedesign.types import BioPolymers, StatusCallback
+from evedesign.types import StatusCallback
 
 
-class OneHot(BaseModel, Transformer):
+class OneHotEmbedder(BaseModel, Transformer):
     """
     Model wrapper that transforms biopolymer sequences into per-residue one-hot embeddings.
 
-    Each biopolymer entity is encoded against its own type's alphabet:
+    Each biopolymer entity is encoded against an alphabet that always includes the gap symbol:
       - protein: 20 canonical amino acids + gap (21 columns)
-      - dna/rna: canonical nucleotides (4 columns)
+      - dna: 4 canonical nucleotides + gap (5 columns)
+      - rna: 4 canonical nucleotides + gap (5 columns)
 
-    The resulting embedding is a 2D array of shape [len(rep), len(alphabet)] stored on
-    EntityInstance.embedding. Class order matches Entity.alphabet() for the entity type.
+    Insertions
+    ----------
+    Controlled by independent_insertion_alphabet (applies to all biopolymer types):
+      - False: insertions are treated as match states (each symbol is upper-cased before encoding)
+      - True: insertion state are treated as their own independent alphabet
 
-    Any symbol in a representation that is not part of the corresponding entity's alphabet raises a ValueError.
+    Shared alphabet
+    ------------------------
+    Controlled by merge_alphabets:
+      - False: every entity is encoded against its own alphabet
+      - True: a single master alphabet is built by concatenating one block per unique
+              biopolymer type present in the system, in canonical order (protein+dna+rna)
+              Every entity's embedding has the full master width, but a given entity only
+              populates the columns belonging to its own type's block.
 
-    Note: gaps are encodable for proteins -> (hence handles_deletions is True)
+    The resulting embedding is a 2D array of shape [len(rep), len(alphabet)] stored as
+    EntityInstance.embedding.
     """
-    name: str = "OneHot"
+    name: str = "OneHotEmbedder"
     citations: list[str] = []
+
+    # canonical ordering of biopolymer types when building a merged master alphabet
+    _CANONICAL_TYPE_ORDER: list[str] = ["protein", "dna", "rna"]
 
     # core properties
     requires_target: bool = False
     requires_fixed_length: bool = False
     handles_deletions: bool = True
-    handles_insertions: bool = False
+    handles_insertions: bool = True
     requires_gpu: bool = False
     supports_gpu: bool = False
     supports_gpu_parallel: bool = False
@@ -37,10 +52,28 @@ class OneHot(BaseModel, Transformer):
     required_entity_attributes: list[str] | None = []
     optional_entity_attributes: list[str] | None = []
 
-    def __init__(self):
+    def __init__(
+        self,
+        merge_alphabets: bool = False,
+        independent_insertion_alphabet: bool = False,
+    ):
+        """
+        Parameters
+        ----------
+        merge_alphabets
+            If True, encode every entity against a single master alphabet built by
+            concatenating one alphabet block per unique biopolymer type present.
+            If False, each entity uses its own type's alphabet.
+        independent_insertion_alphabet
+            If True, append insertion states to each biopolymer alphabet. 
+            If False, insertions are folded into match states by
+            upper-casing symbols before encoding.
+        """
         self._system = None
+        self._merge_alphabets = merge_alphabets
+        self._independent_insertion_alphabet = independent_insertion_alphabet
         # per-entity-index alphabet and symbol to column lookup--constructed in build()
-        self._alphabets: dict[int, list[str]] = {}
+        self._entity_to_alphabet: dict[int, list[str]] = {}
         self._symbol_to_index: dict[int, dict[str, int]] = {}
 
     @property
@@ -51,14 +84,14 @@ class OneHot(BaseModel, Transformer):
     def system(self) -> System | None:
         return self._system
 
-    @staticmethod
-    def _entity_alphabet(entity: Entity) -> list[str]:
+    def _entity_alphabet(self, entity: Entity) -> list[str]:
         """
-        proteins include the gap symbol (21 symbols),
-        nucleotide entities use the 4 canonicals.
+        Alphabet for a single biopolymer entity: canonicals + gap, plus dedicated
+        insertion states when independent_insertion_alphabet is True.
         """
         return entity.alphabet(
-            include_gap=(entity.type == "protein"), include_inserts=False
+            include_gap=True,
+            include_inserts=self._independent_insertion_alphabet,
         )
 
     @classmethod
@@ -69,8 +102,8 @@ class OneHot(BaseModel, Transformer):
         if len(system) == 0:
             return False, "System must contain at least one entity"
 
-        if not any(entity.type in BioPolymers for entity in system):
-            return False, "System must contain at least one biopolymer entity to encode"
+        if not all(entity.is_biopolymer() for entity in system):
+            return False, "All entities in the system must be biopolymers to encode"
 
         return True, ""
 
@@ -83,33 +116,74 @@ class OneHot(BaseModel, Transformer):
         self.can_model_or_raise(system, data)
         self._system = system
 
-        # assign alphabet and index mapper
-        self._alphabets = {
-            entity_idx: self._entity_alphabet(entity)
-            for entity_idx, entity in enumerate(system)
-            if entity.type in BioPolymers
-        }
-        self._symbol_to_index = {
-            entity_idx: {symbol: col for col, symbol in enumerate(alphabet)}
-            for entity_idx, alphabet in self._alphabets.items()
-        }
+        if self._merge_alphabets:
+            self._build_merged_alphabets(system)
+        else:
+            self._entity_to_alphabet = {
+                entity_idx: self._entity_alphabet(entity)
+                for entity_idx, entity in enumerate(system)
+                if entity.is_biopolymer()
+            }
+            self._symbol_to_index = {
+                entity_idx: {symbol: col for col, symbol in enumerate(alphabet)}
+                for entity_idx, alphabet in self._entity_to_alphabet.items()
+            }
 
         return self
+
+    def _build_merged_alphabets(self, system: System) -> None:
+        """
+        Build a single master alphabet by concatenating one block per unique biopolymer
+        type present. Every entity is mapped to the master alphabet.
+        """
+        # one representative entity per unique type, preserving canonical order
+        type_to_entity: dict[str, Entity] = {}
+        for entity in system:
+            if entity.is_biopolymer() and entity.type not in type_to_entity:
+                type_to_entity[entity.type] = entity
+        ordered_types = [t for t in self._CANONICAL_TYPE_ORDER if t in type_to_entity]
+
+        master_alphabet: list[str] = []
+        type_offset: dict[str, int] = {}
+        type_alphabet: dict[str, list[str]] = {}
+        for entity_type in ordered_types:
+            block = self._entity_alphabet(type_to_entity[entity_type])
+            type_offset[entity_type] = len(master_alphabet)
+            type_alphabet[entity_type] = block
+            master_alphabet = master_alphabet + block
+
+        self._entity_to_alphabet = {}
+        self._symbol_to_index = {}
+        for entity_idx, entity in enumerate(system):
+            if not entity.is_biopolymer():
+                continue
+            offset = type_offset[entity.type]
+            block = type_alphabet[entity.type]
+            # every entity shares the full master width...
+            self._entity_to_alphabet[entity_idx] = master_alphabet
+            # (but populates columns within its own type block)
+            self._symbol_to_index[entity_idx] = {
+                symbol: offset + col for col, symbol in enumerate(block)
+            }
 
     def _one_hot(self, entity_idx: int, rep: np.ndarray) -> np.ndarray:
         """
         One-hot encode a entity representation into a [len(rep), len(alphabet)] one-hot array.
         """
+        alphabet = self._entity_to_alphabet[entity_idx]
         symbol_to_index = self._symbol_to_index[entity_idx]
-        encoding = np.zeros((len(rep), len(symbol_to_index)), dtype=np.float32)
+        encoding = np.zeros((len(rep), len(alphabet)), dtype=np.float32)
 
         for pos, symbol in enumerate(rep):
             symbol = str(symbol)
+            # when there is no dedicated insertion alphabet, inserts uppercased for encoding
+            if not self._independent_insertion_alphabet:
+                symbol = symbol.upper()
             col = symbol_to_index.get(symbol)
             if col is None:
                 raise ValueError(
                     f"Symbol {symbol!r} at position {pos} of entity {entity_idx} is not part of its "
-                    f"one-hot alphabet {self._alphabets[entity_idx]}"
+                    f"one-hot alphabet {alphabet}"
                 )
             encoding[pos, col] = 1.0
 
@@ -134,13 +208,13 @@ class OneHot(BaseModel, Transformer):
         if entity is not None:
             if not 0 <= entity < len(self.system):
                 raise ValueError(f"Invalid entity index: {entity}")
-            if self.system[entity].type not in BioPolymers:
+            if not self.system[entity].is_biopolymer():
                 raise ValueError(
                     f"Entity {entity} is of type {self.system[entity].type!r}, can only one-hot biopolymers"
                 )
             target_entities = [entity]
         else:
-            target_entities = sorted(self._alphabets)
+            target_entities = sorted(self._entity_to_alphabet)
 
         transformed_instances = []
         for inst_idx, instance in enumerate(instances):
