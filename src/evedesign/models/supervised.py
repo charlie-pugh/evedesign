@@ -6,7 +6,7 @@ from typing import Any, Sequence, Literal
 import numpy as np
 from sklearn.base import ClassifierMixin
 from sklearn.exceptions import NotFittedError
-from sklearn.metrics import r2_score, average_precision_score, roc_auc_score, matthews_corrcoef
+from sklearn.metrics import r2_score, average_precision_score, roc_auc_score
 from sklearn.utils import all_estimators
 from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
@@ -65,7 +65,7 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
         target_name: str | None = None,
         pooling: Literal["mean", "max"] | None = "mean",
         batch_size: BatchSize = 128,
-        is_classifier: bool = False,
+        is_classifier: bool = False
     ):
         """
         Train supervised regression model on top of molecular model embeddings/scores. Positional embeddings
@@ -154,10 +154,10 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
         # set evaluation scores depending if we have a classifier or regressor
         self._is_classifier = is_classifier
         if self._is_classifier:
+            # for now, we only allow to use sklearn metrics that receive scores/probabilities, not class labels
             self._eval_scores = {
                 "rocauc": roc_auc_score,
                 "average_precision": average_precision_score,
-                "mcc": matthews_corrcoef,
             }
         else:
             # default to regression
@@ -453,6 +453,13 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
                 self._y_true += [y_split_test]
                 self._y_pred += [y_pred]
 
+                # remove -inf values from log probabilities for classifiers
+                # or otherwise scoring will crash
+                if self._is_classifier:
+                    # copy so we don't modify list above
+                    y_pred = y_pred.copy()
+                    y_pred[y_pred == -np.inf] = np.finfo(np.float64).tiny
+
                 # compute evaluation scores
                 for name, eval_score in self._eval_scores.items():
                     self._scores[name] = self._scores.get(name, []) + [
@@ -500,7 +507,7 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
 
 class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
     """
-    Supervised property prediction from pooled molecular embeddings/scoress. Can stack any
+    Supervised property prediction from pooled molecular embeddings/scores. Can stack any
     scikit-learn-compatible predictors that implement fit() and predict()
     methods, including pipelines.
     """
@@ -524,6 +531,9 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
         """
         Train supervised scikit-learn regression/classification model on top of molecular model embeddings/scores.
         Positional embeddings can be pooled to one feature vector along the position dimension.
+
+        Note that classifiers will return scores based on class probabilities rather than class labels to facilitate
+        use for quantative variant scoring.
 
         Can be used in either of two modes with pre-computed embeddings/scores, or through on-the-fly computation
         (cf. embedder param). The latter mode is needed to use mutation scoring methods, e.g. for Gibbs sampling
@@ -630,7 +640,13 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
         self,
         instances_transformed,
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        # Predict with sckit-learn model
-        return self.predictor.predict(
-            instances_transformed
-        ).astype(float)
+        # Predict with sckit-learn model; if a classifier
+        # we use log probabilities instead of class labels
+        if self._is_classifier:
+            return self.predictor.predict_log_proba(
+                instances_transformed
+            )[:, 1].astype(float)
+        else:
+            return self.predictor.predict(
+                instances_transformed
+            ).astype(float)
