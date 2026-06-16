@@ -54,7 +54,7 @@ class OneHotEmbedder(BaseModel, Transformer):
 
     def __init__(
         self,
-        merge_alphabets: bool = False,
+        merge_alphabets: bool = True,
         independent_insertion_alphabet: bool = False,
     ):
         """
