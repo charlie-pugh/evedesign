@@ -1,5 +1,6 @@
 from itertools import combinations
-from typing import Sequence
+from typing import Sequence, Literal
+from sklearn.model_selection import KFold
 from evedesign.system import SystemInstance
 from evedesign.types import DatasetSplitMap
 
@@ -11,7 +12,6 @@ class LabeledInstanceDataset:
 
     Missing labels must be encoded with None (do not use NaN as this will break JSON serialization)
 
-    TODO: add utility method to create from dataframe/pgdata
     TODO: add global train/val split
     TODO: allow to instantiate splits with "cv", "random_train_test", etc. or add utility method
     """
@@ -19,7 +19,7 @@ class LabeledInstanceDataset:
         self,
         instances: Sequence[SystemInstance],
         labels: dict[str, Sequence[float | None]],
-        splits: DatasetSplitMap | None = None,
+        splits: DatasetSplitMap | tuple[[Literal["cv"]], int] | None = None,
     ):
         """
         Create new dataset of instances ("X") and corresponding labels ("y")
@@ -33,7 +33,15 @@ class LabeledInstanceDataset:
             the same length as instances. Missing values must be encoded with None.
         splits
             Sequence of train/validation/test splits (e.g. single train/test split,
-            cross-validation, ...) for model evaluation
+            cross-validation, ...) for model evaluation. Can also supply a tuple
+            ("cv", fold_number) to perform a random, non-stratified cross-validation
+            split. Data will be shuffled with a fixed random seed before fold assignment.
+            Note that random cross-validation splits are usually not meaningful
+            in the context of biomolecular design, so using this convenience feature is not
+            encouraged.
+            When using select() drop_missing=True, affected datapoints will be removed from
+            splits. If requiring exactly balanced splits, it is best to exclude those
+            datapoints before instantiating the LabeledInstanceDataset.
         """
         if len(labels) == 0:
             raise ValueError(
@@ -48,24 +56,43 @@ class LabeledInstanceDataset:
 
         # validate splits if defined
         if splits is not None:
-            for split_name, split in splits.items():
-                # check all train/val/test subsets
-                for subset_name, subset_indices in split.items():
-                    invalid_idx = [
-                        index for index in subset_indices if index < 0 or index >= len(instances)
-                    ]
-                    if len(invalid_idx) > 0:
-                        raise ValueError(
-                            f"Subset {subset_name} contains out-of-bound indices: {invalid_idx}"
-                        )
+            if isinstance(splits, tuple) and len(splits) == 2 and splits[0] == "cv":
+                # fix random seed for reproducibility; in any more advanced cases user can supply own splits
+                kfold = KFold(
+                    n_splits=splits[1], shuffle=True, random_state=42
+                )
 
-                # check there is no overlap between train/val/test within each split
-                for (s1_name, s1), (s2_name, s2) in combinations(split.items(), r=2):
-                    overlap = set(s1).intersection(set(s2))
-                    if len(overlap) > 0:
-                        raise ValueError(
-                            f"Elements overlap between {s1_name} and {s2_name}: {overlap}"
-                        )
+                splits = {
+                    f"cv{fold_index}": {
+                        "train": train_indices,
+                        "test": test_indices,
+                    } for fold_index, (train_indices, test_indices) in enumerate(
+                        kfold.split(list(range(len(instances))))
+                    )
+                }
+            elif isinstance(splits, dict):
+                for split_name, split in splits.items():
+                    # check all train/val/test subsets
+                    for subset_name, subset_indices in split.items():
+                        invalid_idx = [
+                            index for index in subset_indices if index < 0 or index >= len(instances)
+                        ]
+                        if len(invalid_idx) > 0:
+                            raise ValueError(
+                                f"Subset {subset_name} contains out-of-bound indices: {invalid_idx}"
+                            )
+
+                    # check there is no overlap between train/val/test within each split
+                    for (s1_name, s1), (s2_name, s2) in combinations(split.items(), r=2):
+                        overlap = set(s1).intersection(set(s2))
+                        if len(overlap) > 0:
+                            raise ValueError(
+                                f"Elements overlap between {s1_name} and {s2_name}: {overlap}"
+                            )
+            else:
+                raise ValueError(
+                    "Invalid split specification"
+                )
 
         self.instances = instances
         self.labels = labels
