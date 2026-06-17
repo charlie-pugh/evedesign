@@ -1,6 +1,7 @@
 from typing import Any, Self, Sequence
 import numpy as np
 
+from evedesign.constants import GAP, VALID_AA_SORTED
 from evedesign.model import BaseModel, Transformer
 from evedesign.system import Entity, System, SystemInstance
 from evedesign.types import StatusCallback
@@ -236,6 +237,192 @@ class OneHotEmbedder(BaseModel, Transformer):
                 progress = ((inst_idx + 1) / len(instances)) * 500
                 status_callback(
                     "running", progress, f"One-hot encoded instance {inst_idx + 1}/{len(instances)}"
+                )
+
+        return transformed_instances
+
+
+class BLOSUMEmbedder(BaseModel, Transformer):
+    """
+    Model wrapper that transforms protein sequences into per-residue BLOSUM embeddings.
+
+    Each residue is encoded as its row in the chosen BLOSUM substitution matrix, restricted
+    to the 20 canonical amino acids: the vector of substitution scores of that residue against
+    each canonical amino acid (in VALID_AA_SORTED order)
+
+    Gaps (deletions, GAP symbol) are encoded as 20 zeros
+
+    Insertions
+    ----------
+    Insertion states are turned into match states by upper-casing each
+    symbol before encoding, so an inserted residue receives the same BLOSUM row as its
+    upper-case match counterpart
+
+    This embedder only supports protein entities (BLOSUM matrices are defined over amino acids)
+    """
+    name: str = "BLOSUMEmbedder"
+    citations: list[str] = [
+        "10.1073/pnas.89.22.10915"
+    ]
+
+    # Bio.Align.substitution_matrices
+    _SUPPORTED_MATRICES: list[str] = ["BLOSUM45", "BLOSUM50", "BLOSUM62", "BLOSUM80", "BLOSUM90"]
+
+    # core properties
+    requires_target: bool = False
+    requires_fixed_length: bool = False
+    handles_deletions: bool = True
+    handles_insertions: bool = True
+    requires_gpu: bool = False
+    supports_gpu: bool = False
+    supports_gpu_parallel: bool = False
+    supports_cpu_parallel: bool = False
+
+    required_entity_attributes: list[str] | None = []
+    optional_entity_attributes: list[str] | None = []
+
+    def __init__(
+        self,
+        matrix: str = "BLOSUM62",
+    ):
+        """
+        Parameters
+        ----------
+        matrix
+            Name of the BLOSUM substitution matrix to use (ex. "BLOSUM62", "BLOSUM50")
+        """
+        matrix = matrix.upper()
+        if matrix not in self._SUPPORTED_MATRICES:
+            raise ValueError(
+                f"Unsupported BLOSUM matrix {matrix!r}, valid options are {self._SUPPORTED_MATRICES}"
+            )
+        self._matrix_name = matrix
+        self._system = None
+        # per-symbol BLOSUM embedding lookup (20 canonical AAs + gap), constructed in build()
+        self._symbol_to_vector: dict[str, np.ndarray] = {}
+
+    @property
+    def ready(self) -> bool:
+        return self._system is not None
+
+    @property
+    def system(self) -> System | None:
+        return self._system
+
+    def _build_lookup(self) -> dict[str, np.ndarray]:
+        """
+        Build a symbol to BLOSUM embedding dict over the 20 canonical amino acids (plus gap)
+        """
+        # keep import here?
+        from Bio.Align import substitution_matrices
+
+        matrix = substitution_matrices.load(self._matrix_name)
+
+        lookup: dict[str, np.ndarray] = {
+            aa: np.array(
+                [matrix[aa, other] for other in VALID_AA_SORTED], dtype=np.float32
+            )
+            for aa in VALID_AA_SORTED
+        }
+        # deletions encoded as zeros
+        lookup[GAP] = np.zeros(len(VALID_AA_SORTED), dtype=np.float32)
+        return lookup
+
+    @classmethod
+    def can_model(cls, system: System, data: Any = None) -> tuple[bool, str]:
+        if data is not None:
+            return False, "Model does not take data"
+
+        if len(system) == 0:
+            return False, "System must contain at least one entity"
+
+        if not any(entity.type == "protein" for entity in system):
+            return False, "System must contain at least one protein entity to encode"
+
+        return True, ""
+
+    def build(
+        self,
+        system: System,
+        data: None = None,
+        status_callback: StatusCallback | None = None,  # noqa
+    ) -> Self:
+        self.can_model_or_raise(system, data)
+        self._system = system
+        self._symbol_to_vector = self._build_lookup()
+
+        return self
+
+    def _blosum(self, rep: np.ndarray) -> np.ndarray:
+        """
+        BLOSUM-encode a protein entity representation into a [len(rep), 20] array.
+        """
+        encoding = np.zeros((len(rep), len(VALID_AA_SORTED)), dtype=np.float32)
+
+        for pos, symbol in enumerate(rep):
+            # insertions are turned into match states by upper-casing
+            symbol = str(symbol).upper()
+            vector = self._symbol_to_vector.get(symbol)
+            if vector is None:
+                raise ValueError(
+                    f"Symbol {symbol!r} at position {pos} is not a canonical amino acid or gap"
+                    f"and cannot be BLOSUM-encoded"
+                )
+            encoding[pos] = vector
+
+        return encoding
+
+    def transform(
+        self,
+        instances: Sequence[SystemInstance],
+        entity: int | None = None,
+        status_callback: StatusCallback | None = None,
+    ) -> list[SystemInstance]:
+        """
+        Transform system instances by adding BLOSUM embeddings for their protein entities.
+
+        If entity is None, all protein entities in the system are encoded; otherwise only the
+        selected entity is encoded (must be a protein).
+        """
+        self.ready_or_raise()
+        self._validate_instances(instances)
+
+        # determine entities to encode
+        if entity is not None:
+            if not 0 <= entity < len(self.system):
+                raise ValueError(f"Invalid entity index: {entity}")
+            if self.system[entity].type != "protein":
+                raise ValueError(
+                    f"Entity {entity} is of type {self.system[entity].type!r}, can only BLOSUM-encode proteins"
+                )
+            target_entities = [entity]
+        else:
+            target_entities = [
+                entity_idx
+                for entity_idx, entity_obj in enumerate(self.system)
+                if entity_obj.type == "protein"
+            ]
+
+        transformed_instances = []
+        for inst_idx, instance in enumerate(instances):
+            # shallow copy to avoid mutating input
+            new_instance = instance.copy()
+
+            for entity_idx in target_entities:
+                entity_instance = new_instance[entity_idx]
+                if entity_instance.rep is None:
+                    raise ValueError(
+                        f"Entity {entity_idx} of instance {inst_idx} has no rep to encode"
+                    )
+                entity_instance.embedding = self._blosum(entity_instance.rep)
+
+            transformed_instances.append(new_instance)
+
+            # if people are curious
+            if status_callback is not None:
+                progress = ((inst_idx + 1) / len(instances)) * 500
+                status_callback(
+                    "running", progress, f"BLOSUM encoded instance {inst_idx + 1}/{len(instances)}"
                 )
 
         return transformed_instances
