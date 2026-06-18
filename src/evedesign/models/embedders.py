@@ -1,5 +1,7 @@
-from typing import Any, Self, Sequence
+from typing import Any, Literal, Self, Sequence
 import numpy as np
+
+from Bio.Align import substitution_matrices
 
 from evedesign.constants import GAP, VALID_AA_SORTED
 from evedesign.model import BaseModel, Transformer
@@ -283,7 +285,7 @@ class BLOSUMEmbedder(BaseModel, Transformer):
 
     def __init__(
         self,
-        matrix: str = "BLOSUM62",
+        matrix: Literal["BLOSUM45", "BLOSUM50", "BLOSUM62", "BLOSUM80", "BLOSUM90"] = "BLOSUM62",
     ):
         """
         Parameters
@@ -313,9 +315,6 @@ class BLOSUMEmbedder(BaseModel, Transformer):
         """
         Build a symbol to BLOSUM embedding dict over the 20 canonical amino acids (plus gap)
         """
-        # keep import here?
-        from Bio.Align import substitution_matrices
-
         matrix = substitution_matrices.load(self._matrix_name)
 
         lookup: dict[str, np.ndarray] = {
