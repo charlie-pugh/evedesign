@@ -1,17 +1,21 @@
 """
-Wrapper class around the EVcouplings/EVmutation Potts model
+Wrapper classes around the EVcouplings/EVmutation Potts model
 
 This wrapper deliberately keeps only the two stages of the evcouplings pipeline that
 are relevant for modelling a single, already-aligned protein family inside evedesign:
 
 MSA construction is out of scope: the provided System is expected to already carry a MSA
 
-The plmc binary used by engine="plmc" is a separately-compiled C program that is not
-on PyPI (see https://github.com/debbiemarkslab/plmc) use engine="mean_field"
-to avoid external dependency
+Two concrete engines are provided as subclasses of the abstract EVcouplings base:
+
+EVcouplingsMeanField runs mean-field DCA and has no external dependency
+
+EVcouplingsPLM runs the pseudo-likelihood solver via the plmc binary, a program 
+that is not on PyPI (see https://github.com/debbiemarkslab/plmc). Use
+EVcouplingsMeanField to avoid the external dependency
 """
-import io
 import tempfile
+from abc import abstractmethod
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, Self, Sequence
@@ -23,7 +27,7 @@ from evedesign.system import System, SystemInstance
 from evedesign.sequence import REMOVE_INSERTIONS_TRANSLATION
 from evedesign.constants import GAP, MASK
 from evedesign.types import StatusCallback
-from evedesign.utils import model_param_context, status_done, status_start
+from evedesign.utils import status_done, status_start
 
 try:
     from evcouplings.align.alignment import Alignment, ALPHABET_PROTEIN
@@ -37,7 +41,11 @@ except ImportError:
 
 class EVcouplings(BaseModel, Scorer):
     """
-    Wrapper around EVcouplings/EVmutation
+    Abstract base wrapper around EVcouplings/EVmutation
+
+    Holds all logic shared between the inference engines. Subclasses implement 
+    _fit() for a specific engine. Instantiate EVcouplingsPLM or EVcouplingsMeanField 
+    directly
     """
     available = IMPORT_AVAILABLE
     name: str = "EVcouplings"
@@ -57,72 +65,27 @@ class EVcouplings(BaseModel, Scorer):
     requires_gpu: bool = False
     supports_gpu: bool = False
     supports_gpu_parallel: bool = False
-    # plmc can be compiled w/ multi-core fitting
-    supports_cpu_parallel: bool = True
+    supports_cpu_parallel: bool = False
 
     required_entity_attributes: list[str] | None = ["sequences"]
     optional_entity_attributes: list[str] | None = None
 
     def __init__(
         self,
-        engine: Literal["plmc", "mean_field"] = "plmc",
         max_gap_fraction: float = 0.5,
         theta: float = 0.8,
-        lambda_h: float = 0.01,
-        lambda_J: float = 0.01,
-        lambda_J_times_Lq: bool = True,
-        lambda_group: float | None = None,
-        scale_clusters: float | None = None,
-        iterations: int | None = None,
-        ignore_gaps: bool = False,
-        pseudo_count: float = 0.5,
-        plmc_binary: str | PathLike = "plmc",
-        cpu: int | Literal["max"] | None = None,
-        keep_model_after_build: bool = False,
     ):
         """
-        Instantiate a new EVcouplings model.
+        Initialise the shared EVcouplings state.
 
         Parameters
         ----------
-        engine : {"plmc", "mean_field"}
-            Inference engine used during build(). "plmc" runs the pseudo-likelihood
-            solver (requires the external binary), "mean_field" runs mean-field DCA 
-            (no external binary).
         max_gap_fraction
             Alignment columns whose (unweighted) gap frequency strictly exceeds this
             threshold are excluded from the fitted model and from positions()
         theta
             Sequence reweighting identity threshold; sequences with pairwise identity
             >= theta are clustered and down-weighted. Used by both engines.
-        lambda_h
-            L2 regularisation strength on fields h_i (plmc only)
-        lambda_J
-            L2 regularisation strength on couplings J_ij (plmc only). If
-            lambda_J_times_Lq is True, this base value is scaled by
-            (num_symbols - 1)*(L - 1) (as in standard evcouplings)
-        lambda_J_times_Lq
-            Scale lambda_J by the number of states and modelled positions
-            (plmc only)
-        lambda_group
-            Group L1 regularisation strength on couplings (plmc only, None = plmc default)
-        scale_clusters
-            Scale weights of sequence clusters by this value (plmc only, None = plmc default)
-        iterations
-            Maximum optimization iterations (plmc only, None = plmc default)
-        ignore_gaps
-            If True, exclude gaps from parameter inference. Note that this also implies
-            gaps cannot be scored--the default (False) keeps gap as a model symbol
-        pseudo_count
-            Pseudo-count for frequency regularization (mean-field only)
-        plmc_binary
-            Path to / name of the plmc binary (engine="plmc" only)
-        cpu
-            Number of cores for plmc (requires OpenMP-compiled plmc) - or "max"
-        keep_model_after_build
-            If True, keep the parsed CouplingsModel in memory after build() to avoid
-            re-parsing on the first score() call. The compact binary parameters are always
-            retained regardless. Set to False for leaner serialization
         """
         if not self.available:
             raise ImportError(
@@ -130,41 +93,18 @@ class EVcouplings(BaseModel, Scorer):
                 "pip install evedesign[evcouplings]"
             )
 
-        if engine not in ("plmc", "mean_field"):
-            raise ValueError(f"Invalid engine '{engine}', valid options are 'plmc', 'mean_field'")
-
         if not 0.0 < max_gap_fraction <= 1.0:
             raise ValueError("max_gap_fraction must be in (0, 1]")
 
-        # most of these params are just defaults inherited from EVcouplings, leaving here
-        # in case users want to mess with them for some reason
-        self.engine = engine
         self.max_gap_fraction = max_gap_fraction
         self.theta = theta
-        self.lambda_h = lambda_h
-        self.lambda_J = lambda_J
-        self.lambda_J_times_Lq = lambda_J_times_Lq
-        self.lambda_group = lambda_group
-        self.scale_clusters = scale_clusters
-        self.iterations = iterations
-        self.ignore_gaps = ignore_gaps
-        self.pseudo_count = pseudo_count
-        self.plmc_binary = plmc_binary
-        self.cpu = cpu
-        self.keep_model_after_build = keep_model_after_build
-        # keep parsed parameters loaded across prediction calls by default
-        self.keep_model_after_pred = True
 
         self._system: System | None = None
 
-        # persistent (dill picklable) model state produced by build():
-        # compact plmc_v2 binary parameters
+        # parsed Potts model produced by build(); pickles directly with the wrapper
+        self.model: CouplingsModel | None = None
         # residue indices of the positions w/ enough coverage
-        self._model_bytes: bytes | None = None
         self._index_list: np.ndarray | None = None
-
-        # parsed CouplingsModel (reconstructed from _model_bytes on demand)
-        self._model: CouplingsModel | None = None
 
 
     @property
@@ -173,7 +113,7 @@ class EVcouplings(BaseModel, Scorer):
 
     @property
     def ready(self) -> bool:
-        return self._system is not None and self._model_bytes is not None
+        return self._system is not None and self.model is not None
 
     @classmethod
     def can_model(cls, system: System, data: Any = None) -> tuple[bool, str]:
@@ -196,16 +136,6 @@ class EVcouplings(BaseModel, Scorer):
             return False, "Provided sequences must be aligned"
 
         return True, ""
-
-
-    def _load_model(self) -> None:
-        # reconstruct parsed CouplingsModel from the stored binary parameters;
-        # a mean-field model is auto-detected and re-cast by CouplingsModel on read
-        if self._model is None:
-            self._model = CouplingsModel(io.BytesIO(self._model_bytes), file_format="plmc_v2")
-
-    def _delete_model(self) -> None:
-        self._model = None
 
 
     @staticmethod
@@ -265,58 +195,17 @@ class EVcouplings(BaseModel, Scorer):
         return alignment, excluded
 
 
-    def _fit_mean_field(self, alignment: "Alignment") -> bytes:
-        model = MeanFieldDCA(alignment).fit(
-            theta=self.theta, pseudo_count=self.pseudo_count
-        )
-        return self._model_to_bytes(model)
-
-    def _fit_plmc(self, alignment: "Alignment", focus_id: str, num_model_positions: int) -> bytes:
-        # scale lambda_J as in the standard couplings protocol
-        lambda_J = self.lambda_J
-        if self.lambda_J_times_Lq:
-            num_symbols = len(ALPHABET_PROTEIN) - (1 if self.ignore_gaps else 0)
-            lambda_J = lambda_J * (num_symbols - 1) * (num_model_positions - 1)
-
-        # writing temp files will be unavoidable if we want to limit
-        # the amount of code we copy from couplings
-        # although writing the alignment to file is super annoying
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            aln_file = tmp / "alignment.fasta"
-            couplings_file = tmp / "couplings.txt"
-            param_file = tmp / "model.params"
-
-            with open(aln_file, "w") as f:
-                alignment.write(f, format="fasta")
-
-            run_plmc(
-                str(aln_file),
-                str(couplings_file),
-                param_file=str(param_file),
-                focus_seq=focus_id,
-                # None -> plmc default protein alphabet (gap included)
-                alphabet=None,
-                theta=self.theta,
-                scale=self.scale_clusters,
-                ignore_gaps=self.ignore_gaps,
-                iterations=self.iterations,
-                lambda_h=self.lambda_h,
-                lambda_J=lambda_J,
-                lambda_g=self.lambda_group,
-                cpu=self.cpu,
-                binary=str(self.plmc_binary),
-            )
-
-            return Path(param_file).read_bytes()
-
-    @staticmethod
-    def _model_to_bytes(model: "CouplingsModel") -> bytes:
-        """Serialise a CouplingsModel"""
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "model.params"
-            model.to_file(str(out), file_format="plmc_v2")
-            return out.read_bytes()
+    @abstractmethod
+    def _fit(
+        self,
+        alignment: "Alignment",
+        focus_id: str,
+        num_model_positions: int,
+    ) -> "CouplingsModel":
+        """
+        Fit the engine-specific Potts model and return the parsed CouplingsModel.
+        """
+        raise NotImplementedError
 
 
     def build(
@@ -333,8 +222,7 @@ class EVcouplings(BaseModel, Scorer):
         target = system[0]
 
         # reset any previous fit
-        self._model = None
-        self._model_bytes = None
+        self.model = None
         self._index_list = None
 
         alignment, _ = self._build_alignment(target)
@@ -345,16 +233,8 @@ class EVcouplings(BaseModel, Scorer):
             np.array([c.isupper() and c != GAP for c in alignment[0]]).sum()
         )
 
-        if self.engine == "mean_field":
-            self._model_bytes = self._fit_mean_field(alignment)
-        else:
-            self._model_bytes = self._fit_plmc(alignment, focus_id, num_model_positions)
-
-        # parse once to capture the position numbering
-        self._load_model()
-        self._index_list = np.asarray(self._model.index_list, dtype=int)
-        if not self.keep_model_after_build:
-            self._delete_model()
+        self.model = self._fit(alignment, focus_id, num_model_positions)
+        self._index_list = np.asarray(self.model.index_list, dtype=int)
 
         status_done(status_callback, "EVcouplings model finished fitting")
 
@@ -397,22 +277,174 @@ class EVcouplings(BaseModel, Scorer):
         # map modelled residue numbers to 0-based positions in the (fixed-length) rep
         col_pos = self._index_list - first_index
 
-        with model_param_context(
-            self._load_model, self._delete_model, self.keep_model_after_pred
-        ):
-            subseqs = []
-            for instance in instances:
-                rep = instance[0].rep
-                subseq = "".join(str(c) for c in np.asarray(rep)[col_pos])
-                if MASK in subseq:
-                    raise ValueError(
-                        "Cannot score sequence containing mask symbol at a modelled position"
-                    )
-                subseqs.append(subseq)
+        subseqs = []
+        for instance in instances:
+            rep = instance[0].rep
+            subseq = "".join(str(c) for c in np.asarray(rep)[col_pos])
+            if MASK in subseq:
+                raise ValueError(
+                    "Cannot score sequence containing mask symbol at a modelled position"
+                )
+            subseqs.append(subseq)
 
-            # column 0 is the total Hamiltonian (J_ij + h_i sub-sums in columns 1, 2)
-            hamiltonians = self._model.hamiltonians(subseqs)[:, 0]
+        # column 0 is the total Hamiltonian (J_ij + h_i sub-sums in columns 1, 2)
+        hamiltonians = self.model.hamiltonians(subseqs)[:, 0]
 
         status_done(status_callback, "Scoring complete")
 
         return np.asarray(hamiltonians, dtype=float)
+
+
+class EVcouplingsMeanField(EVcouplings):
+    """
+    EVcouplings model fitted with mean-field DCA
+    """
+    name: str = "EVcouplingsMeanField"
+
+    def __init__(
+        self,
+        max_gap_fraction: float = 0.5,
+        theta: float = 0.8,
+        pseudo_count: float = 0.5,
+    ):
+        """
+        Instantiate a mean-field DCA EVcouplings model.
+
+        Parameters
+        ----------
+        max_gap_fraction
+            Alignment columns whose (unweighted) gap frequency strictly exceeds this
+            threshold are excluded from the fitted model and from positions()
+        theta
+            Sequence reweighting identity threshold; sequences with pairwise identity
+            >= theta are clustered and down-weighted
+        pseudo_count
+            Pseudo-count for frequency regularization
+        """
+        super().__init__(max_gap_fraction=max_gap_fraction, theta=theta)
+        self.pseudo_count = pseudo_count
+
+    def _fit(
+        self,
+        alignment: "Alignment",
+        focus_id: str,
+        num_model_positions: int,
+    ) -> "CouplingsModel":
+        return MeanFieldDCA(alignment).fit(
+            theta=self.theta, pseudo_count=self.pseudo_count
+        )
+
+
+class EVcouplingsPLM(EVcouplings):
+    """
+    EVcouplings model fitted with the plmc pseudo-likelihood solver
+
+    Requires the external plmc binary (https://github.com/debbiemarkslab/plmc)
+    """
+    name: str = "EVcouplingsPLM"
+    # plmc can be compiled w/ multi-core fitting
+    supports_cpu_parallel: bool = True
+
+    def __init__(
+        self,
+        max_gap_fraction: float = 0.5,
+        theta: float = 0.8,
+        lambda_h: float = 0.01,
+        lambda_J: float = 0.01,
+        lambda_J_times_Lq: bool = True,
+        lambda_group: float | None = None,
+        scale_clusters: float | None = None,
+        iterations: int | None = None,
+        ignore_gaps: bool = False,
+        plmc_binary: str | PathLike = "plmc",
+        cpu: int | Literal["max"] | None = None,
+    ):
+        """
+        Instantiate a plmc (pseudo-likelihood) EVcouplings model.
+
+        Parameters
+        ----------
+        max_gap_fraction
+            Alignment columns whose (unweighted) gap frequency strictly exceeds this
+            threshold are excluded from the fitted model and from positions()
+        theta
+            Sequence reweighting identity threshold; sequences with pairwise identity
+            >= theta are clustered and down-weighted
+        lambda_h
+            L2 regularisation strength on fields h_i
+        lambda_J
+            L2 regularisation strength on couplings J_ij. If lambda_J_times_Lq is True,
+            this base value is scaled by (num_symbols - 1)*(L - 1) (as in standard
+            evcouplings)
+        lambda_J_times_Lq
+            Scale lambda_J by the number of states and modelled positions
+        lambda_group
+            Group L1 regularisation strength on couplings (None = plmc default)
+        scale_clusters
+            Scale weights of sequence clusters by this value (None = plmc default)
+        iterations
+            Maximum optimization iterations (None = plmc default)
+        ignore_gaps
+            If True, exclude gaps from parameter inference. Note that this also implies
+            gaps cannot be scored--the default (False) keeps gap as a model symbol
+        plmc_binary
+            Path to / name of the plmc binary
+        cpu
+            Number of cores for plmc (requires OpenMP-compiled plmc) - or "max"
+        """
+        super().__init__(max_gap_fraction=max_gap_fraction, theta=theta)
+        # most of these params are just defaults inherited from EVcouplings, leaving here
+        # in case users want to mess with them for some reason
+        self.lambda_h = lambda_h
+        self.lambda_J = lambda_J
+        self.lambda_J_times_Lq = lambda_J_times_Lq
+        self.lambda_group = lambda_group
+        self.scale_clusters = scale_clusters
+        self.iterations = iterations
+        self.ignore_gaps = ignore_gaps
+        self.plmc_binary = plmc_binary
+        self.cpu = cpu
+
+    def _fit(
+        self,
+        alignment: "Alignment",
+        focus_id: str,
+        num_model_positions: int,
+    ) -> "CouplingsModel":
+        # scale lambda_J as in the standard couplings protocol
+        lambda_J = self.lambda_J
+        if self.lambda_J_times_Lq:
+            num_symbols = len(ALPHABET_PROTEIN) - (1 if self.ignore_gaps else 0)
+            lambda_J = lambda_J * (num_symbols - 1) * (num_model_positions - 1)
+
+        # writing temp files will be unavoidable if we want to limit
+        # the amount of code we copy from couplings
+        # although writing the alignment to file is super annoying
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            aln_file = tmp / "alignment.fasta"
+            couplings_file = tmp / "couplings.txt"
+            param_file = tmp / "model.params"
+
+            with open(aln_file, "w") as f:
+                alignment.write(f, format="fasta")
+
+            run_plmc(
+                str(aln_file),
+                str(couplings_file),
+                param_file=str(param_file),
+                focus_seq=focus_id,
+                # None -> plmc default protein alphabet (gap included)
+                alphabet=None,
+                theta=self.theta,
+                scale=self.scale_clusters,
+                ignore_gaps=self.ignore_gaps,
+                iterations=self.iterations,
+                lambda_h=self.lambda_h,
+                lambda_J=lambda_J,
+                lambda_g=self.lambda_group,
+                cpu=self.cpu,
+                binary=str(self.plmc_binary),
+            )
+
+            return CouplingsModel(str(param_file), file_format="plmc_v2")
