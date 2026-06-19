@@ -7,12 +7,11 @@ import pandas as pd
 from loguru import logger
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, Transformer
+    BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transformer
 )
-from evedesign.system import System, SystemInstance, EntityInstance, Mutant
+from evedesign.system import System, SystemInstance, Mutant
 from evedesign.utils import model_param_context
-from evedesign.types import DeviceType, StatusCallback, BatchSize, EntityPosList
-from evedesign.samplers.gibbs import GibbsSampler, ScanOrder, InitStrategy, TemperatureSchedule
+from evedesign.types import DeviceType, StatusCallback, BatchSize
 
 try:
     import torch
@@ -22,7 +21,7 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generator, Transformer):
+class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transformer):
     """
     Wrapper class around ESM2 model
 
@@ -55,11 +54,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         batch_size: BatchSize = 64,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
-        # GibbsSampler hyperparameters
-        num_sweeps: int = 1000,
-        init_strategy: InitStrategy = "system",
-        scan_order: ScanOrder = "random",
-        temperature_schedule: TemperatureSchedule | None = None
     ):
         if not self.available:
             raise ImportError(
@@ -82,12 +76,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
         self.tokenizer = None  # Changed from alphabet to tokenizer
 
         self.batch_size = batch_size
-
-        # Store GibbsSampler hyperparameters
-        self.num_sweeps = num_sweeps
-        self.init_strategy = init_strategy
-        self.scan_order = scan_order
-        self.temperature_schedule = temperature_schedule
 
         if self.batch_size != "auto" and self.batch_size < 1:
             raise ValueError(
@@ -225,89 +213,6 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Generat
                 raise ValueError(
                     f"Sequence length ({seq_len}) exceeds maximum allowed by ESM2 ({self.max_seq_length})"
                 )
-
-    def generate(
-        self,
-        num_designs: int,
-        entities: Sequence[int] | None = None,
-        fixed_pos: EntityPosList | None = None,
-        temperature: float = 1.0,
-        status_callback: StatusCallback | None = None,
-    ) -> list[SystemInstance]:
-        """
-        Generate protein sequences using the ESM2 model with the GibbsSampler
-
-        Parameters
-        ----------
-        num_designs
-            Number of protein sequences to generate
-        entities
-            Indices of entities to redesign (default: [0])
-        fixed_pos
-            Positions to keep fixed during design
-        temperature
-            Initial temperature for sampling
-        status_callback
-            Optional callback function for progress updates
-
-        Returns
-        -------
-        List[SystemInstance]
-            Generated protein sequence instances
-        """
-        self.ready_or_raise()
-
-        entities = entities if entities is not None else [0]
-        if len(entities) != 1 or entities[0] != 0:
-            raise ValueError(
-                "Can only design single entity (entities = [0] | None)"
-            )
-
-        # Adjust num_designs to be a multiple of batch_size
-        if rem := num_designs % self.batch_size:
-            num_designs_adj = num_designs + (self.batch_size - rem)
-            num_designs = num_designs_adj
-
-        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            logger.info(
-                f"Generating {num_designs} designs with ESM2 using GibbsSampler"
-            )
-
-            # Create a GibbsSampler using the configured hyperparameters
-            sampler = GibbsSampler(
-                scorers=[self],
-                weights=None,
-                num_sweeps=self.num_sweeps,
-                init_strategy=self.init_strategy,
-                scan_order=self.scan_order,
-                temperature_schedule=self.temperature_schedule,
-                require_strict_pos=True,
-                record_full_chain=False
-            )
-
-            # Generate designs
-            instances = sampler.generate(
-                num_designs=num_designs,
-                entities=entities,
-                fixed_pos=fixed_pos,
-                temperature=temperature,
-                status_callback=status_callback
-            )
-
-        # Score designs relative to reference
-        target = self.system[0]
-        ref_instance = SystemInstance(EntityInstance(rep="".join(target.rep)))
-        all_instances = [ref_instance] + instances
-
-        logger.info(f"Scoring {len(instances)} generated designs")
-        scores = self.score(all_instances)
-        ref_score = scores[0]
-
-        # Attach normalized scores to instances
-        for i, instance in enumerate(instances):
-            instance.score = (scores[i+1] - ref_score)
-
-        return instances
 
     def score(
         self,
