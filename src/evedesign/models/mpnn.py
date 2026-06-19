@@ -8,7 +8,7 @@ import numpy as np
 from loguru import logger
 
 from evedesign.model import (
-    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer
+    BaseModel, Scorer, Generator, MutationScorer, ConditionalMutationScorer, assign_scores_to_instances
 )
 from evedesign.system import System, SystemInstance
 from evedesign.structure import Structure
@@ -562,26 +562,26 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
             system_instances.append(system_instance)
 
         # score the generated instances
-        scores = self.score(system_instances, status_callback=status_callback)
+        scored_instances = self.score(system_instances, status_callback=status_callback)
 
         # try to score target sequence as well
         target_instance = self._system.rep_to_instance()
         if self._validate_instances([target_instance], raise_invalid=False):
-            target_score = self.score([target_instance])[0]
+            target_score = self.score([target_instance])[0].score
         else:
             target_score = 0.0
 
-        # attach scores to instances
-        for instance, raw_score in zip(system_instances, scores):
-             instance.score = raw_score - target_score
+        # attach scores to instances; keep confidence as-is
+        for instance in scored_instances:
+            instance.score -= target_score
 
-        return system_instances
+        return scored_instances
 
     def score(
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray:
+    ) -> list[SystemInstance]:
         self.ready_or_raise()
         self._validate_instances(instances)
 
@@ -654,5 +654,5 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
                     # Convert to positive log likelihood
                     scores.append(-loss.item())
 
-        # 5. Return as numpy array
-        return np.array(scores)
+        # 5. Attach scores to instances
+        return assign_scores_to_instances(instances, scores)

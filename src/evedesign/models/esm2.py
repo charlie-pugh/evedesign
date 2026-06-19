@@ -7,7 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from evedesign.model import (
-    BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transformer
+    BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transformer, assign_scores_to_instances
 )
 from evedesign.system import System, SystemInstance, Mutant
 from evedesign.utils import model_param_context
@@ -218,7 +218,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transfo
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> list[SystemInstance]:
         self.ready_or_raise()
         self._validate_instances_and_max_length(instances)
 
@@ -278,7 +278,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transfo
 
                         scores.append(seq_log_likelihood)
 
-        return np.array(scores)
+        return assign_scores_to_instances(instances, scores)
 
     def single_mutation_scan(
         self,
@@ -388,7 +388,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transfo
         # Convert to dataframe with proper index format
         df = pd.DataFrame(mutation_effects)
         df = df.set_index(['pos', 'ref'])
-        df = pd.concat({entity: df}, names=["entity"])
+        df = pd.concat({entity: df}, names=["entity"])  # noqa
 
         return df
 
@@ -397,7 +397,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transfo
         instance: SystemInstance,
         mutants: Sequence[Mutant],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> list[SystemInstance]:
         self.ready_or_raise()
         self._validate_instances_and_max_length([instance])
         self.system.valid_mutants(
@@ -507,7 +507,14 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transfo
 
                 mutant_scores.append(total_score)
 
-        return np.array(mutant_scores)
+        # create mutant instances and add scores/confidence in place
+        instances_scored = self.system.mutate(instance, mutants)
+        assert len(instances_scored) == len(mutant_scores)
+        for inst, score in zip(instances_scored, mutant_scores):
+            inst.score = score
+            inst.confidence = None
+
+        return instances_scored
 
     def score_conditional(
         self,
@@ -715,6 +722,7 @@ class ESM2(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, Transfo
                         ).squeeze(1)
 
                         new_instance.score = seq_log_probs.sum().item()
+                        new_instance.confidence = None
                         transformed_instances.append(new_instance)
 
         return transformed_instances
