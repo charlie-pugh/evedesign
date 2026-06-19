@@ -4,7 +4,6 @@ from tempfile import NamedTemporaryFile
 from typing import Sequence, Self, Literal
 import urllib.request
 
-import numpy as np
 from loguru import logger
 
 from evedesign.model import (

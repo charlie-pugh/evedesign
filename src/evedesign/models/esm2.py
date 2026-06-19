@@ -2,7 +2,6 @@ from os import PathLike
 from typing import Literal, Self, Sequence
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
