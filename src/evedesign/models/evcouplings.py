@@ -21,10 +21,16 @@ from pathlib import Path
 from typing import Any, Literal, Self, Sequence
 
 import numpy as np
+import pandas as pd
 
-from evedesign.model import BaseModel, Scorer
-from evedesign.system import System, SystemInstance
-from evedesign.sequence import REMOVE_INSERTIONS_TRANSLATION
+from evedesign.model import (
+    BaseModel,
+    Scorer,
+    MutationScorer,
+    ConditionalMutationScorer,
+    assign_scores_to_instances,
+)
+from evedesign.system import System, SystemInstance, Entity
 from evedesign.constants import GAP, MASK
 from evedesign.types import StatusCallback
 from evedesign.utils import status_done, status_start
@@ -32,14 +38,19 @@ from evedesign.utils import status_done, status_start
 try:
     from evcouplings.align.alignment import Alignment, ALPHABET_PROTEIN
     from evcouplings.couplings.mean_field import MeanFieldDCA
-    from evcouplings.couplings.model import CouplingsModel
+    from evcouplings.couplings.model import (
+        CouplingsModel,
+        _single_mutant_hamiltonians,
+        _delta_hamiltonian,
+        FULL,
+    )
     from evcouplings.couplings.tools import run_plmc
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
 
 
-class EVcouplings(BaseModel, Scorer):
+class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     """
     Abstract base wrapper around EVcouplings/EVmutation
 
@@ -53,9 +64,7 @@ class EVcouplings(BaseModel, Scorer):
         # EVmutation
         "10.1038/nbt.3769",
         # EVcouplings
-        "10.1093/bioinformatics/bty862",
-        # plmc ? idk if there is a paper
-    ]
+        "10.1093/bioinformatics/bty862"]
 
     # core properties
     requires_target: bool = True
@@ -85,7 +94,8 @@ class EVcouplings(BaseModel, Scorer):
             threshold are excluded from the fitted model and from positions()
         theta
             Sequence reweighting identity threshold; sequences with pairwise identity
-            >= theta are clustered and down-weighted. Used by both engines.
+            >= theta are clustered and down-weighted. Only used when
+            provided Sequences carry no precomputed weights
         """
         if not self.available:
             raise ImportError(
@@ -138,23 +148,22 @@ class EVcouplings(BaseModel, Scorer):
         return True, ""
 
 
-    @staticmethod
-    def _match_states(seq: str) -> str:
-        """Strip insertion states from an aligned sequence, leaving only match-state columns"""
-        return seq.translate(REMOVE_INSERTIONS_TRANSLATION)
-
     def _build_alignment(self, target) -> tuple["Alignment", np.ndarray]:
         """
         Build an evcouplings Alignment from the system MSA and lower-case
         the high-gap columns so they are excluded from the fit
 
+        Match-state columns are obtained by converting the MSA to a3m and stripping
+        insertions; the alignment is numbered from a fixed first index of 1 (any mapping
+        back to the entity's first_index is handled by positions()/score()).
+
         Returns the (possibly modified) Alignment and the boolean mask of excluded columns
         """
-        seqs = target.sequences.seqs
         target_rep = "".join(target.rep)
         length = len(target_rep)
 
-        match_seqs = [self._match_states(s.seq) for s in seqs]
+        seqs = target.sequences.to_a3m().remove_inserts().seqs
+        match_seqs = [s.seq for s in seqs]
 
         bad = [i for i, m in enumerate(match_seqs) if len(m) != length]
         if bad:
@@ -169,10 +178,10 @@ class EVcouplings(BaseModel, Scorer):
                 "EVcouplings requires the target sequence as the first alignment record"
             )
 
-        first_index = target.first_index
+        # fixed internal numbering starting at 1
         focus_id = str(seqs[0].id_).split()[0]
         ids = (
-            [f"{focus_id}/{first_index}-{first_index + length - 1}"]
+            [f"{focus_id}/1-{length}"]
             + [str(s.id_) for s in seqs[1:]]
         )
 
@@ -201,6 +210,7 @@ class EVcouplings(BaseModel, Scorer):
         alignment: "Alignment",
         focus_id: str,
         num_model_positions: int,
+        weights: Sequence[float] | None = None,
     ) -> "CouplingsModel":
         """
         Fit the engine-specific Potts model and return the parsed CouplingsModel.
@@ -233,7 +243,10 @@ class EVcouplings(BaseModel, Scorer):
             np.array([c.isupper() and c != GAP for c in alignment[0]]).sum()
         )
 
-        self.model = self._fit(alignment, focus_id, num_model_positions)
+        # prefer precomputed sequence weights; theta is only a fallback
+        weights = target.sequences.weights
+
+        self.model = self._fit(alignment, focus_id, num_model_positions, weights)
         self._index_list = np.asarray(self.model.index_list, dtype=int)
 
         status_done(status_callback, "EVcouplings model finished fitting")
@@ -250,7 +263,8 @@ class EVcouplings(BaseModel, Scorer):
         content are not part of the fitted model and are therefore not returned
         """
         self.ready_or_raise()
-        return [(0, int(pos)) for pos in self._index_list]
+        first_index = self.system[0].first_index
+        return [(0, int(pos) - 1 + first_index) for pos in self._index_list]
 
 
     # elected to score full sequence to avoid dealing with indexing
@@ -258,7 +272,7 @@ class EVcouplings(BaseModel, Scorer):
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None,
-    ) -> np.ndarray:
+    ) -> list[SystemInstance]:
         """
         Score full sequences by their statistical energy
 
@@ -269,13 +283,11 @@ class EVcouplings(BaseModel, Scorer):
         self._validate_instances(instances)
 
         if len(instances) == 0:
-            return np.empty((0,), dtype=float)
+            return []
 
         status_start(status_callback, "Scoring sequences")
 
-        first_index = self.system[0].first_index
-        # map modelled residue numbers to 0-based positions in the (fixed-length) rep
-        col_pos = self._index_list - first_index
+        col_pos = self._index_list - 1
 
         subseqs = []
         for instance in instances:
@@ -292,7 +304,205 @@ class EVcouplings(BaseModel, Scorer):
 
         status_done(status_callback, "Scoring complete")
 
-        return np.asarray(hamiltonians, dtype=float)
+        return assign_scores_to_instances(
+            instances, np.asarray(hamiltonians, dtype=float)
+        )
+
+    def _instance_background(
+        self,
+        instance: SystemInstance,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Map the entity-0 rep of an instance onto the model-internal integer background
+        over the modelled (non-excluded) positions.
+
+        Returns
+        -------
+        bg
+            Integer array of length L with the modelled-position symbols (0 for invalid)
+        subseq
+            Char array of length L with the raw modelled-position symbols (for ref labelling)
+        invalid
+            Boolean array of length L, True where the symbol is not in the model alphabet
+        """
+        model = self.model
+        col_pos = self._index_list - 1
+        subseq = np.asarray(instance[0].rep)[col_pos]
+
+        bg = np.zeros(model.L, dtype=int)
+        invalid = np.zeros(model.L, dtype=bool)
+        for i, sym in enumerate(subseq):
+            sym = str(sym)
+            if sym in model.alphabet_map:
+                bg[i] = model.alphabet_map[sym]
+            else:
+                invalid[i] = True
+
+        return bg, subseq, invalid
+
+
+    def single_mutation_scan(
+        self,
+        instance: SystemInstance,
+        entity: int | None = None,
+        positions: Sequence[int] | None = None,
+        status_callback: StatusCallback | None = None,
+    ) -> pd.DataFrame:
+        """
+        Compute all single substitutions to an instance via the model single-mutant matrix.
+
+        This wraps _single_mutant_hamiltonians kernel (same as CouplingsModel.single_mut_mat) 
+        but evaluated relative to the given instance rather than the model query seq
+
+        Scores are delta-Hamiltonians (mutant - instance)
+        """
+        self.ready_or_raise()
+        self._validate_instances([instance])
+
+        # only entity 0 is modelled by EVcouplings
+        if entity is not None and entity != 0:
+            raise ValueError("EVcouplings only models entity 0")
+
+        if positions is not None:
+            if entity is None:
+                raise ValueError(
+                    "Parameter entity must be explicitly specified if using parameter positions"
+                )
+            self.valid_positions(positions, instance, entity, raise_invalid=True)
+
+        status_start(status_callback, "Computing single mutation scan")
+
+        model = self.model
+        first_index = self.system[0].first_index
+
+        # map the instance onto the integer background over modelled positions
+        bg, subseq, invalid = self._instance_background(instance)
+
+        # full L x num_symbols delta-Hamiltonian matrix relative to this background
+        delta = _single_mutant_hamiltonians(bg, model.J_ij, model.h_i)[:, :, FULL]
+
+        if invalid.any():
+            delta = np.full_like(delta, np.nan)
+
+        # evedesign positions aligned with the model array order
+        evc_positions = self._index_list - 1 + first_index
+        pos_filter = set(positions) if positions is not None else None
+
+        # columns of delta are in model alphabet order
+        model_alphabet = list(model.alphabet)
+
+        rows = []
+        index_tuples = []
+        for i in range(model.L):
+            evc_pos = int(evc_positions[i])
+            if pos_filter is not None and evc_pos not in pos_filter:
+                continue
+            rows.append(delta[i])
+            index_tuples.append((0, evc_pos, str(subseq[i])))
+
+        df = pd.DataFrame(
+            rows,
+            columns=model_alphabet,
+            index=pd.MultiIndex.from_tuples(
+                index_tuples, names=["entity", "pos", "ref"]
+            ),
+        )
+
+        # reorder/select columns into the evedesign alphabet
+        merged_alphabet = Entity.merge_alphabet_symbols([
+            self.system[0].alphabet(
+                include_gap=self.handles_deletions,
+                include_inserts=self.handles_insertions,
+            )
+        ])
+        df = df.reindex(merged_alphabet, axis=1)
+
+        status_done(status_callback, "Single mutation scan complete")
+
+        return df
+
+
+    def score_conditional(
+        self,
+        instances: Sequence[SystemInstance],
+        entities: Sequence[int],
+        positions: Sequence[int],
+        status_callback: StatusCallback | None = None,
+    ) -> pd.DataFrame:
+        """
+        Compute conditional substitution scores P(x_i | x_\\i) for one position per instance
+
+        Conditional energy of symbol A at position i given the rest of
+        the sequence fixed is h_i[i, A] + sum_{j != i} J_ij[i, j, A, x_j]
+        """
+        self.ready_or_raise()
+
+        if not len(instances) == len(entities) == len(positions):
+            raise ValueError(
+                "Sequences for instances, entities and positions must all have same length"
+            )
+
+        self._validate_instances(instances)
+
+        # validate entity/position per instance (entity must be 0, position must be modelled)
+        for instance, entity, pos in zip(instances, entities, positions):
+            self.valid_positions(
+                positions=[pos], instance=instance, entities=[entity], raise_invalid=True
+            )
+
+        status_start(status_callback, "Computing conditional scores")
+
+        model = self.model
+        first_index = self.system[0].first_index
+        num_symbols = model.num_symbols
+
+        # evedesign position -> model array index
+        evc_positions = self._index_list - 1 + first_index
+        pos_to_mi = {int(p): i for i, p in enumerate(evc_positions)}
+
+        model_alphabet = list(model.alphabet)
+
+        rows = []
+        index_tuples = []
+        for inst_idx, (instance, entity, pos) in enumerate(zip(instances, entities, positions)):
+            bg, _, invalid = self._instance_background(instance)
+            mi = pos_to_mi[int(pos)]
+
+            bg_invalid = invalid.copy()
+            bg_invalid[mi] = False
+
+            if bg_invalid.any():
+                logits = np.full(num_symbols, np.nan)
+            else:
+                logits = np.array([
+                    _delta_hamiltonian(
+                        np.array([mi]), np.array([symbol]), bg, model.J_ij, model.h_i
+                    )[FULL]
+                    for symbol in range(num_symbols)
+                ])
+
+            rows.append(logits)
+            index_tuples.append((inst_idx, int(entity), int(pos)))
+
+        df = pd.DataFrame(
+            rows,
+            columns=model_alphabet,
+            index=pd.MultiIndex.from_tuples(
+                index_tuples, names=["instance", "entity", "pos"]
+            ),
+        )
+
+        merged_alphabet = Entity.merge_alphabet_symbols([
+            self.system[entity_idx].alphabet(
+                include_gap=self.handles_deletions,
+                include_inserts=self.handles_insertions,
+            ) for entity_idx in set(entities)
+        ])
+        df = df.reindex(merged_alphabet, axis=1)
+
+        status_done(status_callback, "Conditional scoring complete")
+
+        return df
 
 
 class EVcouplingsMeanField(EVcouplings):
@@ -329,7 +539,10 @@ class EVcouplingsMeanField(EVcouplings):
         alignment: "Alignment",
         focus_id: str,
         num_model_positions: int,
+        weights: Sequence[float] | None = None,
     ) -> "CouplingsModel":
+        # mean-field DCA does not yet support precomputed weights, so it always
+        # reweights via theta (the precomputed Sequences weights are ignored here)
         return MeanFieldDCA(alignment).fit(
             theta=self.theta, pseudo_count=self.pseudo_count
         )
@@ -344,6 +557,10 @@ class EVcouplingsPLM(EVcouplings):
     name: str = "EVcouplingsPLM"
     # plmc can be compiled w/ multi-core fitting
     supports_cpu_parallel: bool = True
+
+    @property
+    def handles_deletions(self) -> bool:
+        return not self.ignore_gaps
 
     def __init__(
         self,
@@ -369,7 +586,8 @@ class EVcouplingsPLM(EVcouplings):
             threshold are excluded from the fitted model and from positions()
         theta
             Sequence reweighting identity threshold; sequences with pairwise identity
-            >= theta are clustered and down-weighted
+            >= theta are clustered and down-weighted. Only used as a fallback when the
+            provided Sequences carry no precomputed weights
         lambda_h
             L2 regularisation strength on fields h_i
         lambda_J
@@ -410,6 +628,7 @@ class EVcouplingsPLM(EVcouplings):
         alignment: "Alignment",
         focus_id: str,
         num_model_positions: int,
+        weights: Sequence[float] | None = None,
     ) -> "CouplingsModel":
         # scale lambda_J as in the standard couplings protocol
         lambda_J = self.lambda_J
@@ -429,6 +648,13 @@ class EVcouplingsPLM(EVcouplings):
             with open(aln_file, "w") as f:
                 alignment.write(f, format="fasta")
 
+            # prefer precomputed sequence weights 
+            weight_file = None
+            if weights is not None:
+                weight_file = tmp / "weights.txt"
+                with open(weight_file, "w") as f:
+                    f.write("\n".join(str(w) for w in weights) + "\n")
+
             run_plmc(
                 str(aln_file),
                 str(couplings_file),
@@ -436,7 +662,7 @@ class EVcouplingsPLM(EVcouplings):
                 focus_seq=focus_id,
                 # None -> plmc default protein alphabet (gap included)
                 alphabet=None,
-                theta=self.theta,
+                theta=self.theta if weights is None else None,
                 scale=self.scale_clusters,
                 ignore_gaps=self.ignore_gaps,
                 iterations=self.iterations,
@@ -445,6 +671,7 @@ class EVcouplingsPLM(EVcouplings):
                 lambda_g=self.lambda_group,
                 cpu=self.cpu,
                 binary=str(self.plmc_binary),
+                weight_file=str(weight_file) if weight_file is not None else None,
             )
 
             return CouplingsModel(str(param_file), file_format="plmc_v2")
