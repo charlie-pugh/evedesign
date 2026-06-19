@@ -4,7 +4,7 @@ Supervised regression models trained on top of embeddings and/or scores from zer
 import copy
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Callable, Sequence, Literal
+from typing import Any, Sequence, Literal
 import numpy as np
 from sklearn.base import ClassifierMixin
 from sklearn.exceptions import NotFittedError
@@ -667,29 +667,24 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
 
 
 if GPYTORCH_AVAILABLE:
-    class _DefaultExactGP(gpytorch.models.ExactGP):
+    class _ExactGPModel(gpytorch.models.ExactGP):
         """
-        Default ExactGP: constant mean + RBF kernel with output scaling, paired with the supplied likelihood.
-        Used by GpytorchModel when no gp_model_cls is given
+        Generic exact GP that wires a supplied mean and covariance module into the standard
+        forward, MultivariateNormal(mean(x), covar(x)), paired with the supplied likelihood.
+
+        This covers standard exact GP regression for any combination of gpytorch mean/kernel/likelihood
+        modules, which can all be instantiated upfront and passed to GpytorchModel. Models requiring a
+        custom forward (e.g. deep kernels with neural feature extractors, multitask GPs) are not handled.
         """
-        def __init__(self, train_x, train_y, likelihood):
+        def __init__(self, train_x, train_y, likelihood, mean_module, covar_module):
             super().__init__(train_x, train_y, likelihood)
-            self.mean_module = gpytorch.means.ConstantMean()
-            self.covar_module = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel()
-            )
+            self.mean_module = mean_module
+            self.covar_module = covar_module
 
         def forward(self, x):
             mean_x = self.mean_module(x)
             covar_x = self.covar_module(x)
             return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-
-
-def _build_default_gp(train_x, train_y, likelihood):
-    """
-    Build the default ExactGP (constant mean + scaled RBF kernel) from the training tensors and likelihood
-    """
-    return _DefaultExactGP(train_x, train_y, likelihood)
 
 
 class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
@@ -710,15 +705,14 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
     def __init__(
         self,
-        gp_model_cls: type | None = None,
-        gp_model_kwargs: dict[str, Any] | None = None,
+        mean_module: Any | None = None,
+        covar_module: Any | None = None,
         likelihood: Any | None = None,
         num_iters: int = 100,
         learning_rate: float = 0.1,
-        optimizer_cls: Any | None = None,
+        optimizer: str = "Adam",
         optimizer_kwargs: dict[str, Any] | None = None,
-        mll_cls: Any | None = None,
-        train_loop: Callable[[Any, Any, Any, Any, Any], None] | None = None,
+        mll: str = "ExactMarginalLogLikelihood",
         standardize_targets: bool = True,
         device: DeviceType = "cpu",
         embedder: Transformer | None = None,
@@ -733,39 +727,36 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         """
         Train an exact Gaussian process regression model on top of molecular model embeddings/scores.
 
+        The GP is specified by supplying instantiated gpytorch mean, covariance, and likelihood
+        modules. These are fed to a standard exact-GP forward (MultivariateNormal(mean(x), covar(x)))
+        and copied for each fit so repeated fits start from the same initial hyperparameters
+
         Parameters
         ----------
-        gp_model_cls
-            A gpytorch.models.ExactGP subclass to use as the GP model, constructed internally for each fit as
-            gp_model_cls(train_x, train_y, likelihood, **gp_model_kwargs). (unlike a sklearn estimator, an
-            ExactGP cannot be instantiated before the training tensors are available) this also keeps the 
-            specification serializable
-        gp_model_kwargs
-            Extra keyword arguments forwarded to gp_model_cls after (train_x, train_y, likelihood). Ignored if
-            gp_model_cls is None
+        mean_module
+            A fully-instantiated gpytorch mean module (gpytorch.means.Mean). If None, a ConstantMean is used
+        covar_module
+            A fully-instantiated gpytorch kernel module (gpytorch.kernels.Kernel). If None, a scaled RBF kernel
+            ScaleKernel(RBFKernel()) is used
         likelihood
-            A fully-instantiated gpytorch Likelihood instance to use. It is copied for each fit so repeated fits
-            start from the same initial hyperparameters. If None, a GaussianLikelihood is used
+            A fully-instantiated gpytorch Likelihood instance to use. If None, a GaussianLikelihood is used
         num_iters
-            Number of optimizer steps for the default training loop (ignored if train_loop is provided)
+            Number of optimizer steps for the training loop
         learning_rate
-            Learning rate for the default optimizer (ignored if train_loop is provided)
-        optimizer_cls
-            torch optimizer class to use for the default training loop, constructed as
-            optimizer_cls(model.parameters(), lr=learning_rate, **optimizer_kwargs). If None, torch.optim.Adam
+            Learning rate for the optimizer
+        optimizer
+            Name of a torch.optim optimizer class to use, constructed as
+            getattr(torch.optim, optimizer)(model.parameters(), lr=learning_rate, **optimizer_kwargs)
         optimizer_kwargs
             Extra keyword arguments forwarded to the optimizer constructor
-        mll_cls
-            Marginal log-likelihood class, constructed as mll_cls(likelihood, model) and maximized during
-            training. If None, gpytorch.mlls.ExactMarginalLogLikelihood
-        train_loop
-            Optional callable (model, likelihood, train_x, train_y, mll) -> None that replaces the default
-            optimization loop, for complete control over training (schedulers, early stopping, etc.)
+        mll
+            Name of a gpytorch.mlls marginal log-likelihood class, constructed as
+            getattr(gpytorch.mlls, mll)(likelihood, model) and maximized during training
         standardize_targets
             If True, standardize y to zero mean / unit variance before fitting and invert the transform on
             predictions
         device
-            Device on which to place tensors and run inference ("cpu", "cuda" or "mps")
+            Device on which to run inference ("cpu", "cuda" or "mps")
         embedder, scorer, use_embeddings, use_scores, override_models_for_training, target_name, pooling, batch_size
             See SupervisedPredictorOnEmbeddingsScores
         """
@@ -775,17 +766,31 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
                 "Install with the optional dependency pip install evedesign[gpytorch]"
             )
 
-        # validate model/likelihood specs (safe to reference gpytorch after availability check above)
-        if gp_model_cls is not None and not (
-            isinstance(gp_model_cls, type) and issubclass(gp_model_cls, gpytorch.models.ExactGP)
-        ):
+        # validate module specs (safe to reference gpytorch after availability check above)
+        if mean_module is not None and not isinstance(mean_module, gpytorch.means.Mean):
             raise ValueError(
-                "gp_model_cls must be a subclass of gpytorch.models.ExactGP (or None for the default GP)"
+                "mean_module must be a gpytorch Mean instance, or None for a ConstantMean"
+            )
+
+        if covar_module is not None and not isinstance(covar_module, gpytorch.kernels.Kernel):
+            raise ValueError(
+                "covar_module must be a gpytorch Kernel instance, or None for a scaled RBF kernel"
             )
 
         if likelihood is not None and not isinstance(likelihood, gpytorch.likelihoods.Likelihood):
             raise ValueError(
                 "likelihood must be a gpytorch Likelihood instance, or None for a GaussianLikelihood"
+            )
+
+        # validate optimizer/mll selectors upfront so misconfiguration fails fast
+        if not hasattr(torch.optim, optimizer):
+            raise ValueError(
+                f"Unknown optimizer '{optimizer}', must be a class in torch.optim (e.g. 'Adam')"
+            )
+
+        if not hasattr(gpytorch.mlls, mll):
+            raise ValueError(
+                f"Unknown mll '{mll}', must be a class in gpytorch.mlls (e.g. 'ExactMarginalLogLikelihood')"
             )
 
         super().__init__(
@@ -800,15 +805,14 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
             is_classifier=False,
         )
 
-        self.gp_model_cls = gp_model_cls
-        self.gp_model_kwargs = gp_model_kwargs if gp_model_kwargs is not None else {}
+        self.mean_spec = mean_module
+        self.covar_spec = covar_module
         self.likelihood_spec = likelihood
         self.num_iters = num_iters
         self.learning_rate = learning_rate
-        self.optimizer_cls = optimizer_cls
+        self.optimizer = optimizer
         self.optimizer_kwargs = optimizer_kwargs if optimizer_kwargs is not None else {}
-        self.mll_cls = mll_cls
-        self.train_loop = train_loop
+        self.mll = mll
         self.standardize_targets = standardize_targets
         self.device = device
 
@@ -822,19 +826,27 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
     def ready(self) -> bool:
         return self.system is not None and self._model is not None and self._likelihood is not None
 
+    def _make_mean(self):
+        # copy the supplied module (or build a default) so each fit starts from the same initial hyperparameters
+        if self.mean_spec is None:
+            return gpytorch.means.ConstantMean()
+        return copy.deepcopy(self.mean_spec)
+
+    def _make_covar(self):
+        if self.covar_spec is None:
+            return gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+        return copy.deepcopy(self.covar_spec)
+
     def _make_likelihood(self):
-        spec = self.likelihood_spec
-        if spec is None:
+        if self.likelihood_spec is None:
             return gpytorch.likelihoods.GaussianLikelihood()
-        # copy the supplied instance so each fit starts from the same initial hyperparameters
-        return copy.deepcopy(spec)
+        return copy.deepcopy(self.likelihood_spec)
 
     def _build_gp(self, train_x, train_y, likelihood):
-        # construct a GP model from training tensors
-        # I think pre-constructing outside of GpytorchModel might not make sense?
-        if self.gp_model_cls is None:
-            return _build_default_gp(train_x, train_y, likelihood)
-        return self.gp_model_cls(train_x, train_y, likelihood, **self.gp_model_kwargs)
+        # construct a GP model from the training tensors, wiring in fresh mean/covariance modules
+        return _ExactGPModel(
+            train_x, train_y, likelihood, self._make_mean(), self._make_covar()
+        )
 
     def _release_cache(self) -> None:
         if self.device == "cuda":
@@ -845,21 +857,23 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
     @contextmanager
     def _model_on_device(self):
         """
-        Move the fitted GP model and likelihood onto self.device for the 
-        duration of the context, then move them back to CPU on exit
+        Yield the fitted GP model and likelihood on self.device for the duration of the context.
+
         """
+        if self.device == "cpu" or self._model is None or self._likelihood is None:
+            # nothing to move
+            yield self._model, self._likelihood
+            return
+
         device = torch.device(self.device)
+        # deepcopy before moving so the canonical CPU state on the instance is never mutated
+        model = copy.deepcopy(self._model).to(device)
+        likelihood = copy.deepcopy(self._likelihood).to(device)
         try:
-            if self._model is not None:
-                self._model = self._model.to(device)
-            if self._likelihood is not None:
-                self._likelihood = self._likelihood.to(device)
-            yield
+            yield model, likelihood
         finally:
-            if self._model is not None:
-                self._model = self._model.to("cpu")
-            if self._likelihood is not None:
-                self._likelihood = self._likelihood.to("cpu")
+            # release the device copies and clear the device cache
+            del model, likelihood
             self._release_cache()
 
     def _to_tensor(self, array) -> "torch.Tensor":
@@ -887,37 +901,33 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
         # build fresh likelihood and model on the target device (train_x/train_y already on device)
         device = torch.device(self.device)
-        self._likelihood = self._make_likelihood().to(device)
-        self._model = self._build_gp(train_x, train_y, self._likelihood).to(device)
+        likelihood = self._make_likelihood().to(device)
+        model = self._build_gp(train_x, train_y, likelihood).to(device)
 
         # marginal log-likelihood to maximize during training
-        mll_cls = self.mll_cls if self.mll_cls is not None else gpytorch.mlls.ExactMarginalLogLikelihood
-        mll = mll_cls(self._likelihood, self._model)
+        mll_cls = getattr(gpytorch.mlls, self.mll)
+        mll = mll_cls(likelihood, model)
 
-        self._model.train()
-        self._likelihood.train()
+        model.train()
+        likelihood.train()
 
-        if self.train_loop is not None:
-            # hand full control of optimization to the user-supplied loop
-            self.train_loop(self._model, self._likelihood, train_x, train_y, mll)
-        else:
-            optimizer_cls = self.optimizer_cls if self.optimizer_cls is not None else torch.optim.Adam
-            optimizer = optimizer_cls(
-                self._model.parameters(), lr=self.learning_rate, **self.optimizer_kwargs
-            )
-            for _ in range(self.num_iters):
-                optimizer.zero_grad()
-                output = self._model(train_x)
-                loss = -mll(output, train_y)
-                loss.backward()
-                optimizer.step()
+        optimizer_cls = getattr(torch.optim, self.optimizer)
+        optimizer = optimizer_cls(
+            model.parameters(), lr=self.learning_rate, **self.optimizer_kwargs
+        )
+        for _ in range(self.num_iters):
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -mll(output, train_y)
+            loss.backward()
+            optimizer.step()
 
-        self._model.eval()
-        self._likelihood.eval()
+        model.eval()
+        likelihood.eval()
 
         # keep fitted state on CPU so the model is serializable
-        self._model = self._model.to("cpu")
-        self._likelihood = self._likelihood.to("cpu")
+        self._model = model.to("cpu")
+        self._likelihood = likelihood.to("cpu")
         self._release_cache()
 
     def _posterior(
@@ -928,15 +938,15 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         Compute posterior predictive mean and standard deviation (on the original target scale)
         for pre-transformed instances using the fitted GP.
         """
-        with torch.no_grad(), gpytorch.settings.fast_pred_var(), self._model_on_device():
-            # model/likelihood are on self.device inside this context; build test tensor on the same device
+        with torch.no_grad(), gpytorch.settings.fast_pred_var(), self._model_on_device() as (model, likelihood):
+            # model/likelihood are on self.device inside this context
             test_x = self._to_tensor(instances_transformed)
 
-            self._model.eval()
-            self._likelihood.eval()
+            model.eval()
+            likelihood.eval()
 
-            # pass through likelihood to obtain the predictive distribution
-            posterior = self._likelihood(self._model(test_x))
+            # pass through likelihood to obtain distribution
+            posterior = likelihood(model(test_x))
             mean = posterior.mean.detach().cpu().numpy().astype(float)
             std = posterior.stddev.detach().cpu().numpy().astype(float)
 
@@ -968,4 +978,5 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
         mean, std = self._posterior(x_pred)
 
-        return assign_scores_to_instances(instances, mean, uncertainties=std)
+        # store the posterior predictive stddev under the confidence attribute
+        return assign_scores_to_instances(instances, mean, confidences=std)
