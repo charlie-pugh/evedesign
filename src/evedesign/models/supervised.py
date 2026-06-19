@@ -13,7 +13,7 @@ from scipy.stats import pearsonr, spearmanr
 from evedesign.dataset import LabeledInstanceDataset
 from evedesign.system import System, SystemInstance
 from evedesign.model import Transformer, Scorer, SupervisedBaseModel, MutationScorer, \
-    ConditionalMutationScorer
+    ConditionalMutationScorer, assign_scores_to_instances
 from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
 
 spearman_score = lambda y_true, y_pred: spearmanr(y_true, y_pred).correlation
@@ -327,7 +327,9 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
                     )
             else:
                 # we always compute scores on the fly if an explicit scorer is defined
-                scores = self.scorer.score(instances)
+                scores = np.array([
+                    inst.score for inst in self.scorer.score(instances)
+                ])
 
             # expand axes for concatenation with feature matrix
             scores = scores[:, np.newaxis]
@@ -476,14 +478,16 @@ class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, Mutatio
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> list[SystemInstance]:
         self.ready_or_raise()
 
         x_pred = self._transform_and_validate_instances(
             instances, override_models=False, status_callback=status_callback
         )
 
-        return self._score(x_pred)
+        scores = self._score(x_pred)
+
+        return assign_scores_to_instances(instances, scores)
 
     def stats(self) -> ModelStats | None:
         """
