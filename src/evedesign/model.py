@@ -295,7 +295,7 @@ class Scorer(_Core):
          and to extract all information needed (e.g. deletions marked by GAP for models handling deletions,
          insertions marked with lowercase symbols for models handling insertions, etc.)
 
-        3 Implementation must not mutate the provided instance list (references to embeddings and structures
+        3. Implementation must not mutate the provided instance list (references to embeddings and structures
           can be reused for efficiency when copying, i.e. a shallow copy of SystemInstance and EntityInstance objects
           as provided by SystemInstance.copy() is sufficient)
 
@@ -320,7 +320,7 @@ def assign_scores_to_instances(
 ):
     """
     Helper function to assign a sequence of scores to a sequence of instances, creating
-    a shallow copy of the instance sequence. All sequences must have the same length.
+    a shallow copy of each instance and its entities. All sequences must have the same length.
     The confidence attribute will be set to None.
 
     Parameters
