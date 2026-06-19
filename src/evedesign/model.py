@@ -317,11 +317,13 @@ class Scorer(_Core):
 def assign_scores_to_instances(
     instances: Sequence[SystemInstance],
     scores: Sequence[float],
+    uncertainties: Sequence[float] | None = None,
 ):
     """
     Helper function to assign a sequence of scores to a sequence of instances, creating
     a shallow copy of each instance and its entities. All sequences must have the same length.
-    The confidence attribute will be set to None.
+
+    The confidence attribute will be set to the corresponding value in uncertainties if provided
 
     Parameters
     ----------
@@ -329,15 +331,24 @@ def assign_scores_to_instances(
         Sequence of instances to which scores will be assigned
     scores
         Sequence of scores to assign, must have same length as instances
+    uncertainties
+        Optional sequence of uncertainty values to assign to the confidence attribute of each instance.
+        If None (default), the confidence attribute is set to None. If provided, must have same length
+        as instances.
 
     Returns
     -------
     scored_instances
-        Sequence of instances with assigned scores
+        Sequence of instances with assigned scores (and confidences if applicable)
     """
     if len(scores) != len(instances):
         raise ValueError(
             "Length of scores does not match length of instances"
+        )
+
+    if uncertainties is not None and len(uncertainties) != len(instances):
+        raise ValueError(
+            "Length of uncertainties does not match length of instances"
         )
 
     # create shallow copy of instances
@@ -345,9 +356,9 @@ def assign_scores_to_instances(
         inst.copy() for inst in instances
     ]
 
-    for inst, score in zip(instances_scored, scores):
+    for idx, (inst, score) in enumerate(zip(instances_scored, scores)):
         inst.score = score
-        inst.confidence = None
+        inst.confidence = uncertainties[idx] if uncertainties is not None else None
 
     return instances_scored
 

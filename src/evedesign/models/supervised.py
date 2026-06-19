@@ -1,7 +1,9 @@
 """
 Supervised regression models trained on top of embeddings and/or scores from zero-shot models
 """
+import copy
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from typing import Any, Callable, Sequence, Literal
 import numpy as np
 from sklearn.base import ClassifierMixin
@@ -664,12 +666,12 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
             ).astype(float)
 
 
-def _build_default_gp(train_x, train_y, likelihood):
-    """
-    Default ExactGP: constant mean + RBF kernel with output scaling,
-    paired w/ supplied likelihood. Used by GpytorchModel when no gp_factory is given
-    """
+if GPYTORCH_AVAILABLE:
     class _DefaultExactGP(gpytorch.models.ExactGP):
+        """
+        Default ExactGP: constant mean + RBF kernel with output scaling, paired with the supplied likelihood.
+        Used by GpytorchModel when no gp_model_cls is given
+        """
         def __init__(self, train_x, train_y, likelihood):
             super().__init__(train_x, train_y, likelihood)
             self.mean_module = gpytorch.means.ConstantMean()
@@ -682,6 +684,11 @@ def _build_default_gp(train_x, train_y, likelihood):
             covar_x = self.covar_module(x)
             return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
+
+def _build_default_gp(train_x, train_y, likelihood):
+    """
+    Build the default ExactGP (constant mean + scaled RBF kernel) from the training tensors and likelihood
+    """
     return _DefaultExactGP(train_x, train_y, likelihood)
 
 
@@ -689,8 +696,8 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
     """
     Supervised Gaussian process regression on pooled molecular embeddings/scores, backed by gpytorch.
 
-    By passing a gp_factory you can use essentially any exact GP gpytorch supports (arbitrary mean modules, 
-    kernel compositions, multi-task structure, custom forward passes), and train_loop can replace optimization.
+    The fitted model and likelihood are kept on CPU outside of inference (see _model_on_device) so the model
+    stays serializable
     """
     available = GPYTORCH_AVAILABLE
     name: str = "Gaussian process predictor on sequence embeddings/scores"
@@ -703,8 +710,9 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
     def __init__(
         self,
-        gp_factory: Callable[[Any, Any, Any], Any] | None = None,
-        likelihood: Any | Callable[[], Any] | None = None,
+        gp_model_cls: type | None = None,
+        gp_model_kwargs: dict[str, Any] | None = None,
+        likelihood: Any | None = None,
         num_iters: int = 100,
         learning_rate: float = 0.1,
         optimizer_cls: Any | None = None,
@@ -727,12 +735,17 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
         Parameters
         ----------
-        gp_factory
-            Callable ((train_x, train_y, likelihood) -> gpytorch.models.ExactGP) that builds the GP model
-            from the training tensors and likelihood. If None, a default constant-mean + scaled-RBF ExactGP is used.
-            Hyperparameters are re-initialized for each cross-validation split
+        gp_model_cls
+            A gpytorch.models.ExactGP subclass to use as the GP model, constructed internally for each fit as
+            gp_model_cls(train_x, train_y, likelihood, **gp_model_kwargs). (unlike a sklearn estimator, an
+            ExactGP cannot be instantiated before the training tensors are available) this also keeps the 
+            specification serializable
+        gp_model_kwargs
+            Extra keyword arguments forwarded to gp_model_cls after (train_x, train_y, likelihood). Ignored if
+            gp_model_cls is None
         likelihood
-            gpytorch likelihood to use. If None, a GaussianLikelihood is used
+            A fully-instantiated gpytorch Likelihood instance to use. It is copied for each fit so repeated fits
+            start from the same initial hyperparameters. If None, a GaussianLikelihood is used
         num_iters
             Number of optimizer steps for the default training loop (ignored if train_loop is provided)
         learning_rate
@@ -762,6 +775,19 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
                 "Install with the optional dependency pip install evedesign[gpytorch]"
             )
 
+        # validate model/likelihood specs (safe to reference gpytorch after availability check above)
+        if gp_model_cls is not None and not (
+            isinstance(gp_model_cls, type) and issubclass(gp_model_cls, gpytorch.models.ExactGP)
+        ):
+            raise ValueError(
+                "gp_model_cls must be a subclass of gpytorch.models.ExactGP (or None for the default GP)"
+            )
+
+        if likelihood is not None and not isinstance(likelihood, gpytorch.likelihoods.Likelihood):
+            raise ValueError(
+                "likelihood must be a gpytorch Likelihood instance, or None for a GaussianLikelihood"
+            )
+
         super().__init__(
             embedder=embedder,
             scorer=scorer,
@@ -774,7 +800,8 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
             is_classifier=False,
         )
 
-        self.gp_factory = gp_factory
+        self.gp_model_cls = gp_model_cls
+        self.gp_model_kwargs = gp_model_kwargs if gp_model_kwargs is not None else {}
         self.likelihood_spec = likelihood
         self.num_iters = num_iters
         self.learning_rate = learning_rate
@@ -795,28 +822,45 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
     def ready(self) -> bool:
         return self.system is not None and self._model is not None and self._likelihood is not None
 
-    @property
-    def gp_model(self):
-        """Fitted gpytorch ExactGP model (None until build() has been called)"""
-        return self._model
-
-    @property
-    def gp_likelihood(self):
-        """Fitted gpytorch likelihood (None until build() has been called)"""
-        return self._likelihood
-
     def _make_likelihood(self):
         spec = self.likelihood_spec
         if spec is None:
             return gpytorch.likelihoods.GaussianLikelihood()
-        # an existing likelihood instance is reused as-is, a class/callable is instantiated for a fresh one
-        if isinstance(spec, gpytorch.likelihoods.Likelihood):
-            return spec
-        if callable(spec):
-            return spec()
-        raise ValueError(
-            "likelihood must be a gpytorch Likelihood instance, a callable/class returning one, or None"
-        )
+        # copy the supplied instance so each fit starts from the same initial hyperparameters
+        return copy.deepcopy(spec)
+
+    def _build_gp(self, train_x, train_y, likelihood):
+        # construct a GP model from training tensors
+        # I think pre-constructing outside of GpytorchModel might not make sense?
+        if self.gp_model_cls is None:
+            return _build_default_gp(train_x, train_y, likelihood)
+        return self.gp_model_cls(train_x, train_y, likelihood, **self.gp_model_kwargs)
+
+    def _release_cache(self) -> None:
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            torch.mps.empty_cache()
+
+    @contextmanager
+    def _model_on_device(self):
+        """
+        Move the fitted GP model and likelihood onto self.device for the 
+        duration of the context, then move them back to CPU on exit
+        """
+        device = torch.device(self.device)
+        try:
+            if self._model is not None:
+                self._model = self._model.to(device)
+            if self._likelihood is not None:
+                self._likelihood = self._likelihood.to(device)
+            yield
+        finally:
+            if self._model is not None:
+                self._model = self._model.to("cpu")
+            if self._likelihood is not None:
+                self._likelihood = self._likelihood.to("cpu")
+            self._release_cache()
 
     def _to_tensor(self, array) -> "torch.Tensor":
         return torch.as_tensor(
@@ -841,15 +885,10 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
         train_y = self._to_tensor((y - self._y_mean) / self._y_std)
 
-        # build likelihood and model, move to device
+        # build fresh likelihood and model on the target device (train_x/train_y already on device)
         device = torch.device(self.device)
         self._likelihood = self._make_likelihood().to(device)
-
-        if self.gp_factory is not None:
-            self._model = self.gp_factory(train_x, train_y, self._likelihood)
-        else:
-            self._model = _build_default_gp(train_x, train_y, self._likelihood)
-        self._model = self._model.to(device)
+        self._model = self._build_gp(train_x, train_y, self._likelihood).to(device)
 
         # marginal log-likelihood to maximize during training
         mll_cls = self.mll_cls if self.mll_cls is not None else gpytorch.mlls.ExactMarginalLogLikelihood
@@ -876,6 +915,11 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         self._model.eval()
         self._likelihood.eval()
 
+        # keep fitted state on CPU so the model is serializable
+        self._model = self._model.to("cpu")
+        self._likelihood = self._likelihood.to("cpu")
+        self._release_cache()
+
     def _posterior(
         self,
         instances_transformed,
@@ -884,12 +928,13 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         Compute posterior predictive mean and standard deviation (on the original target scale)
         for pre-transformed instances using the fitted GP.
         """
-        test_x = self._to_tensor(instances_transformed)
+        with torch.no_grad(), gpytorch.settings.fast_pred_var(), self._model_on_device():
+            # model/likelihood are on self.device inside this context; build test tensor on the same device
+            test_x = self._to_tensor(instances_transformed)
 
-        self._model.eval()
-        self._likelihood.eval()
+            self._model.eval()
+            self._likelihood.eval()
 
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # pass through likelihood to obtain the predictive distribution
             posterior = self._likelihood(self._model(test_x))
             mean = posterior.mean.detach().cpu().numpy().astype(float)
@@ -901,39 +946,26 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
         return mean, std
 
+    # this doesn't actually get used, but just leaving this here for now
     def _score(
         self,
         instances_transformed,
     ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        # framework score is the posterior predictive mean
         mean, _ = self._posterior(instances_transformed)
         return mean
 
-    def predict_with_uncertainty(
+    # override base score() to attach the posterior predictive standard deviation
+    def score(
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None
-    ) -> tuple[np.ndarray[tuple[int], np.dtype[float]], np.ndarray[tuple[int], np.dtype[float]]]:
-        """
-        Predict posterior mean and standard deviation for a batch of instances. This is the GP-specific counterpart to score()
-        that will return the uncertainty componenet
-
-        Parameters
-        ----------
-        instances
-            Designs to predict
-        status_callback
-            Callback function to track computation status
-
-        Returns
-        -------
-        tuple of (mean, std)
-            Posterior predictive mean and standard deviation on the original target scale
-        """
+    ) -> list[SystemInstance]:
         self.ready_or_raise()
 
         x_pred = self._transform_and_validate_instances(
             instances, override_models=False, status_callback=status_callback
         )
 
-        return self._posterior(x_pred)
+        mean, std = self._posterior(x_pred)
+
+        return assign_scores_to_instances(instances, mean, uncertainties=std)
