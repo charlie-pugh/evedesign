@@ -23,18 +23,18 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "numpy", "pandas", "torch", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy", "pyyaml", "requests"
+  "numpy", "pandas", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy", "requests"
 ]
 
 [project.optional-dependencies]
-evmutation2 = ["evmutation2"]
-esm2 = ["transformers"]
-mpnn = ["prody"]
+evmutation2 = ["torch", "evmutation2"]
+esm2 = ["torch", "transformers"]
+mpnn = ["torch", "prody"]
 # boltz2fold: CPU/MPS install (default)
 # boltz2fold-cuda: adds CUDA-12 extras (cuequivariance_*)
 # — only works on CUDA-12 systems with compatible torch build
-boltz2fold = ["boltz>=2.2,<2.3"]
-boltz2fold-cuda = ["boltz[cuda]>=2.2,<2.3"]
+boltz2fold = ["torch", "boltz>=2.2,<2.3", "pyyaml"]
+boltz2fold-cuda = ["torch", "boltz[cuda]>=2.2,<2.3", "pyyaml"]
 umap = ["umap-learn"]
 notebooks = ["py3Dmol"]
 
@@ -75,4 +75,15 @@ exclude_lines = [
   "no cov",
   "if __name__ == .__main__.:",
   "if TYPE_CHECKING:",
+]
+
+[tool.uv]
+# Override stale upstream pins. boltz declares
+# numpy<2.0 and scipy==1.13.1; empirical testing
+# confirms it runs cleanly on numpy>=2.0 and
+# scipy>=1.14. Required when installing the
+# boltz2fold extras with uv.
+override-dependencies = [
+    "numpy>=2.0,<2.8",
+    "scipy>=1.14",
 ]
