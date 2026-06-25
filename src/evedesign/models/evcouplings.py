@@ -14,6 +14,7 @@ EVcouplingsPLM runs the pseudo-likelihood solver via the plmc binary, a program
 that is not on PyPI (see https://github.com/debbiemarkslab/plmc). Use
 EVcouplingsMeanField to avoid the external dependency
 """
+import shutil
 import tempfile
 from abc import abstractmethod
 from os import PathLike
@@ -571,7 +572,7 @@ class EVcouplingsPLM(EVcouplings):
         lambda_J_times_Lq: bool = True,
         lambda_group: float | None = None,
         scale_clusters: float | None = None,
-        iterations: int | None = None,
+        iterations: int | None = 100,
         ignore_gaps: bool = False,
         plmc_binary: str | PathLike = "plmc",
         cpu: int | Literal["max"] | None = None,
@@ -601,7 +602,8 @@ class EVcouplingsPLM(EVcouplings):
         scale_clusters
             Scale weights of sequence clusters by this value (None = plmc default)
         iterations
-            Maximum optimization iterations (None = plmc default)
+            Maximum L-BFGS iterations. Defaults to 100 (the standard EVcouplings
+            cap?) None = plmc default
         ignore_gaps
             If True, exclude gaps from parameter inference. Note that this also implies
             gaps cannot be scored--the default (False) keeps gap as a model symbol
@@ -622,6 +624,13 @@ class EVcouplingsPLM(EVcouplings):
         self.ignore_gaps = ignore_gaps
         self.plmc_binary = plmc_binary
         self.cpu = cpu
+
+        if shutil.which(str(plmc_binary)) is None:
+            raise FileNotFoundError(
+                f"plmc binary not found or not executable: {plmc_binary!r}. "
+                "Pass the path to the compiled plmc executable (ex. "
+                "/path/to/plmc/bin/plmc)"
+            )
 
     def _fit(
         self,
