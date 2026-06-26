@@ -78,6 +78,8 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
+    honors_precomputed_weights: bool = True
+
     required_entity_attributes: list[str] | None = ["sequences"]
     optional_entity_attributes: list[str] | None = None
 
@@ -245,8 +247,11 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
             np.array([c.isupper() and c != GAP for c in alignment[0]]).sum()
         )
 
-        # prefer precomputed sequence weights; theta is only a fallback
         weights = target.sequences.weights
+        if weights is None and self.honors_precomputed_weights:
+            theta = self.theta if self.theta is not None else 0.8
+            target.sequences.compute_weights(theta=theta)
+            weights = target.sequences.weights
 
         self.model = self._fit(alignment, focus_id, num_model_positions, weights)
         self._index_list = np.asarray(self.model.index_list, dtype=int)
@@ -508,6 +513,7 @@ class EVcouplingsMeanField(EVcouplings):
     EVcouplings model fitted with mean-field DCA
     """
     name: str = "EVcouplingsMeanField"
+    honors_precomputed_weights: bool = False
 
     def __init__(
         self,
@@ -577,6 +583,7 @@ class EVcouplingsPLM(EVcouplings):
         scale_clusters: float | None = None,
         iterations: int | None = 100,
         ignore_gaps: bool = False,
+        independent_model: bool = False,
         plmc_binary: str | PathLike = "plmc",
         cpu: int | Literal["max"] | None = None,
     ):
@@ -611,6 +618,8 @@ class EVcouplingsPLM(EVcouplings):
         ignore_gaps
             If True, exclude gaps from parameter inference. Note that this also implies
             gaps cannot be scored--the default (False) keeps gap as a model symbol
+        independent_model
+            If True, fit an independent-site (no couplings) model
         plmc_binary
             Path to / name of the plmc binary
         cpu
@@ -626,6 +635,7 @@ class EVcouplingsPLM(EVcouplings):
         self.scale_clusters = scale_clusters
         self.iterations = iterations
         self.ignore_gaps = ignore_gaps
+        self.independent_model = independent_model
         self.plmc_binary = plmc_binary
         self.cpu = cpu
 
@@ -641,6 +651,8 @@ class EVcouplingsPLM(EVcouplings):
         if self.lambda_J_times_Lq:
             num_symbols = len(ALPHABET_PROTEIN) - (1 if self.ignore_gaps else 0)
             lambda_J = lambda_J * (num_symbols - 1) * (num_model_positions - 1)
+
+        iterations = 1 if self.independent_model else self.iterations
 
         # writing temp files will be unavoidable if we want to limit
         # the amount of code we copy from couplings
@@ -672,7 +684,7 @@ class EVcouplingsPLM(EVcouplings):
                     theta=self.theta if weights is None else None,
                     scale=self.scale_clusters,
                     ignore_gaps=self.ignore_gaps,
-                    iterations=self.iterations,
+                    iterations=iterations,
                     lambda_h=self.lambda_h,
                     lambda_J=lambda_J,
                     lambda_g=self.lambda_group,
@@ -689,4 +701,9 @@ class EVcouplingsPLM(EVcouplings):
                     ) from e
                 raise
 
-            return CouplingsModel(str(param_file), file_format="plmc_v2")
+            model = CouplingsModel(str(param_file), file_format="plmc_v2")
+
+        if self.independent_model:
+            model = model.to_independent_model()
+
+        return model

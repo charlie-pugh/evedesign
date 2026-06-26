@@ -5,12 +5,47 @@ from string import ascii_lowercase
 from typing import Any, Literal, Self, TextIO
 from pathlib import Path
 from collections import abc
+
+import numpy as np
+from numba import jit, prange, get_num_threads, set_num_threads
+
 from evedesign.constants import MASK, GAP
 from evedesign.types import BioPolymer, RepSequence, SequenceMetadata
-from evedesign.utils import shorten
+from evedesign.utils import shorten, str_to_np_char_view, map_array, index_map
 
 
 REMOVE_INSERTIONS_TRANSLATION = str.maketrans("", "", ascii_lowercase + ".")
+
+ALPHABETS: dict[str, str] = {
+    "protein": GAP + "ACDEFGHIKLMNPQRSTVWY",
+    "dna": GAP + "ACGT",
+    "rna": GAP + "ACGU",
+}
+
+
+@jit(nopython=True, parallel=True)
+def _num_cluster_members(matrix, identity_threshold, exclude_value):
+    """
+    EVcouplings function for calculating sequence weights
+    """
+    N, L = matrix.shape
+    num_neighbors = np.zeros((N, ))
+    L_seq = np.sum(matrix != exclude_value, axis=1)
+
+    for i in prange(N):
+        num_neighbors_i = 1 
+        for j in range(N):
+            if i == j:
+                continue
+            matches = 0
+            for k in range(L):
+                if matrix[i, k] == matrix[j, k] and matrix[i, k] != exclude_value:
+                    matches += 1
+            if matches / L_seq[i] >= identity_threshold:
+                num_neighbors_i += 1
+        num_neighbors[i] = num_neighbors_i
+
+    return num_neighbors
 
 
 class Sequence:
@@ -209,7 +244,52 @@ class Sequences:
             aligned=True,
             weights=self.weights,
             format=self.format_
-        )        
+        )
+
+    def compute_weights(
+        self,
+        theta: float = 0.8,
+        method: Literal["nogaps", "withgaps"] = "withgaps",
+        cpu: int | None = None,
+    ) -> Self:
+        """
+        Compute per-sequence weights and assign them to self.weights
+
+        Parameters
+        ----------
+        theta
+            Sequence identity threshold for clustering
+        method
+            withgaps includes gaps in the identity calculation (default
+            EVcouplings), nogaps excludes them
+        cpu
+            Number of numba threads (None uses all)
+
+        Returns
+        -------
+        Self (with self.weights)
+        """
+        match_seqs = [s.seq for s in self.to_a3m().remove_inserts().seqs]
+
+        alphabet = ALPHABETS.get(self.type_, ALPHABETS["protein"])
+        mapping = index_map(list(alphabet), default_option=GAP)
+        matrix = map_array(str_to_np_char_view(match_seqs), mapping)
+
+        exclude_value = mapping[GAP] if method == "nogaps" else -1
+
+        threads_before = None
+        if cpu is not None:
+            threads_before = get_num_threads()
+            set_num_threads(cpu)
+        try:
+            num_cluster_members = _num_cluster_members(matrix, theta, exclude_value)
+        finally:
+            if threads_before is not None:
+                set_num_threads(threads_before)
+
+        self.weights = [float(w) for w in 1.0 / num_cluster_members]
+
+        return self
 
     def serialize(self) -> dict[str, Any]:
         """
