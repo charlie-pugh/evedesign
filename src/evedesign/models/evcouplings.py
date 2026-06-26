@@ -14,7 +14,6 @@ EVcouplingsPLM runs the pseudo-likelihood solver via the plmc binary, a program
 that is not on PyPI (see https://github.com/debbiemarkslab/plmc). Use
 EVcouplingsMeanField to avoid the external dependency
 """
-import shutil
 import tempfile
 from abc import abstractmethod
 from os import PathLike
@@ -23,6 +22,7 @@ from typing import Any, Literal, Self, Sequence
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from evedesign.model import (
     BaseModel,
@@ -46,6 +46,7 @@ try:
         FULL,
     )
     from evcouplings.couplings.tools import run_plmc
+    from evcouplings.utils.system import ExternalToolError
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -83,7 +84,7 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     def __init__(
         self,
         max_gap_fraction: float = 0.5,
-        theta: float = 0.8,
+        theta: float | None = None,
     ):
         """
         Initialise the shared EVcouplings state.
@@ -96,7 +97,7 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         theta
             Sequence reweighting identity threshold; sequences with pairwise identity
             >= theta are clustered and down-weighted. Only used when
-            provided Sequences carry no precomputed weights
+            provided Sequences carry no precomputed weights. None falls back to theta=0.8
         """
         if not self.available:
             raise ImportError(
@@ -294,10 +295,6 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         for instance in instances:
             rep = instance[0].rep
             subseq = "".join(str(c) for c in np.asarray(rep)[col_pos])
-            if MASK in subseq:
-                raise ValueError(
-                    "Cannot score sequence containing mask symbol at a modelled position"
-                )
             subseqs.append(subseq)
 
         # column 0 is the total Hamiltonian (J_ij + h_i sub-sums in columns 1, 2)
@@ -515,7 +512,7 @@ class EVcouplingsMeanField(EVcouplings):
     def __init__(
         self,
         max_gap_fraction: float = 0.5,
-        theta: float = 0.8,
+        theta: float | None = None,
         pseudo_count: float = 0.5,
     ):
         """
@@ -528,7 +525,8 @@ class EVcouplingsMeanField(EVcouplings):
             threshold are excluded from the fitted model and from positions()
         theta
             Sequence reweighting identity threshold; sequences with pairwise identity
-            >= theta are clustered and down-weighted
+            >= theta are clustered and down-weighted. None falls back to the
+            MeanFieldDCA default (theta=0.8)
         pseudo_count
             Pseudo-count for frequency regularization
         """
@@ -542,11 +540,16 @@ class EVcouplingsMeanField(EVcouplings):
         num_model_positions: int,
         weights: Sequence[float] | None = None,
     ) -> "CouplingsModel":
-        # mean-field DCA does not yet support precomputed weights, so it always
-        # reweights via theta (the precomputed Sequences weights are ignored here)
-        return MeanFieldDCA(alignment).fit(
-            theta=self.theta, pseudo_count=self.pseudo_count
-        )
+        if weights is not None:
+            logger.warning(
+                "EVcouplingsMeanField does not support precomputed sequence weights. "
+                "The provided weights will be ignored and weights will be recomputed "
+                "from theta."
+            )
+        fit_kwargs = {"pseudo_count": self.pseudo_count}
+        if self.theta is not None:
+            fit_kwargs["theta"] = self.theta
+        return MeanFieldDCA(alignment).fit(**fit_kwargs)
 
 
 class EVcouplingsPLM(EVcouplings):
@@ -566,7 +569,7 @@ class EVcouplingsPLM(EVcouplings):
     def __init__(
         self,
         max_gap_fraction: float = 0.5,
-        theta: float = 0.8,
+        theta: float | None = None,
         lambda_h: float = 0.01,
         lambda_J: float = 0.01,
         lambda_J_times_Lq: bool = True,
@@ -586,9 +589,10 @@ class EVcouplingsPLM(EVcouplings):
             Alignment columns whose (unweighted) gap frequency strictly exceeds this
             threshold are excluded from the fitted model and from positions()
         theta
-            Sequence reweighting identity threshold; sequences with pairwise identity
+            Sequence reweighting identity threshold. Sequences with pairwise identity
             >= theta are clustered and down-weighted. Only used as a fallback when the
-            provided Sequences carry no precomputed weights
+            provided Sequences carry no precomputed weights. None falls back to the
+            plmc default (theta=0.8)
         lambda_h
             L2 regularisation strength on fields h_i
         lambda_J
@@ -625,13 +629,6 @@ class EVcouplingsPLM(EVcouplings):
         self.plmc_binary = plmc_binary
         self.cpu = cpu
 
-        if shutil.which(str(plmc_binary)) is None:
-            raise FileNotFoundError(
-                f"plmc binary not found or not executable: {plmc_binary!r}. "
-                "Pass the path to the compiled plmc executable (ex. "
-                "/path/to/plmc/bin/plmc)"
-            )
-
     def _fit(
         self,
         alignment: "Alignment",
@@ -664,23 +661,32 @@ class EVcouplingsPLM(EVcouplings):
                 with open(weight_file, "w") as f:
                     f.write("\n".join(str(w) for w in weights) + "\n")
 
-            run_plmc(
-                str(aln_file),
-                str(couplings_file),
-                param_file=str(param_file),
-                focus_seq=focus_id,
-                # None -> plmc default protein alphabet (gap included)
-                alphabet=None,
-                theta=self.theta if weights is None else None,
-                scale=self.scale_clusters,
-                ignore_gaps=self.ignore_gaps,
-                iterations=self.iterations,
-                lambda_h=self.lambda_h,
-                lambda_J=lambda_J,
-                lambda_g=self.lambda_group,
-                cpu=self.cpu,
-                binary=str(self.plmc_binary),
-                weight_file=str(weight_file) if weight_file is not None else None,
-            )
+            try:
+                run_plmc(
+                    str(aln_file),
+                    str(couplings_file),
+                    param_file=str(param_file),
+                    focus_seq=focus_id,
+                    # None -> plmc default protein alphabet (gap included)
+                    alphabet=None,
+                    theta=self.theta if weights is None else None,
+                    scale=self.scale_clusters,
+                    ignore_gaps=self.ignore_gaps,
+                    iterations=self.iterations,
+                    lambda_h=self.lambda_h,
+                    lambda_J=lambda_J,
+                    lambda_g=self.lambda_group,
+                    cpu=self.cpu,
+                    binary=str(self.plmc_binary),
+                    weight_file=str(weight_file) if weight_file is not None else None,
+                )
+            except ExternalToolError as e:
+                if isinstance(e.__cause__, OSError):
+                    raise FileNotFoundError(
+                        f"plmc binary not found or not executable: {self.plmc_binary!r}. "
+                        "Pass the path to the compiled plmc executable (ex. "
+                        "/path/to/plmc/bin/plmc)"
+                    ) from e
+                raise
 
             return CouplingsModel(str(param_file), file_format="plmc_v2")
