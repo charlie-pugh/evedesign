@@ -78,7 +78,7 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     supports_gpu_parallel: bool = False
     supports_cpu_parallel: bool = False
 
-    honors_precomputed_weights: bool = True
+    _honors_precomputed_weights: bool = True
 
     required_entity_attributes: list[str] | None = ["sequences"]
     optional_entity_attributes: list[str] | None = None
@@ -98,8 +98,9 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
             threshold are excluded from the fitted model and from positions()
         theta
             Sequence reweighting identity threshold; sequences with pairwise identity
-            >= theta are clustered and down-weighted. Only used when
-            provided Sequences carry no precomputed weights. None falls back to theta=0.8
+            >= theta are clustered and down-weighted. Only used when the provided
+            Sequences carry no precomputed weights. If theta is None and no precomputed
+            weights are available, build() raises a ValueError
         """
         if not self.available:
             raise ImportError(
@@ -248,10 +249,16 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         )
 
         weights = target.sequences.weights
-        if weights is None and self.honors_precomputed_weights:
-            theta = self.theta if self.theta is not None else 0.8
-            target.sequences.compute_weights(theta=theta)
-            weights = target.sequences.weights
+
+        needs_theta = weights is None or not self._honors_precomputed_weights
+        if needs_theta and self.theta is None:
+            raise ValueError(
+                "Sequence reweighting requires either precomputed weights on the "
+                "provided Sequences or an explicit theta"
+            )
+
+        if weights is None and self._honors_precomputed_weights:
+            weights = target.sequences.compute_weights(theta=self.theta).weights
 
         self.model = self._fit(alignment, focus_id, num_model_positions, weights)
         self._index_list = np.asarray(self.model.index_list, dtype=int)
@@ -384,9 +391,6 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         # full L x num_symbols delta-Hamiltonian matrix relative to this background
         delta = _single_mutant_hamiltonians(bg, model.J_ij, model.h_i)[:, :, FULL]
 
-        if invalid.any():
-            delta = np.full_like(delta, np.nan)
-
         # evedesign positions aligned with the model array order
         evc_positions = self._index_list - 1 + first_index
         pos_filter = set(positions) if positions is not None else None
@@ -474,15 +478,12 @@ class EVcouplings(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
             bg_invalid = invalid.copy()
             bg_invalid[mi] = False
 
-            if bg_invalid.any():
-                logits = np.full(num_symbols, np.nan)
-            else:
-                logits = np.array([
-                    _delta_hamiltonian(
-                        np.array([mi]), np.array([symbol]), bg, model.J_ij, model.h_i
-                    )[FULL]
-                    for symbol in range(num_symbols)
-                ])
+            logits = np.array([
+                _delta_hamiltonian(
+                    np.array([mi]), np.array([symbol]), bg, model.J_ij, model.h_i
+                )[FULL]
+                for symbol in range(num_symbols)
+            ])
 
             rows.append(logits)
             index_tuples.append((inst_idx, int(entity), int(pos)))
@@ -513,7 +514,7 @@ class EVcouplingsMeanField(EVcouplings):
     EVcouplings model fitted with mean-field DCA
     """
     name: str = "EVcouplingsMeanField"
-    honors_precomputed_weights: bool = False
+    _honors_precomputed_weights: bool = False
 
     def __init__(
         self,
@@ -530,9 +531,8 @@ class EVcouplingsMeanField(EVcouplings):
             Alignment columns whose (unweighted) gap frequency strictly exceeds this
             threshold are excluded from the fitted model and from positions()
         theta
-            Sequence reweighting identity threshold; sequences with pairwise identity
-            >= theta are clustered and down-weighted. None falls back to the
-            MeanFieldDCA default (theta=0.8)
+            Sequence reweighting identity threshold. Sequences with pairwise identity
+            >= theta are clustered and down-weighted
         pseudo_count
             Pseudo-count for frequency regularization
         """
@@ -597,9 +597,8 @@ class EVcouplingsPLM(EVcouplings):
             threshold are excluded from the fitted model and from positions()
         theta
             Sequence reweighting identity threshold. Sequences with pairwise identity
-            >= theta are clustered and down-weighted. Only used as a fallback when the
-            provided Sequences carry no precomputed weights. None falls back to the
-            plmc default (theta=0.8)
+            >= theta are clustered and down-weighted. Used as a fallback when the
+            provided Sequences carry no precomputed weights
         lambda_h
             L2 regularisation strength on fields h_i
         lambda_J

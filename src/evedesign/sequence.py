@@ -9,24 +9,51 @@ from collections import abc
 import numpy as np
 from numba import jit, prange, get_num_threads, set_num_threads
 
-from evedesign.constants import MASK, GAP
+from evedesign.constants import (
+    MASK,
+    GAP,
+    VALID_AA_OR_GAP_SORTED,
+    VALID_DNA_OR_GAP_SORTED,
+    VALID_RNA_OR_GAP_SORTED,
+)
 from evedesign.types import BioPolymer, RepSequence, SequenceMetadata
 from evedesign.utils import shorten, str_to_np_char_view, map_array, index_map
 
 
 REMOVE_INSERTIONS_TRANSLATION = str.maketrans("", "", ascii_lowercase + ".")
 
-ALPHABETS: dict[str, str] = {
-    "protein": GAP + "ACDEFGHIKLMNPQRSTVWY",
-    "dna": GAP + "ACGT",
-    "rna": GAP + "ACGU",
+ALPHABETS_OR_GAP_SORTED: dict[str, list[str]] = {
+    "protein": VALID_AA_OR_GAP_SORTED,
+    "dna": VALID_DNA_OR_GAP_SORTED,
+    "rna": VALID_RNA_OR_GAP_SORTED,
 }
 
 
 @jit(nopython=True, parallel=True)
 def _num_cluster_members(matrix, identity_threshold, exclude_value):
     """
-    EVcouplings function for calculating sequence weights
+    Calculate number of sequences in alignment
+    within given identity_threshold of each other
+
+    Parameters
+    ----------
+    matrix : np.array
+        N x L matrix containing N sequences of length L.
+        Matrix must be mapped to range(0, num_symbols) using
+        map_matrix function
+    identity_threshold : float
+        Sequences with at least this pairwise identity will be
+        grouped in the same cluster.
+    exclude_value : int
+        Value >= 0 in matrix that will be excluded from identity calculation, e.g. gap or lowercase character.
+        Set to -1 to enable legacy behaviour which includes gaps in identity calculation.
+
+    Returns
+    -------
+    np.array
+        Vector of length N containing number of cluster
+        members for each sequence (inverse of sequence
+        weight)
     """
     N, L = matrix.shape
     num_neighbors = np.zeros((N, ))
@@ -249,33 +276,38 @@ class Sequences:
     def compute_weights(
         self,
         theta: float = 0.8,
-        method: Literal["nogaps", "withgaps"] = "withgaps",
+        method: Literal["theta_nogaps", "theta_withgaps"] = "theta_nogaps",
         cpu: int | None = None,
     ) -> Self:
         """
-        Compute per-sequence weights and assign them to self.weights
+        Compute per-sequence weights and return a copy with the weights set
+
+        Does not mutate the current object. The returned Sequences shares the same
+        underlying Sequence objects with weights replaced
 
         Parameters
         ----------
         theta
             Sequence identity threshold for clustering
         method
-            withgaps includes gaps in the identity calculation (default
-            EVcouplings), nogaps excludes them
+            theta_nogaps excludes gaps from identity calculation,
+            theta_withgaps includes them 
         cpu
             Number of numba threads (None uses all)
 
         Returns
         -------
-        Self (with self.weights)
+        A copy of this Sequences object with weights set
         """
         match_seqs = [s.seq for s in self.to_a3m().remove_inserts().seqs]
 
-        alphabet = ALPHABETS.get(self.type_, ALPHABETS["protein"])
+        alphabet = ALPHABETS_OR_GAP_SORTED.get(
+            self.type_, ALPHABETS_OR_GAP_SORTED["protein"]
+        )
         mapping = index_map(list(alphabet), default_option=GAP)
         matrix = map_array(str_to_np_char_view(match_seqs), mapping)
 
-        exclude_value = mapping[GAP] if method == "nogaps" else -1
+        exclude_value = mapping[GAP] if method == "theta_nogaps" else -1
 
         threads_before = None
         if cpu is not None:
@@ -287,9 +319,15 @@ class Sequences:
             if threads_before is not None:
                 set_num_threads(threads_before)
 
-        self.weights = [float(w) for w in 1.0 / num_cluster_members]
+        weights = [float(w) for w in 1.0 / num_cluster_members]
 
-        return self
+        return type(self)(
+            seqs=self.seqs,
+            aligned=self.aligned,
+            type=self.type_,
+            weights=weights,
+            format=self.format_,
+        )
 
     def serialize(self) -> dict[str, Any]:
         """
