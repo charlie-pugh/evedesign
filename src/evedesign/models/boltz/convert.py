@@ -17,7 +17,7 @@ from loguru import logger
 
 from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap, Structure
 from evedesign.structure import StructureFile
-from evedesign.types import Score
+from evedesign.types import Score, RepSequence
 
 # 1. evedesign Entity --> to Boltz-2 YAML
 
@@ -68,17 +68,56 @@ def _write_a3m(
     entity: Entity,
     entity_instance: EntityInstance,
     output_path: Path,
+    old_query: str | RepSequence | None = None,
 ) -> Path:
-    """Write an A3M file with the query sequence followed by MSA hits."""
+    """Write an A3M file with the query sequence followed by MSA hits.
+
+    The MSA hits in ``entity.sequences`` were searched once against a base
+    query (the system rep, ``entity.rep``). When folding a SystemInstance
+    whose rep differs from that base query, the hit columns are remapped to
+    the instance rep via :meth:`Sequences.remap_query`, so a single base MSA
+    can be reused across many instances without re-running MMSeqs2.
+
+    Parameters
+    ----------
+    old_query
+        The query the current ``entity.sequences`` were aligned against
+        (typically ``entity.rep``). If None, equal to the instance rep, or
+        the remap fails, the hits are written verbatim (back-compatible
+        behavior).
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as f:
-        # Query sequence first
-        header = entity.id or "query"
-        f.write(f">{header}\n{''.join(entity_instance.rep)}\n")
+    new_query = "".join(entity_instance.rep)
 
-        # MSA hits
-        for seq in entity.sequences.seqs:
+    # Reuse the base MSA across instances by remapping its columns to the
+    # current instance rep. Skip when there is nothing to remap against, the
+    # query is unchanged, or the remap is not possible — folding with the raw
+    # MSA is preferable to crashing.
+    sequences = entity.sequences
+    if old_query is not None:
+        old_query_str = "".join(old_query)
+        if old_query_str != new_query:
+            try:
+                sequences = entity.sequences.remap_query(old_query_str, new_query)
+            except (ValueError, NotImplementedError) as exc:
+                logger.warning(
+                    f"Entity '{entity.id}': could not remap MSA from base query "
+                    f"to instance rep ({exc}); writing hits verbatim."
+                )
+                sequences = entity.sequences
+
+    with open(output_path, "w") as f:
+        # Query sequence first. The raw rep (with gaps/lowercase) is what
+        # remap_query needs to identify column transitions, but the A3M query
+        # line must be the actual designed sequence boltz folds: gaps stripped
+        # (deleted positions are not residues) and insertions uppercased.
+        header = entity.id or "query"
+        query_line = EntityInstance.normalize_rep_str(new_query)
+        f.write(f">{header}\n{query_line}\n")
+
+        # MSA hits (remapped to the current instance when applicable)
+        for seq in sequences.seqs:
             f.write(f">{seq.id_ or 'seq'}\n{seq.seq}\n")
 
     return output_path
@@ -156,9 +195,13 @@ def _resolve_msa_field(
                 yaml_path.parent / "msa" / f"{chain_id}.csv",
             )
         else:
+            # entity.rep is the base query MMSeqs2 searched on (see
+            # add_sequences_mmseqs2); pass it so the hits can be remapped to
+            # this instance's rep instead of triggering a fresh search.
             msa_path = _write_a3m(
                 entity, entity_instance,
                 yaml_path.parent / "msa" / f"{chain_id}.a3m",
+                old_query=entity.rep,
             )
         return str(msa_path.resolve())
 

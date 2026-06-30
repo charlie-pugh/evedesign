@@ -209,7 +209,103 @@ class Sequences:
             aligned=True,
             weights=self.weights,
             format=self.format_
-        )        
+        )
+
+    def remap_query(
+        self,
+        old_query: str | RepSequence,
+        new_query: str | RepSequence,
+    ) -> "Sequences":
+        """
+        Remap this alignment to a new query sequence.
+
+        Returns a new Sequences with the same hits but with columns added/removed
+        to match the new query's insertions and deletions relative to the old query.
+
+        Used to reuse one MSA across many SystemInstances without re-querying the
+        MMSeqs2 server: search once on the system rep, remap per-instance.
+
+        Parameters
+        ----------
+        old_query
+            The query that produced the current alignment (the system rep or
+            whatever was used to populate self).
+        new_query
+            The new query in A3M convention: uppercase for alignment columns,
+            '-' for deletions, lowercase for insertions.
+
+        Returns
+        -------
+        Sequences
+            A new Sequences containing the same hits with columns remapped.
+            Format is preserved.
+
+        Raises
+        ------
+        NotImplementedError
+            If self.format_ is not in {"a3m", "a2m"}.
+        ValueError
+            If the count of uppercase + gap chars in new_query doesn't match
+            len(old_query).
+        ValueError
+            If any hit's length doesn't match len(old_query) (alignment
+            integrity check).
+        """
+        if self.format_ not in {"a3m", "a2m"}:
+            raise NotImplementedError(
+                f"remap_query is not supported for format: {self.format_}"
+            )
+
+        # accept both str and RepSequence (numpy U1 array)
+        old_q = "".join(old_query)
+        new_q = "".join(new_query)
+        n_cols = len(old_q)
+
+        # alignment integrity: each hit must have exactly one column per old query position
+        for hit in self.seqs:
+            if len(hit.seq) != n_cols:
+                raise ValueError(
+                    f"hit '{hit.id_}' has length {len(hit.seq)}, "
+                    f"expected {n_cols} to match old_query"
+                )
+
+        # build the column operations once (shared across all hits):
+        # an int op takes that base column from the hit, None inserts a gap
+        ops: list[int | None] = []
+        base_col = 0
+        for char in new_q:
+            if char == GAP:
+                # deletion relative to old query: skip this column from all hits
+                base_col += 1
+            elif char.islower():
+                # insertion not present in old query: add a new gap column
+                ops.append(None)
+            else:
+                # alignment column: take the corresponding column from each hit
+                ops.append(base_col)
+                base_col += 1
+
+        if base_col != n_cols:
+            raise ValueError(
+                f"new_query consumes {base_col} columns "
+                f"but old_query has {n_cols}"
+            )
+
+        remapped = []
+        for hit in self.seqs:
+            new_seq = "".join(
+                GAP if op is None else hit.seq[op] for op in ops
+            )
+            remapped.append(
+                type(hit)(seq=new_seq, id=hit.id_, type=hit.type_)
+            )
+
+        return type(self)(
+            seqs=remapped,
+            aligned=True,
+            weights=self.weights,
+            format=self.format_,
+        )
 
     def serialize(self) -> dict[str, Any]:
         """
