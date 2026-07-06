@@ -115,12 +115,19 @@ def test_transform_diffusion_samples():
     assert "model_1" in models
     assert "model_2" in models
     assert results[0].score is not None
-    # Per-sample confidences in metadata
+    # Per-sample confidences in metadata: a flat
+    # list[Score], each entry tagged with the
+    # diffusion sample rank in "index".
     scores = results[0].metadata["scores"]
-    assert len(scores) == 3
-    assert "model_0" in scores
-    assert "model_1" in scores
-    assert "model_2" in scores
+    assert isinstance(scores, list)
+    # All three diffusion samples (indices 0,1,2)
+    # should appear across the score entries.
+    sample_indices = {s["index"] for s in scores}
+    assert sample_indices == {0, 1, 2}
+    # Each Score entry has the expected shape.
+    for sc in scores:
+        assert set(sc.keys()) >= {"index", "name", "score"}
+        assert isinstance(sc["score"], float)
 
 
 def test_transform_homo_oligomer():
