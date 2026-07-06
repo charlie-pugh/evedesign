@@ -245,11 +245,11 @@ class Sequences:
         NotImplementedError
             If self.format_ is not in {"a3m", "a2m"}.
         ValueError
-            If the count of uppercase + gap chars in new_query doesn't match
-            len(old_query).
+            If new_query's match-column count (uppercase + gap chars) doesn't
+            match old_query's match-column count.
         ValueError
-            If any hit's length doesn't match len(old_query) (alignment
-            integrity check).
+            If any hit's match-column count (non-lowercase chars) doesn't match
+            old_query's match-column count.
         """
         if self.format_ not in {"a3m", "a2m"}:
             raise NotImplementedError(
@@ -259,45 +259,68 @@ class Sequences:
         # accept both str and RepSequence (numpy U1 array)
         old_q = "".join(old_query)
         new_q = "".join(new_query)
-        n_cols = len(old_q)
 
-        # alignment integrity: each hit must have exactly one column per old query position
-        for hit in self.seqs:
-            if len(hit.seq) != n_cols:
-                raise ValueError(
-                    f"hit '{hit.id_}' has length {len(hit.seq)}, "
-                    f"expected {n_cols} to match old_query"
-                )
+        # match columns = uppercase (aligned) or gap; lowercase = insert (0 cols)
+        def match_columns(s: str) -> int:
+            return sum(1 for ch in s if not ch.islower())
 
-        # build the column operations once (shared across all hits):
-        # an int op takes that base column from the hit, None inserts a gap
-        ops: list[int | None] = []
-        base_col = 0
-        for char in new_q:
-            if char == GAP:
-                # deletion relative to old query: skip this column from all hits
-                base_col += 1
-            elif char.islower():
-                # insertion not present in old query: add a new gap column
-                ops.append(None)
-            else:
-                # alignment column: take the corresponding column from each hit
-                ops.append(base_col)
-                base_col += 1
+        n_cols = match_columns(old_q)
 
-        if base_col != n_cols:
+        if match_columns(new_q) != n_cols:
             raise ValueError(
-                f"new_query consumes {base_col} columns "
+                f"new_query spans {match_columns(new_q)} match columns "
                 f"but old_query has {n_cols}"
             )
 
+        for hit in self.seqs:
+            hit_cols = match_columns(hit.seq)
+            if hit_cols != n_cols:
+                raise ValueError(
+                    f"hit '{hit.id_}' has {hit_cols} match columns, "
+                    f"expected {n_cols} to match old_query"
+                )
+
+        def consume_match_column(hit_str: str, pos: int) -> tuple[str, str, int]:
+            # carry any leading lowercase insert run, then take one match char
+            start = pos
+            while pos < len(hit_str) and hit_str[pos].islower():
+                pos += 1
+            insert_run = hit_str[start:pos]
+            if pos >= len(hit_str):
+                raise ValueError("hit has fewer match columns than old_query")
+            return insert_run, hit_str[pos], pos + 1
+
         remapped = []
         for hit in self.seqs:
-            new_seq = "".join(
-                GAP if op is None else hit.seq[op] for op in ops
-            )
+            hit_str = hit.seq
+            out: list[str] = []
+            p = 0
+            for c in new_q:
+                if c.islower():
+                    # new-query insertion: hits have no residue here
+                    out.append(GAP)
+                elif c == GAP:
+                    # deletion: keep the hit's insert run, drop the match residue
+                    insert_run, _col, p = consume_match_column(hit_str, p)
+                    out.append(insert_run)
+                else:
+                    # substitution/match: carry insert run + residue
+                    insert_run, col, p = consume_match_column(hit_str, p)
+                    out.append(insert_run)
+                    out.append(col)
+
+            # carry any trailing (C-terminal) insert run
+            while p < len(hit_str) and hit_str[p].islower():
+                out.append(hit_str[p])
+                p += 1
+
+            if p != len(hit_str):
+                raise ValueError(
+                    f"hit '{hit.id_}' has more match columns than old_query"
+                )
+
             remapped.append(
-                type(hit)(seq=new_seq, id=hit.id_, type=hit.type_)
+                type(hit)(seq="".join(out), id=hit.id_, type=hit.type_)
             )
 
         return type(self)(
