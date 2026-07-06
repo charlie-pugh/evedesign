@@ -58,3 +58,74 @@ def test_remap_query_hit_length_mismatch():
     sequences = Sequences(seqs=hits, aligned=True, format="a3m")
     with pytest.raises(ValueError):
         sequences.remap_query("ALCD", "VICD")
+
+
+# --- lowercase (A3M insert-state) hits; old_query = "ALCD" (4 match columns) ---
+
+def _lc(hit):
+    return Sequences(seqs=[Sequence(hit, id="h")], aligned=True, format="a3m")
+
+
+def test_remap_query_lc_substitution():
+    # hit "ALsCD" (insert s between cols 1,2), new "VICD" (all substitutions)
+    # trace: V->A ; I->L ; C->carry s then C = "sC" ; D->D
+    result = _lc("ALsCD").remap_query("ALCD", "VICD")
+    assert [s.seq for s in result.seqs] == ["ALsCD"]
+
+
+def test_remap_query_lc_deletion():
+    # hit "ALsCD", new "A-CD" (delete col 1 = L)
+    # trace: A->A ; '-'-> no leading lc, take L, drop = "" ; C->carry s then C = "sC" ; D->D
+    result = _lc("ALsCD").remap_query("ALCD", "A-CD")
+    assert [s.seq for s in result.seqs] == ["AsCD"]
+
+
+def test_remap_query_lc_deletion_at_insert_boundary():
+    # hit "ALsCD", new "AL-D" (delete col 2 = C, which has insert s before it)
+    # trace: A->A ; L->L ; '-'-> carry leading s then take C, drop = "s" ; D->D
+    result = _lc("ALsCD").remap_query("ALCD", "AL-D")
+    assert [s.seq for s in result.seqs] == ["ALsD"]
+
+
+def test_remap_query_lc_insertion_in_query():
+    # hit "ALsCD", new "ALCtD" (insert t between cols 2,3)
+    # trace: A->A ; L->L ; C->carry s then C = "sC" ; t-> gap ; D->D
+    result = _lc("ALsCD").remap_query("ALCD", "ALCtD")
+    assert [s.seq for s in result.seqs] == ["ALsC-D"]
+
+
+def test_remap_query_lc_trailing_insertion():
+    # hit "ALCDy" (trailing insert y), new "ALCD"
+    # trace: A,L,C,D consumed ; then trailing lowercase y carried
+    result = _lc("ALCDy").remap_query("ALCD", "ALCD")
+    assert [s.seq for s in result.seqs] == ["ALCDy"]
+
+
+def test_remap_query_lc_leading_insertion():
+    # hit "xALCD" (leading insert x), new "VLCD"
+    # trace: V->carry x then A = "xA" ; L->L ; C->C ; D->D
+    result = _lc("xALCD").remap_query("ALCD", "VLCD")
+    assert [s.seq for s in result.seqs] == ["xALCD"]
+
+
+def test_remap_query_lc_too_many_match_columns_raises():
+    # hit "ALCDE" has 5 match columns vs old_query's 4
+    with pytest.raises(ValueError):
+        _lc("ALCDE").remap_query("ALCD", "VICD")
+
+
+def test_remap_query_lc_too_few_match_columns_raises():
+    # hit "ALC" has 3 match columns vs old_query's 4
+    with pytest.raises(ValueError):
+        _lc("ALC").remap_query("ALCD", "VICD")
+
+
+def test_remap_query_mixed_clean_and_lowercase_hits():
+    # one clean hit + one lowercase hit remapped together in a single call;
+    # new "ALCtD" inserts t between cols 2,3.
+    # clean "ALSD" -> A,L,S then gap then D = "ALS-D"
+    # lc    "ALsCD" -> A,L,(carry s)C then gap then D = "ALsC-D"
+    hits = [Sequence("ALSD", id="clean"), Sequence("ALsCD", id="lc")]
+    sequences = Sequences(seqs=hits, aligned=True, format="a3m")
+    result = sequences.remap_query("ALCD", "ALCtD")
+    assert [s.seq for s in result.seqs] == ["ALS-D", "ALsC-D"]
