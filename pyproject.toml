@@ -78,12 +78,21 @@ exclude_lines = [
 ]
 
 [tool.uv]
-# Override stale upstream pins. boltz declares
-# numpy<2.0 and scipy==1.13.1; empirical testing
-# confirms it runs cleanly on numpy>=2.0 and
-# scipy>=1.14. Required when installing the
-# boltz2fold extras with uv.
+# Override stale/blocking upstream pins so a fresh install
+# lands on a working, modern stack:
+#   - boltz 2.2.1 declares numpy<2.0 and scipy==1.13.1;
+#     both are stale — boltz runs fine on numpy 2.x and
+#     scipy>=1.14 (empirically verified).
+#   - boltz pins numba==0.61.0, which runtime-rejects
+#     numpy>2.1. We override numba up to >=0.64 (supports
+#     numpy<2.5) so numpy can stay modern. numpy is capped
+#     at <2.5 to satisfy numba 0.64+'s runtime check —
+#     without this cap, uv resolves numpy 2.5 and numba
+#     raises ImportError at import.
+# Revisit these bounds when bumping boltz: a future boltz
+# may relax its numba pin, allowing a higher numpy ceiling.
 override-dependencies = [
-    "numpy>=2.0,<2.8",
+    "numpy>=2.0,<2.5",
+    "numba>=0.64",
     "scipy>=1.14",
 ]
