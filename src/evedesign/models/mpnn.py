@@ -32,7 +32,7 @@ except ImportError:
     IMPORT_AVAILABLE = False
 
 MODEL_BASE_URL = "https://files.ipd.uw.edu/pub/ligandmpnn"
-DEFAULT_CHECKPOINT_PATH = os.path.expanduser("~/.cache/mpnn")
+DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/mpnn")
 
 # Model checkpoint URLs
 MODEL_URLS = {
@@ -136,7 +136,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
         fix_full_decoding_order: bool = False,
         vary_decoding_order_per_instance: bool = False,
         keep_model_after_build: bool = False,
-        cache_dir: str | None = DEFAULT_CHECKPOINT_PATH,
+        model_dir_path: str | None = DEFAULT_CACHE_DIR,
         device: DeviceType = "cpu"
     ):
         """
@@ -164,8 +164,8 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
             (will only have an effect if fix_full_decoding_order is False)
         ligand_cutoff
             Cutoff distance in angstroms to select residues that are considered to be close to ligand atoms
-        cache_dir
-            Directory to use for storing downloaded model parameters (only relevant if checkpoint_path is None)
+        model_dir_path
+            Directory to use for storing downloaded model parameters (only relevant if model_file_path is None)
         device
             Device to use for computations
         """
@@ -192,7 +192,7 @@ class LigandMPNN(BaseModel, Scorer, Generator, MutationScorer, ConditionalMutati
        # Handle checkpoint path
         if model_file_path is None:
             # Download from web using model_name
-            self.checkpoint_path = download_checkpoint(model_name, cache_dir)
+            self.checkpoint_path = download_checkpoint(model_name, model_dir_path)
         else:
             self.checkpoint_path = model_file_path
 
