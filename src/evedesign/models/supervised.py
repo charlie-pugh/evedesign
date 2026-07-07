@@ -1,30 +1,29 @@
 """
 Supervised regression models trained on top of embeddings and/or scores from zero-shot models
 """
+from abc import ABC, abstractmethod
 from typing import Any, Sequence, Literal
 import numpy as np
 from sklearn.base import ClassifierMixin
 from sklearn.exceptions import NotFittedError
-from sklearn.metrics import r2_score, make_scorer, average_precision_score, roc_auc_score, matthews_corrcoef
-from sklearn.model_selection import cross_validate, cross_val_predict, KFold, StratifiedKFold
+from sklearn.metrics import r2_score, average_precision_score, roc_auc_score
 from sklearn.utils import all_estimators
 from sklearn.utils.validation import check_is_fitted
 from scipy.stats import pearsonr, spearmanr
-from evedesign.dataset import LabeledInstanceDataset, LabeledInstanceTrainTestDataset
+from evedesign.dataset import LabeledInstanceDataset
 from evedesign.system import System, SystemInstance
 from evedesign.model import Transformer, Scorer, SupervisedBaseModel, MutationScorer, \
-    ConditionalMutationScorer
+    ConditionalMutationScorer, assign_scores_to_instances
 from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
 
 spearman_score = lambda y_true, y_pred: spearmanr(y_true, y_pred).correlation
 pearson_score = lambda y_true, y_pred: pearsonr(y_true, y_pred).correlation
 
 
-class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
+class SupervisedPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationScorer, ConditionalMutationScorer, ABC):
     """
-    Supervised property prediction from pooled molecular embeddings. Can stack any
-    scikit-learn-compatible predictors that implement fit() and predict()
-    methods, including pipelines
+    Supervised property prediction from pooled molecular embeddings and scores. Abstract base class to inherit from
+    for specific supervised models.
 
     Currently only uses embeddings for biopolymers. Multi-entity systems are supported, but all embeddings
     must have same feature dimensionality.
@@ -34,8 +33,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
     e.g. log-transformed read ratios vs WT
 
     Note: Possible extensions/updates in future
-    - Implement non-random splitting strategies to get more meaningful estimates of performance?
-    - Refactor out reusable functionality (e.g. feature vector creation) so it can be reused for other models
     - Multi-output learning (but need to think about how to integrate with score() with expects scalar per instance,
       but main purpose would be able to regress out other variables anyways, e.g. stability from activity)
     """
@@ -60,8 +57,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
 
     def __init__(
         self,
-        predictor: Any | str,
-        predictor_kwargs: dict[str, Any] | None = None,
         embedder: Transformer | None = None,
         scorer: Scorer | None = None,
         use_embeddings: bool = True,
@@ -69,14 +64,12 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         override_models_for_training: bool = False,
         target_name: str | None = None,
         pooling: Literal["mean", "max"] | None = "mean",
-        cv_folds: int | None = 5,
         batch_size: BatchSize = 128,
-        random_state: int = 42,
-        n_jobs: int = -1,
+        is_classifier: bool = False
     ):
         """
         Train supervised regression model on top of molecular model embeddings/scores. Positional embeddings
-        will be pooled to one feature vector along the position dimension.
+        can be pooled to one feature vector along the position dimension.
 
         Can be used in either of two modes with pre-computed embeddings/scores, or through on-the-fly computation
         (cf. embedder param). The latter mode is needed to use mutation scoring methods, e.g. for Gibbs sampling
@@ -84,11 +77,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
 
         Parameters
         ----------
-        predictor
-            Scikit-learn regressor instance or model name string as available through
-            sklearn.utils.all_estimators(type_filter=["regressor", "classifier"])
-        predictor_kwargs
-            Constructor parameters to use if predictor is a string (will be ignored if predictor is a model instance)
         embedder
             Molecular model to use for computing embeddings on the fly. If None, will use values available on supplied
             instances for build() and score(); in this mode, mutation scoring methods cannot be used).
@@ -118,57 +106,13 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
             Aggregation to apply to positional embeddings across position dimension (to obtain one feature vector
             per entity). If None, do not apply any pooling and flatten embedding array instead; this requires
             that embeddings have the same length/number of positions across all instances.
-        cv_folds
-            Number of cross-validation folds to use during model training, if no explicit test dataset is supplied
-            to build(). Will use StratifiedKFold CV for classifiers and regular KFold CV for regressors.
         batch_size
             Assemble X features in batches of this size. Helps to address out of memory errors as embedding memory
             usage can become very large if predicting many instances at the same time
-        random_state
-            Number to initialize random state of CV fold splitting (note: will not be applied to predictor, this
-            needs to be done during instance construction or using predictor_kwargs if predictor string is supplied)
-        n_jobs
-            Number of cores to use for scikit-learn computations (-1: use all available cores)
+        is_classifier
+            Set to True if trained model is a classifier, to False if a regression model (determines default
+            evaluation metrics)
         """
-        # instantiate predictor from model name string or store provided instance
-        if isinstance(predictor, str):
-            all_predictors = dict(all_estimators(type_filter=["regressor", "classifier"]))
-            if predictor in all_predictors:
-                if predictor_kwargs is None:
-                    predictor_kwargs = {}
-                self.predictor: Any = all_predictors[predictor](
-                    **predictor_kwargs
-                )
-            else:
-                raise ValueError(
-                    f"Invalid regressor, valid options are {', ' .join(list(all_predictors))}"
-                )
-        else:
-            # unfortunately no good typing options available, so verify attributes like scikit-learn does
-            if not hasattr(predictor, "fit") or not hasattr(predictor, "predict"):
-                raise ValueError(
-                    "Predictor must have scikit-learn fit() and predict methods()"
-                )
-
-            self.predictor = predictor
-
-        self._is_classifier = isinstance(self.predictor, ClassifierMixin)
-
-        # set evaluation scores depending if we have a classifier or regressor
-        if self._is_classifier:
-            self._eval_scores = {
-                "rocauc": roc_auc_score,
-                "average_precision": average_precision_score,
-                "mcc": matthews_corrcoef,
-            }
-        else:
-            # default to regression
-            self._eval_scores = {
-                "spearman": spearman_score,
-                "pearson": pearson_score,
-                "r2": r2_score
-            }
-
         # make sure we are left with some features
         if not use_scores and not use_embeddings:
             raise ValueError(
@@ -186,10 +130,6 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         self.use_scores = use_scores
         self.use_embeddings = use_embeddings
         self.pooling_strategy = pooling
-        self.predictor_kwargs = predictor_kwargs if predictor_kwargs is not None else {}
-        self.cv_folds = cv_folds
-        self.random_state = random_state
-        self.n_jobs = n_jobs
 
         if batch_size == "auto":
             raise NotImplementedError("Automatic batch_size not yet implemented")
@@ -211,21 +151,26 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
             self.requires_fixed_length = self.requires_fixed_length or scorer.requires_fixed_length
             self.requires_target = self.requires_target or scorer.requires_target
 
+        # set evaluation scores depending if we have a classifier or regressor
+        self._is_classifier = is_classifier
+        if self._is_classifier:
+            # for now, we only allow to use sklearn metrics that receive scores/probabilities, not class labels
+            self._eval_scores = {
+                "rocauc": roc_auc_score,
+                "average_precision": average_precision_score,
+            }
+        else:
+            # default to regression
+            self._eval_scores = {
+                "spearman": spearman_score,
+                "pearson": pearson_score,
+                "r2": r2_score
+            }
+
         # performance statistics
         self._y_true = None
         self._y_pred = None
         self._scores = None
-
-    @property
-    def ready(self):
-        # model only required if embeddings are non pre-specified
-        fitted = True
-        try:
-            check_is_fitted(self.predictor)
-        except NotFittedError:
-            fitted = False
-
-        return self.system is not None and fitted
 
     @property
     def system(self) -> System | None:
@@ -315,7 +260,7 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
             # make sure embeddings are defined for all entity instances in each system instance,
             # and that they all have the same feature dimensionality
             embeddings = [
-                np.concatenate(instance_parts, axis=0)
+                np.concatenate(instance_parts, axis=0)  # noqa
                 for instance_parts in embeddings_in_parts
                 if not any([part is None for part in instance_parts])  # all embeddings specified
                 and len(set([part.shape[-1] for part in instance_parts])) == 1  # all have same feature dimensionality
@@ -382,7 +327,9 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                     )
             else:
                 # we always compute scores on the fly if an explicit scorer is defined
-                scores = self.scorer.score(instances)
+                scores = np.array([
+                    inst.score for inst in self.scorer.score(instances)
+                ])
 
             # expand axes for concatenation with feature matrix
             scores = scores[:, np.newaxis]
@@ -421,10 +368,47 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
 
         return np.concatenate(all_x, axis=0)  # noqa
 
+    @abstractmethod
+    def _fit(
+        self,
+        instances_transformed: np.ndarray[tuple[int, int], np.dtype[float]],
+        values
+    ) -> None:
+        """
+        Abstract method to overwrite in concrete implementations that fits models on embeddings/scores.
+
+        Parameters
+        ----------
+        instances_transformed
+            Pretransformed instances with embeddings and scores (X)
+        values
+            Labels for all instances (y)
+        """
+        pass
+
+    @abstractmethod
+    def _score(
+        self,
+        instances_transformed: np.ndarray[tuple[int, int], np.dtype[float]],
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        """
+        Abstract method to overwrite in concrete implementations that scores pre-transformed
+        instances with embeddings and scores using a previously fitted model
+
+        Parameters
+        ----------
+        instances_transformed
+
+        Returns
+        -------
+        Predicted y values
+        """
+        pass
+
     def build(
         self,
         system: System,
-        data: LabeledInstanceTrainTestDataset,
+        data: LabeledInstanceDataset,
         status_callback: StatusCallback | None = None
     ):
         # verify if we can model the system
@@ -439,85 +423,71 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
                 "system does not agree to embedder or scorer"
             )
 
-        # retrieve target series, do not use missing values
-        train_instances, train_values = data.training_set.select(
+        # retrieve target series, do not use missing values; we drop the test/val split as not used
+        # by this model implementation
+        instances, values, splits, _ = data.select(
             self.target_name, drop_missing=True
         )
 
         # training set
-        x_train = self._transform_and_validate_instances(
-            train_instances, self.override_models_for_training, status_callback
+        x = self._transform_and_validate_instances(
+            instances, self.override_models_for_training, status_callback
         )
-        y_train = np.array(train_values)
 
-        # explicitly specified test set, if available, do not use cross-validation for performance estimation
-        if data.test_set is not None:
-            test_instances, test_values = data.test_set.select(
-                self.target_name, drop_missing=True
-            )
+        y = np.array(values)
 
-            x_test = self._transform_and_validate_instances(
-                test_instances, self.override_models_for_training, status_callback
-            )
-            y_test = np.array(test_values)
-        else:
-            x_test = None
-            y_test = None
+        # iterate arbitrary splits to estimate model performance
+        if splits is not None:
+            self._scores = {}
+            self._y_true = []
+            self._y_pred = []
 
-        if x_test is None:
-            # estimate performance with cross validation
+            for split_name, split in splits.items():
+                x_split_train = x[split["train"]]
+                y_split_train = y[split["train"]]
 
-            # follow sklearn and use stratified k-fold CV for classifiers, standard k-fold otherwise
-            if self._is_classifier:
-                k_fold_cls = StratifiedKFold
-            else:
-                k_fold_cls = KFold
+                x_split_test = x[split["test"]]
+                y_split_test = y[split["test"]]
 
-            # shuffle dataset, default for cross_validate is shuffle=False
-            k_fold = k_fold_cls(
-                n_splits=self.cv_folds, shuffle=True, random_state=self.random_state
-            )
+                # fit model on current training split and predict test split
+                self._fit(x_split_train, y_split_train)
+                y_pred = self._score(x_split_test)
 
-            cv_results = cross_validate(
-                self.predictor,
-                x_train,
-                y_train,
-                scoring={
-                    name: make_scorer(eval_score) for name, eval_score in self._eval_scores.items()
-                },
-                cv=k_fold,
-                n_jobs=self.n_jobs
-            )
+                self._y_true += [y_split_test]
+                self._y_pred += [y_pred]
 
-            self._scores = {
-                name: cv_results["test_" + name] for name in self._eval_scores
-            }
+                # remove -inf values from log probabilities for classifiers
+                # or otherwise scoring will crash
+                if self._is_classifier:
+                    # copy so we don't modify list above
+                    y_pred = y_pred.copy()
+                    y_pred[y_pred == -np.inf] = np.finfo(np.float64).tiny
 
-            # create predicted values with cross-validation
-            self._y_pred = cross_val_predict(
-                self.predictor,
-                x_train,
-                y_train,
-                cv=k_fold,
-                n_jobs=self.n_jobs
-            )
-            self._y_true = y_train
+                # compute evaluation scores
+                for name, eval_score in self._eval_scores.items():
+                    self._scores[name] = self._scores.get(name, []) + [
+                        eval_score(y_split_test, y_pred)
+                    ]
 
-            # refit final predictor on whole dataset
-            self.predictor.fit(x_train, y_train)
-        else:
-            # fit final predictor on full training set (this could also implicitly be GridSearchCV/RandomSearchCV)
-            self.predictor.fit(x_train, y_train)
-
-            # evaluate on test set
-            self._y_pred = self.predictor.predict(x_test)
-            self._y_true = y_test
-
-            self._scores = {
-                name: eval_score(self._y_true, self._y_pred) for name, eval_score in self._eval_scores.items()
-            }
+        # fit final predictor on full training set (this could also implicitly be GridSearchCV/RandomSearchCV)
+        self._fit(x, y)
 
         return self
+
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None
+    ) -> list[SystemInstance]:
+        self.ready_or_raise()
+
+        x_pred = self._transform_and_validate_instances(
+            instances, override_models=False, status_callback=status_callback
+        )
+
+        scores = self._score(x_pred)
+
+        return assign_scores_to_instances(instances, scores)
 
     def stats(self) -> ModelStats | None:
         """
@@ -531,24 +501,157 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedBaseModel, Scorer, MutationSc
         # only able to provide statistics once model has been built
         self.ready_or_raise()
 
-        return {
+        res: ModelStats = {
             "y_true": self._y_true,
             "y_pred": self._y_pred,
             "scores": self._scores,
         }
 
-    def score(
-        self,
-        instances: Sequence[SystemInstance],
-        status_callback: StatusCallback | None = None
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
-        self.ready_or_raise()
+        return res
 
-        x_pred = self._transform_and_validate_instances(
-            instances, override_models=False, status_callback=status_callback
+
+class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
+    """
+    Supervised property prediction from pooled molecular embeddings/scores. Can stack any
+    scikit-learn-compatible predictors that implement fit() and predict()
+    methods, including pipelines.
+    """
+    available = True
+    name: str = "Supervised scikit-learn predictor on sequence embeddings/scores"
+    citations: list[str] = ["doi:10.1038/s41587-021-01146-5", "doi:10.48550/arXiv.1201.0490"]
+
+    def __init__(
+        self,
+        predictor: Any | str,
+        predictor_kwargs: dict[str, Any] | None = None,
+        embedder: Transformer | None = None,
+        scorer: Scorer | None = None,
+        use_embeddings: bool = True,
+        use_scores: bool = True,
+        override_models_for_training: bool = False,
+        target_name: str | None = None,
+        pooling: Literal["mean", "max"] | None = "mean",
+        batch_size: BatchSize = 128,
+    ):
+        """
+        Train supervised scikit-learn regression/classification model on top of molecular model embeddings/scores.
+        Positional embeddings can be pooled to one feature vector along the position dimension.
+
+        Note that classifiers will return scores based on class probabilities rather than class labels to facilitate
+        use for quantative variant scoring.
+
+        Can be used in either of two modes with pre-computed embeddings/scores, or through on-the-fly computation
+        (cf. embedder param). The latter mode is needed to use mutation scoring methods, e.g. for Gibbs sampling
+        or calculation of single mutation matrices.
+
+        Parameters
+        ----------
+        predictor
+            Scikit-learn regressor instance or model name string as available through
+            sklearn.utils.all_estimators(type_filter=["regressor", "classifier"])
+        predictor_kwargs
+            Constructor parameters to use if predictor is a string (will be ignored if predictor is a model instance)
+        embedder
+            Molecular model to use for computing embeddings on the fly. If None, will use values available on supplied
+            instances for build() and score(); in this mode, mutation scoring methods cannot be used).
+            If this model is able to compute scores and no explicit scorer is specified, this model will also be used
+            for scoring if use_scores = True.
+            Also note override_models_for_training for multi-system training of models.
+        scorer
+            Separate molecular model to use for computing scores on the fly (overrides scoring with embedder).
+            This e.g. allows to combine one-hot encoding embeddings with scores from sequence/structure models.
+            Also note override_models_for_training for multi-system training of models.
+        use_embeddings
+            If True, include embeddings as a model feature (will raise an error if embeddings are absent and
+            cannot be computed with embedder).
+        use_scores
+            If True, include instance score as a model feature (will raise an error if scores are absent and
+            cannot be computed with embedder or scorer).
+        override_models_for_training
+            If True, use embeddings/scores already on instances, even if embedder/scorer is specified. This allows to
+            train a model on a dataset with instances from multiple systems (e.g. stability measurements for many
+            different proteins). The embedder/scorer will still be used at prediction time to allow mutation prediction
+            methods to be used. Note this assumes all systems have the same number of entities and entity types,
+            which will not be verified (trivially true for single-component protein systems).
+        target_name
+            Name of target series in LabeledInstanceDataset to retrieve. If the dataset only contains a single series,
+            it can be extracted as a default by setting this parameter to None (an exception will be raised otherwise)
+        pooling
+            Aggregation to apply to positional embeddings across position dimension (to obtain one feature vector
+            per entity). If None, do not apply any pooling and flatten embedding array instead; this requires
+            that embeddings have the same length/number of positions across all instances.
+        batch_size
+            Assemble X features in batches of this size. Helps to address out of memory errors as embedding memory
+            usage can become very large if predicting many instances at the same time
+        """
+        # instantiate predictor from model name string or store provided instance
+        if isinstance(predictor, str):
+            all_predictors = dict(all_estimators(type_filter=["regressor", "classifier"]))
+            if predictor in all_predictors:
+                if predictor_kwargs is None:
+                    predictor_kwargs = {}
+                self.predictor: Any = all_predictors[predictor](
+                    **predictor_kwargs
+                )
+            else:
+                raise ValueError(
+                    f"Invalid regressor, valid options are {', ' .join(list(all_predictors))}"
+                )
+        else:
+            # unfortunately no good typing options available, so verify attributes like scikit-learn does
+            if not hasattr(predictor, "fit") or not hasattr(predictor, "predict"):
+                raise ValueError(
+                    "Predictor must have scikit-learn fit() and predict methods()"
+                )
+
+            self.predictor = predictor
+
+        is_classifier = isinstance(self.predictor, ClassifierMixin)
+
+        super().__init__(
+            embedder=embedder,
+            scorer=scorer,
+            use_embeddings=use_embeddings,
+            use_scores=use_scores,
+            override_models_for_training=override_models_for_training,
+            target_name=target_name,
+            pooling=pooling,
+            batch_size=batch_size,
+            is_classifier=is_classifier,
         )
 
-        # predict, typecast to handle possible int values in classification
-        return self.predictor.predict(
-            x_pred
-        ).astype(float)
+        self.predictor_kwargs = predictor_kwargs if predictor_kwargs is not None else {}
+
+    @property
+    def ready(self):
+        # model only required if embeddings are non pre-specified
+        fitted = True
+        try:
+            check_is_fitted(self.predictor)
+        except NotFittedError:
+            fitted = False
+
+        return self.system is not None and fitted
+
+    def _fit(
+        self,
+        instances_transformed,
+        values
+    ) -> None:
+        # Fit model with scikit-learn
+        self.predictor.fit(instances_transformed, values)
+
+    def _score(
+        self,
+        instances_transformed,
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        # Predict with sckit-learn model; if a classifier
+        # we use log probabilities instead of class labels
+        if self._is_classifier:
+            return self.predictor.predict_log_proba(
+                instances_transformed
+            )[:, 1].astype(float)
+        else:
+            return self.predictor.predict(
+                instances_transformed
+            ).astype(float)
