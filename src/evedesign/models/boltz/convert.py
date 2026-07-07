@@ -135,8 +135,9 @@ def _write_csv(
     Format matches what Boltz-2's own server path produces:
     - Header: key,sequence
     - Query sequence first with key=0
-    - Paired sequences with integer key (from "pair-{i}")
-    - Unpaired sequences with key=-1
+    - Paired sequences: each distinct key value maps to a
+      stable integer taxonomy_id
+    - Unpaired sequences with key=None (written as -1 in CSV)
 
     This format is required for paired MSAs in multi-chain
     complexes. Boltz-2's CSV parser uses the key column as
@@ -146,12 +147,13 @@ def _write_csv(
     rows = ["key,sequence"]
     # Query sequence is always the first row
     rows.append(f"0,{''.join(entity_instance.rep)}")
+    key_to_taxid: dict = {}
     for seq in entity.sequences.seqs:
-        if seq.key is not None and seq.key.startswith("pair-"):
-            key = seq.key[len("pair-"):]
-        else:
-            key = "-1"
-        rows.append(f"{key},{seq.seq}")
+        if seq.key is not None and seq.key not in key_to_taxid:
+            key_to_taxid[seq.key] = len(key_to_taxid)
+    for seq in entity.sequences.seqs:
+        taxid = key_to_taxid[seq.key] if seq.key is not None else -1
+        rows.append(f"{taxid},{seq.seq}")
     output_path.write_text("\n".join(rows) + "\n")
     return output_path
 
@@ -182,12 +184,11 @@ def _resolve_msa_field(
         and entity.sequences is not None
         and len(entity.sequences.seqs) > 0
     ):
-        # Use CSV format when pairing keys are present
-        # (multi-chain complexes with paired MSA).
-        # Use A3M for single-sequence or unpaired MSA.
+        # Paired sequences carry a non-None pairing key (see
+        # add_sequences_mmseqs2). The key's format is not inspected —
+        # its presence indicates a paired MSA requiring CSV output.
         has_pairing = any(
-            s.key is not None and s.key.startswith("pair-")
-            for s in entity.sequences.seqs
+            s.key is not None for s in entity.sequences.seqs
         )
         if has_pairing:
             msa_path = _write_csv(

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from evedesign.models.boltz.convert import _write_a3m
+from evedesign.models.boltz.convert import _write_a3m, _write_csv
 from evedesign.sequence import Sequence, Sequences
 from evedesign.system import Entity, EntityInstance
 
@@ -96,3 +96,52 @@ def test_write_a3m_remap_failure_falls_back_verbatim(tmp_path):
     assert records[0] == ("query", "VICD")
     assert [r[1] for r in records[1:]] == ["ALS"]  # unmodified hit
     assert any("could not remap MSA" in m for m in messages)
+
+
+def test_write_csv_real_mmseqs_pair_keys(tmp_path):
+    # Thomas's producer emits "pair-0", "pair-1", ... in order. First-appearance
+    # mapping must reproduce the old strip-"pair-" behavior: taxonomy_ids 0, 1.
+    hits = [
+        Sequence("MAST", id="p0", key="pair-0"),
+        Sequence("VAST", id="p1", key="pair-1"),
+        Sequence("GAST", id="u0", key=None),      # unpaired
+    ]
+    entity = _entity_with_msa("MAST", hits)
+    instance = EntityInstance(rep="MAST")
+    out = _write_csv(entity, instance, tmp_path / "msa" / "A.csv")
+
+    rows = out.read_text().splitlines()
+    assert rows == [
+        "key,sequence",
+        "0,MAST",      # query first
+        "0,MAST",      # hit p0: pair-0 -> taxid 0
+        "1,VAST",      # hit p1: pair-1 -> taxid 1
+        "-1,GAST",     # unpaired -> -1
+    ]
+
+
+def test_write_csv_is_key_format_agnostic(tmp_path):
+    # Arbitrary (non-"pair-") key values: two sequences from the same organism
+    # share a key -> same taxonomy_id; a different organism -> different id;
+    # key=None -> -1. The consumer never inspects the key's format.
+    hits = [
+        Sequence("MAST", id="a1", key="orgA"),
+        Sequence("VAST", id="a2", key="orgA"),   # same key as a1 -> same taxid
+        Sequence("GAST", id="b1", key="orgB"),   # different key -> different taxid
+        Sequence("KAST", id="u0", key=None),     # unpaired
+    ]
+    entity = _entity_with_msa("MAST", hits)
+    instance = EntityInstance(rep="MAST")
+    out = _write_csv(entity, instance, tmp_path / "msa" / "A.csv")
+
+    rows = out.read_text().splitlines()
+    assert rows[0] == "key,sequence"
+    assert rows[1] == "0,MAST"                   # query first
+    a1_tax, a1_seq = rows[2].split(",")
+    a2_tax, _ = rows[3].split(",")
+    b1_tax, _ = rows[4].split(",")
+    assert a1_tax == a2_tax                       # shared key -> shared taxid
+    assert b1_tax != a1_tax                        # distinct key -> distinct taxid
+    assert rows[5] == "-1,KAST"                   # unpaired -> -1
+    # taxonomy_ids are stable integers by first appearance
+    assert {a1_tax, b1_tax} == {"0", "1"}
