@@ -60,7 +60,7 @@ def test_remap_query_hit_length_mismatch():
         sequences.remap_query("ALCD", "VICD")
 
 
-# --- lowercase (A3M insert-state) hits; old_query = "ALCD" (4 match columns) ---
+# lowercase (A3M insert-state) hits; old_query = "ALCD" (4 match columns)
 
 def _lc(hit):
     return Sequences(seqs=[Sequence(hit, id="h")], aligned=True, format="a3m")
@@ -121,10 +121,6 @@ def test_remap_query_lc_too_few_match_columns_raises():
 
 
 def test_remap_query_mixed_clean_and_lowercase_hits():
-    # one clean hit + one lowercase hit remapped together in a single call;
-    # new "ALCtD" inserts t between cols 2,3.
-    # clean "ALSD" -> A,L,S then gap then D = "ALS-D"
-    # lc    "ALsCD" -> A,L,(carry s)C then gap then D = "ALsC-D"
     hits = [Sequence("ALSD", id="clean"), Sequence("ALsCD", id="lc")]
     sequences = Sequences(seqs=hits, aligned=True, format="a3m")
     result = sequences.remap_query("ALCD", "ALCtD")
