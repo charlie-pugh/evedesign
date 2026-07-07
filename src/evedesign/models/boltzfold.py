@@ -347,7 +347,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         batch_device = {
                             k: v.to(self.device)
                             if isinstance(v, torch.Tensor) else v
-                            for k, v in batch.items()
+                            for k, v in batch.items()  # noqa
                         }
                         pred_dict = self.model.predict_step(
                             batch_device, batch_idx=batch_idx
@@ -358,12 +358,12 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                                 pl_module=None,  # type: ignore
                                 prediction=pred_dict,
                                 batch_indices=[],
-                                batch=batch,
+                                batch=batch,  # noqa
                                 batch_idx=batch_idx,
                                 dataloader_idx=0,
                             )
                         else:
-                            record = batch["record"][0]
+                            record = batch["record"][0]  # noqa
                             logger.warning(
                                 f"Prediction failed for record {record.id}"
                             )

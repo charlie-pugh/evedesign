@@ -1,4 +1,3 @@
-import os
 import pytest
 import numpy as np
 from evedesign.system import System, Protein, DNA
