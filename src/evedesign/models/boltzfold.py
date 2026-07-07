@@ -375,9 +375,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         f"({f.stat().st_size} bytes)"
                     )
 
-            results = [None] * len(fold_instances)
-            for record_id, inst_idx in record_id_to_idx.items():
-                results[inst_idx] = prediction_to_instance(
+            results_by_idx = {
+                inst_idx: prediction_to_instance(
                     record_id=record_id,
                     predictions_dir=predictions_dir,
                     system=fold_system,
@@ -386,8 +385,10 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                     score_attribute=self.score_attribute,
                     confidence_attribute=self.confidence_attribute,
                 )
+                for record_id, inst_idx in record_id_to_idx.items()
+            }
 
-            return results
+            return [results_by_idx[i] for i in range(len(fold_instances))]
 
         finally:
             shutil.rmtree(tmp_dir)
