@@ -41,7 +41,7 @@ PyPI's default torch ships with CUDA support (tested on a CUDA 13
 build, which runs on CUDA 12.x+ drivers via forward compatibility).
 If you need a specific CUDA build to match an older driver, you might explore adding the
 matching PyTorch index, e.g.:
-```
+```bash
     uv pip install evedesign[boltz2fold-cuda] \
         --extra-index-url https://download.pytorch.org/whl/cu126 \
         --index-strategy unsafe-best-match
