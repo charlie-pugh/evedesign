@@ -58,6 +58,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow-running",
     "boltz2fold: tests requiring the boltz2fold extra (torch, boltz, pyyaml)",
