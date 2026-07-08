@@ -45,8 +45,8 @@ EvaluationScoreName = Literal[
 ]
 
 class ModelStats(TypedDict):
-    y_true: NotRequired[Sequence[float]]
-    y_pred: NotRequired[Sequence[float]]
+    y_true: NotRequired[Sequence[Sequence[float]]]
+    y_pred: NotRequired[Sequence[Sequence[float]]]
 
     # different types of evaluation scores
     scores: NotRequired[dict[EvaluationScoreName, np.ndarray]]
