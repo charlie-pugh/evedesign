@@ -31,11 +31,15 @@ evmutation2 = ["torch", "evmutation2"]
 evcouplings = ["evcouplings"]
 esm2 = ["torch", "transformers"]
 mpnn = ["torch", "prody"]
-# boltz2fold: CPU/MPS install (default)
-# boltz2fold-cuda: adds CUDA-12 extras (cuequivariance_*)
-# — only works on CUDA-12 systems with compatible torch build
-boltz2fold = ["torch", "boltz>=2.2,<2.3", "pyyaml"]
-boltz2fold-cuda = ["torch", "boltz[cuda]>=2.2,<2.3", "pyyaml"]
+# boltz2fold: CPU/MPS install (default).
+# boltz2fold-cuda: adds boltz's [cuda] extra, which pulls
+# cuequivariance_ops_cu12, cuequivariance_ops_torch_cu12, and
+# cuequivariance_torch (all >=0.5.0). The cu12 ops wheels are built
+# for CUDA 12 and require a CUDA 12 toolkit/driver plus a
+# CUDA-enabled torch build (verified on CUDA 12.8); not usable on
+# CPU-only or macOS.
+boltz2fold = ["torch", "boltz>=2.2", "pyyaml"]
+boltz2fold-cuda = ["torch", "boltz[cuda]>=2.2", "pyyaml"]
 umap = ["umap-learn"]
 notebooks = ["py3Dmol"]
 
@@ -79,21 +83,6 @@ exclude_lines = [
 ]
 
 [tool.uv]
-# Override stale/blocking upstream pins so a fresh install
-# lands on a working, modern stack:
-#   - boltz 2.2.1 declares numpy<2.0 and scipy==1.13.1;
-#     both are stale — boltz runs fine on numpy 2.x and
-#     scipy>=1.14 (empirically verified).
-#   - boltz pins numba==0.61.0, which runtime-rejects
-#     numpy>2.1. We override numba up to >=0.64 (supports
-#     numpy<2.5) so numpy can stay modern. numpy is capped
-#     at <2.5 to satisfy numba 0.64+'s runtime check —
-#     without this cap, uv resolves numpy 2.5 and numba
-#     raises ImportError at import.
-# Revisit these bounds when bumping boltz: a future boltz
-# may relax its numba pin, allowing a higher numpy ceiling.
+required-version = ">=0.11.15"
 override-dependencies = [
-    "numpy>=2.0,<2.5",
-    "numba>=0.64",
-    "scipy>=1.14",
-]
+    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64"] },]
