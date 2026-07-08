@@ -8,4 +8,3 @@ install.log
 scripts/
 examples/**/exports/
 examples/**/target_cache/
-uv.lock
