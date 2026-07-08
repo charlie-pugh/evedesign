@@ -6,6 +6,8 @@ from evedesign.sequence import Sequences, Sequence
 from evedesign.utils import ensure_sequence
 from evedesign.tools.mmseqs2 import add_sequences_mmseqs2
 
+# every test here constructs BoltzFoldTransformer / imports boltz internals
+pytestmark = pytest.mark.boltz2fold
 
 SEQ = "TSENPLLALREKISALDEKLLALLAERRELAVEVGKAKLLSHRPVRDIDRERDLLERLITLGKAHHLDAHYITRLFQLIIEDSVLTQQALLQQH"
 
@@ -57,6 +59,7 @@ def test_transform_entity_raises_not_implemented():
 # specific inputs and expected behaviours
 
 
+@pytest.mark.slow
 def test_transform_single_protein():
     """Single protein folds and returns structure and scores."""
     s = System([Protein(rep=SEQ, id='EcCM', first_index=2)])
@@ -71,6 +74,7 @@ def test_transform_single_protein():
     assert "model_0" in results[0][0].models
 
 
+@pytest.mark.slow
 def test_transform_residue_numbering():
     """Output residue numbering matches entity.first_index."""
     s = System([Protein(rep=SEQ, id='EcCM', first_index=2)])
@@ -85,6 +89,7 @@ def test_transform_residue_numbering():
     assert structure.atom_array.res_id.max() == 2 + len(SEQ) - 1
 
 
+@pytest.mark.slow
 def test_transform_multiple_instances():
     """Two instances of same system fold independently."""
     s = System([Protein(rep=SEQ, id='test')])
@@ -100,6 +105,7 @@ def test_transform_multiple_instances():
     assert results[1][0].models is not None
 
 
+@pytest.mark.slow
 def test_transform_diffusion_samples():
     """diffusion_samples=3 returns 3 ranked models."""
     s = System([Protein(rep=SEQ, id='test')])
@@ -129,6 +135,7 @@ def test_transform_diffusion_samples():
         assert isinstance(sc["score"], float)
 
 
+@pytest.mark.slow
 def test_transform_homo_oligomer():
     """Homo-oligomer copies=2 returns list of 2 chain structures."""
     s = System([Protein(rep='MAST', id='homo', copies=2)])
@@ -146,6 +153,7 @@ def test_transform_homo_oligomer():
     assert chain_letters == ["A", "B"]
 
 
+@pytest.mark.slow
 def test_transform_with_msa_sequences():
     """Entity with precomputed MSA sequences folds correctly."""
     seqs = Sequences([
@@ -160,6 +168,7 @@ def test_transform_with_msa_sequences():
     assert results[0][0].models is not None
 
 
+@pytest.mark.slow
 def test_transform_score_returns_array():
     """score() runs transform internally and returns an ndarray of per-instance scores."""
     s = System([Protein(rep=SEQ, id='test')])
@@ -172,6 +181,7 @@ def test_transform_score_returns_array():
     assert scores[0] is not None
 
 
+@pytest.mark.slow
 def test_transform_a2b():
     """A2B: 2 copies of entity A + 1 copy of entity B."""
     s = System([
@@ -209,6 +219,7 @@ def test_transform_a2b():
         f"entity 1 letters: {ei1_letters}"
 
 
+@pytest.mark.slow
 def test_transform_a2b2():
     """A2B2: 2 copies each of entity A and entity B."""
     s = System([
@@ -250,6 +261,7 @@ def test_score_requires_build():
         m.score([s.rep_to_instance()])
 
 
+@pytest.mark.slow
 def test_score_returns_array():
     """score() returns a numpy array of floats."""
     s = System([Protein(rep="MAST", id='test')])
@@ -264,6 +276,7 @@ def test_score_returns_array():
     )
 
 
+@pytest.mark.slow
 def test_score_multiple_instances():
     """score() returns one value per instance in input order."""
     s = System([Protein(rep="MAST", id='test')])
@@ -278,6 +291,7 @@ def test_score_multiple_instances():
     assert all(np.isfinite(s) for s in scores)
 
 
+@pytest.mark.slow
 def test_score_attribute_confidence_score():
     """score() uses score_attribute to select the metric."""
     s = System([Protein(rep="MAST", id='test')])

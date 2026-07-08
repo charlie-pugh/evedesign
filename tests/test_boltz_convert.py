@@ -1,8 +1,13 @@
 from pathlib import Path
 
+import pytest
+
 from evedesign.models.boltz.convert import _write_a3m, _write_csv
 from evedesign.sequence import Sequence, Sequences
 from evedesign.system import Entity, EntityInstance
+
+# convert.py imports pyyaml, which only ships in the boltz2fold extras
+pytestmark = pytest.mark.boltz2fold
 
 
 def _read_a3m(path: Path) -> list[tuple[str, str]]:
