@@ -30,6 +30,11 @@ try:
     from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
     from boltz.data.types import Manifest
     from boltz.data.write.writer import BoltzWriter
+    from evedesign.models.boltz.convert import (
+        _chain_to_entity_map,
+        system_instance_to_yaml,
+        prediction_to_instance,
+    )
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -40,11 +45,6 @@ import tempfile
 
 from evedesign.model import BaseModel, Transformer, Scorer
 from evedesign.utils import model_param_context
-from evedesign.models.boltz.convert import (
-    _chain_to_entity_map,
-    system_instance_to_yaml,
-    prediction_to_instance,
-)
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, StatusCallback, BatchSize
 
