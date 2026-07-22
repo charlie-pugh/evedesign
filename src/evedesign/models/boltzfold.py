@@ -108,8 +108,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self.score_attribute = score_attribute
         self.confidence_attribute = confidence_attribute
 
-        self._system = None
-        self.model = None
+        self._system: System | None = None
+        self.model: Any | None = None
 
     @property
     def ready(self):
@@ -169,7 +169,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         The cache directory is set via the model_dir_path
         constructor parameter (default: ~/.cache/boltz).
         """
-        cache = Path(self.model_dir_path).expanduser()
+        cache = Path(self.model_dir_path or DEFAULT_CACHE_DIR).expanduser()
         cache.mkdir(parents=True, exist_ok=True)
         download_boltz2(cache)
         return cache
@@ -397,7 +397,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None,
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:  # type: ignore
         """
         Run Boltz-2 prediction for each instance and
         return an array of confidence scores.
