@@ -705,14 +705,14 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
 
     def __init__(
         self,
-        mean_module: Any | None = None,
-        covar_module: Any | None = None,
-        likelihood: Any | None = None,
+        mean_module: "gpytorch.means.Mean | None" = None,
+        covar_module: "gpytorch.kernels.Kernel | None" = None,
+        likelihood: "gpytorch.likelihoods.Likelihood | None" = None,
         num_iters: int = 100,
         learning_rate: float = 0.1,
-        optimizer: str = "Adam",
+        optimizer: "type[torch.optim.Optimizer] | None" = None,
         optimizer_kwargs: dict[str, Any] | None = None,
-        mll: str = "ExactMarginalLogLikelihood",
+        mll: "type[gpytorch.mlls.MarginalLogLikelihood] | None" = None,
         standardize_targets: bool = True,
         device: DeviceType = "cpu",
         embedder: Transformer | None = None,
@@ -745,13 +745,13 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         learning_rate
             Learning rate for the optimizer
         optimizer
-            Name of a torch.optim optimizer class to use, constructed as
-            getattr(torch.optim, optimizer)(model.parameters(), lr=learning_rate, **optimizer_kwargs)
+            A torch.optim optimizer class to use, constructed per fit as optimizer(model.parameters(), lr=learning_rate, 
+            **optimizer_kwargs). If None, torch.optim.Adam is used
         optimizer_kwargs
             Extra keyword arguments forwarded to the optimizer constructor
         mll
-            Name of a gpytorch.mlls marginal log-likelihood class, constructed as
-            getattr(gpytorch.mlls, mll)(likelihood, model) and maximized during training
+            A gpytorch.mlls marginal log-likelihood class constructed per fit as mll(likelihood, model) and maximized 
+            during training. If None, ExactMarginalLogLikelihood is used.
         standardize_targets
             If True, standardize y to zero mean / unit variance before fitting and invert the transform on
             predictions
@@ -782,15 +782,16 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
                 "likelihood must be a gpytorch Likelihood instance, or None for a GaussianLikelihood"
             )
 
-        # validate optimizer/mll selectors upfront so misconfiguration fails fast
-        if not hasattr(torch.optim, optimizer):
+        if optimizer is not None and not (isinstance(optimizer, type) and issubclass(optimizer, torch.optim.Optimizer)):
             raise ValueError(
-                f"Unknown optimizer '{optimizer}', must be a class in torch.optim (e.g. 'Adam')"
+                "optimizer must be a torch.optim.Optimizer subclass (e.g. torch.optim.Adam), "
+                "or None for torch.optim.Adam"
             )
 
-        if not hasattr(gpytorch.mlls, mll):
+        if mll is not None and not (isinstance(mll, type) and issubclass(mll, gpytorch.mlls.MarginalLogLikelihood)):
             raise ValueError(
-                f"Unknown mll '{mll}', must be a class in gpytorch.mlls (e.g. 'ExactMarginalLogLikelihood')"
+                "mll must be a gpytorch.mlls.MarginalLogLikelihood subclass "
+                "(e.g. gpytorch.mlls.ExactMarginalLogLikelihood), or None for ExactMarginalLogLikelihood"
             )
 
         super().__init__(
@@ -810,9 +811,9 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         self.likelihood_spec = likelihood
         self.num_iters = num_iters
         self.learning_rate = learning_rate
-        self.optimizer = optimizer
+        self.optimizer = optimizer if optimizer is not None else torch.optim.Adam
         self.optimizer_kwargs = optimizer_kwargs if optimizer_kwargs is not None else {}
-        self.mll = mll
+        self.mll = mll if mll is not None else gpytorch.mlls.ExactMarginalLogLikelihood
         self.standardize_targets = standardize_targets
         self.device = device
 
@@ -905,14 +906,12 @@ class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
         model = self._build_gp(train_x, train_y, likelihood).to(device)
 
         # marginal log-likelihood to maximize during training
-        mll_cls = getattr(gpytorch.mlls, self.mll)
-        mll = mll_cls(likelihood, model)
+        mll = self.mll(likelihood, model)
 
         model.train()
         likelihood.train()
 
-        optimizer_cls = getattr(torch.optim, self.optimizer)
-        optimizer = optimizer_cls(
+        optimizer = self.optimizer(
             model.parameters(), lr=self.learning_rate, **self.optimizer_kwargs
         )
         for _ in range(self.num_iters):
