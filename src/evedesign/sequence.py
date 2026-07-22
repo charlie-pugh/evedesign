@@ -333,6 +333,7 @@ class Sequences:
         self,
         old_query: str | RepSequence,
         new_query: str | RepSequence,
+        prepend_new_query: bool = True,
     ) -> "Sequences":
         """
         Remap this alignment to a new query sequence.
@@ -351,11 +352,18 @@ class Sequences:
         new_query
             The new query in A3M convention: uppercase for alignment columns,
             '-' for deletions, lowercase for insertions.
+        prepend_new_query
+            If True (default), the new query is inserted as the first sequence
+            of the returned alignment. Most tools expect the query in the first
+            position by convention, so this saves callers from prepending it
+            themselves. The query is stored in ungapped, uppercase form (gaps
+            removed, insertions uppercased) — i.e. the actual designed residues.
 
         Returns
         -------
         Sequences
-            A new Sequences containing the same hits with columns remapped.
+            A new Sequences containing the same hits with columns remapped,
+            optionally with the new query as the first sequence.
             Format is preserved.
 
         Raises
@@ -443,6 +451,15 @@ class Sequences:
                     type=hit.type_, metadata=hit.metadata,
                 )
             )
+
+        if prepend_new_query:
+            # Store the query as the actual designed residues: gaps (deletions)
+            # dropped and insertions uppercased, matching the match columns the
+            # remapped hits are now aligned to.
+            query_residues = new_q.replace(GAP, "").upper()
+            seq_cls = type(remapped[0]) if remapped else Sequence
+            query_type = remapped[0].type_ if remapped else "protein"
+            remapped.insert(0, seq_cls(seq=query_residues, type=query_type))
 
         return type(self)(
             seqs=remapped,

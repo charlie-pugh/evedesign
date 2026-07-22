@@ -99,7 +99,9 @@ def _write_a3m(
         old_query_str = "".join(old_query)
         if old_query_str != new_query:
             try:
-                sequences = entity.sequences.remap_query(old_query_str, new_query)
+                sequences = entity.sequences.remap_query(
+                    old_query_str, new_query, prepend_new_query=False
+                )
             except (ValueError, NotImplementedError) as exc:
                 logger.warning(
                     f"Entity '{entity.id}': could not remap MSA from base query "
@@ -153,7 +155,9 @@ def _write_csv(
         old_query_str = "".join(old_query)
         if old_query_str != new_query:
             try:
-                sequences = entity.sequences.remap_query(old_query_str, new_query)
+                sequences = entity.sequences.remap_query(
+                    old_query_str, new_query, prepend_new_query=False
+                )
             except (ValueError, NotImplementedError) as exc:
                 logger.warning(
                     f"Entity '{entity.id}': could not remap paired MSA from base "
