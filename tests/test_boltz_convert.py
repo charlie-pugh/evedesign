@@ -150,3 +150,23 @@ def test_write_csv_is_key_format_agnostic(tmp_path):
     assert rows[5] == "-1,KAST"                   # unpaired -> -1
     # taxonomy_ids are stable integers by first appearance
     assert {a1_tax, b1_tax} == {"0", "1"}
+
+
+def test_write_csv_remaps_and_preserves_pairing(tmp_path):
+    hits = [
+        Sequence("MAST", id="p0", key="org"),
+        Sequence("VAST", id="p1", key="org"),
+        Sequence("GKST", id="u", key=None),
+    ]
+    entity = _entity_with_msa("MAST", hits)
+    instance = EntityInstance(rep="M-ST")
+    out = _write_csv(entity, instance, tmp_path / "msa" / "A.csv", old_query=entity.rep)
+
+    rows = out.read_text().splitlines()
+    assert rows == [
+        "key,sequence",
+        "0,MST",
+        "0,MST",
+        "0,VST",
+        "-1,GST",
+    ]

@@ -438,7 +438,10 @@ class Sequences:
                 )
 
             remapped.append(
-                type(hit)(seq="".join(out), id=hit.id_, type=hit.type_)
+                type(hit)(
+                    seq="".join(out), id=hit.id_, key=hit.key,
+                    type=hit.type_, metadata=hit.metadata,
+                )
             )
 
         return type(self)(

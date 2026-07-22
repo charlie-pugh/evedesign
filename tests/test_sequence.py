@@ -117,3 +117,10 @@ def test_remap_query_mixed_clean_and_lowercase_hits():
     sequences = Sequences(seqs=hits, aligned=True, format="a3m")
     result = sequences.remap_query("ALCD", "ALCtD")
     assert [s.seq for s in result.seqs] == ["ALS-D", "ALsC-D"]
+
+
+def test_remap_query_preserves_key():
+    hits = [Sequence("ALSD", id="h", key="pair-0")]
+    result = Sequences(seqs=hits, aligned=True, format="a3m").remap_query("ALCD", "V-CD")
+    assert result.seqs[0].seq == "ASD"
+    assert result.seqs[0].key == "pair-0"

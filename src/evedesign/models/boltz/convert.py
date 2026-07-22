@@ -127,6 +127,7 @@ def _write_csv(
     entity: Entity,
     entity_instance: EntityInstance,
     output_path: Path,
+    old_query: str | RepSequence | None = None,
 ) -> Path:
     """
     Write a Boltz-2 compatible CSV MSA file preserving
@@ -144,14 +145,29 @@ def _write_csv(
     taxonomy_id to match paired rows across chains.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    new_query = "".join(entity_instance.rep)
+
+    sequences = entity.sequences
+    if old_query is not None:
+        old_query_str = "".join(old_query)
+        if old_query_str != new_query:
+            try:
+                sequences = entity.sequences.remap_query(old_query_str, new_query)
+            except (ValueError, NotImplementedError) as exc:
+                logger.warning(
+                    f"Entity '{entity.id}': could not remap paired MSA from base "
+                    f"query to instance rep ({exc}); writing hits verbatim."
+                )
+                sequences = entity.sequences
+
     rows = ["key,sequence"]
-    # Query sequence is always the first row
-    rows.append(f"0,{''.join(entity_instance.rep)}")
+    rows.append(f"0,{EntityInstance.normalize_rep_str(new_query)}")
     key_to_taxid: dict = {}
-    for seq in entity.sequences.seqs:
+    for seq in sequences.seqs:
         if seq.key is not None and seq.key not in key_to_taxid:
             key_to_taxid[seq.key] = len(key_to_taxid)
-    for seq in entity.sequences.seqs:
+    for seq in sequences.seqs:
         taxid = key_to_taxid[seq.key] if seq.key is not None else -1
         rows.append(f"{taxid},{seq.seq}")
     output_path.write_text("\n".join(rows) + "\n")
@@ -194,6 +210,7 @@ def _resolve_msa_field(
             msa_path = _write_csv(
                 entity, entity_instance,
                 yaml_path.parent / "msa" / f"{chain_id}.csv",
+                old_query=entity.rep,
             )
         else:
             # entity.rep is the base query MMSeqs2 searched on (see
