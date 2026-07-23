@@ -10,7 +10,6 @@ ignored with a warning.
 import os
 import shutil
 from dataclasses import asdict
-from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, Self, Sequence, cast
 
@@ -31,6 +30,11 @@ try:
     from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
     from boltz.data.types import Manifest
     from boltz.data.write.writer import BoltzWriter
+    from evedesign.models.boltz.convert import (
+        _chain_to_entity_map,
+        system_instance_to_yaml,
+        prediction_to_instance,
+    )
     IMPORT_AVAILABLE = True
 except ImportError:
     IMPORT_AVAILABLE = False
@@ -41,11 +45,6 @@ import tempfile
 
 from evedesign.model import BaseModel, Transformer, Scorer
 from evedesign.utils import model_param_context
-from evedesign.models.boltz.convert import (
-    _chain_to_entity_map,
-    system_instance_to_yaml,
-    prediction_to_instance,
-)
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, StatusCallback, BatchSize
 
@@ -75,8 +74,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
 
     def __init__(
         self,
-        model_dir_path: str | PathLike | None = None,
-        cache_dir: str | None = DEFAULT_CACHE_DIR,
+        model_dir_path: str | None = DEFAULT_CACHE_DIR,
         batch_size: BatchSize = 1,
         keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
@@ -112,7 +110,6 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
             )
 
         self.model_dir_path = model_dir_path
-        self.cache_dir = cache_dir
         self.batch_size = batch_size
         self.keep_model_after_build = keep_model_after_build
 
@@ -127,8 +124,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self.confidence_attribute = confidence_attribute
         self._use_kernels = use_kernels
 
-        self._system = None
-        self.model = None
+        self._system: System | None = None
+        self.model: Any | None = None
 
     @property
     def ready(self):
@@ -185,10 +182,10 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         Download Boltz-2 weights and supporting data on first use.
         Returns the cache directory path.
 
-        The cache directory is set via the cache_dir
+        The cache directory is set via the model_dir_path
         constructor parameter (default: ~/.cache/boltz).
         """
-        cache = Path(self.cache_dir).expanduser()
+        cache = Path(self.model_dir_path or DEFAULT_CACHE_DIR).expanduser()
         cache.mkdir(parents=True, exist_ok=True)
         download_boltz2(cache)
         return cache
@@ -367,7 +364,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         batch_device = {
                             k: v.to(self.device)
                             if isinstance(v, torch.Tensor) else v
-                            for k, v in batch.items()
+                            for k, v in batch.items()  # noqa
                         }
                         pred_dict = self.model.predict_step(
                             batch_device, batch_idx=batch_idx
@@ -378,12 +375,12 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                                 pl_module=None,  # type: ignore
                                 prediction=pred_dict,
                                 batch_indices=[],
-                                batch=batch,
+                                batch=batch,  # noqa
                                 batch_idx=batch_idx,
                                 dataloader_idx=0,
                             )
                         else:
-                            record = batch["record"][0]
+                            record = batch["record"][0]  # noqa
                             logger.warning(
                                 f"Prediction failed for record {record.id}"
                             )
@@ -398,9 +395,8 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                         f"({f.stat().st_size} bytes)"
                     )
 
-            results = [None] * len(fold_instances)
-            for record_id, inst_idx in record_id_to_idx.items():
-                results[inst_idx] = prediction_to_instance(
+            results_by_idx = {
+                inst_idx: prediction_to_instance(
                     record_id=record_id,
                     predictions_dir=predictions_dir,
                     system=fold_system,
@@ -409,8 +405,10 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
                     score_attribute=self.score_attribute,
                     confidence_attribute=self.confidence_attribute,
                 )
+                for record_id, inst_idx in record_id_to_idx.items()
+            }
 
-            return results
+            return [results_by_idx[i] for i in range(len(fold_instances))]
 
         finally:
             shutil.rmtree(tmp_dir)
@@ -419,7 +417,7 @@ class BoltzFoldTransformer(BaseModel, Transformer, Scorer):
         self,
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None,
-    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:  # type: ignore
         """
         Run Boltz-2 prediction for each instance and
         return an array of confidence scores.
