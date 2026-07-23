@@ -31,6 +31,26 @@ You can remove any of the options if you do not need the respective model.
 pip install evedesign[evmutation2,esm2,mpnn,umap] 
 ```
 
+### GPU install (boltz2)
+
+BoltzFold structure prediction needs a CUDA GPU. Install the `boltz2fold-cuda` extra with [uv](https://docs.astral.sh/uv/):
+```bash
+uv pip install evedesign[boltz2fold-cuda]
+```
+PyPI's default torch ships with CUDA support (tested on a CUDA 13
+build, which runs on CUDA 12.x+ drivers via forward compatibility).
+If you need a specific CUDA build to match an older driver, you might explore adding the
+matching PyTorch index, e.g.:
+```bash
+    uv pip install evedesign[boltz2fold-cuda] \
+        --extra-index-url https://download.pytorch.org/whl/cu126 \
+        --index-strategy unsafe-best-match
+```
+**uv is required** for this install path: boltz and its dependencies ship overly-conservative version pins that
+are overridden in `[tool.uv]` in `pyproject.toml`, and pip does not honor those overrides.
+
+For CPU/MPS-only use (no GPU), install the `boltz2fold` extra instead of `boltz2fold-cuda`.
+
 ## Getting started
 
 Please refer to some of our [examples](examples) how to use *evedesign*. We are planning to extend these further in the near future.

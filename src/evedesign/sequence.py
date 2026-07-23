@@ -329,6 +329,145 @@ class Sequences:
             format=self.format_,
         )
 
+    def remap_query(
+        self,
+        old_query: str | RepSequence,
+        new_query: str | RepSequence,
+        prepend_new_query: bool = True,
+    ) -> "Sequences":
+        """
+        Remap this alignment to a new query sequence.
+
+        Returns a new Sequences with the same hits but with columns added/removed
+        to match the new query's insertions and deletions relative to the old query.
+
+        Used to reuse one MSA across many SystemInstances without re-querying the
+        MMSeqs2 server: search once on the system rep, remap per-instance.
+
+        Parameters
+        ----------
+        old_query
+            The query that produced the current alignment (the system rep or
+            whatever was used to populate self).
+        new_query
+            The new query in A3M convention: uppercase for alignment columns,
+            '-' for deletions, lowercase for insertions.
+        prepend_new_query
+            If True (default), the new query is inserted as the first sequence
+            of the returned alignment. Most tools expect the query in the first
+            position by convention, so this saves callers from prepending it
+            themselves. The query is stored in ungapped, uppercase form (gaps
+            removed, insertions uppercased) — i.e. the actual designed residues.
+
+        Returns
+        -------
+        Sequences
+            A new Sequences containing the same hits with columns remapped,
+            optionally with the new query as the first sequence.
+            Format is preserved.
+
+        Raises
+        ------
+        NotImplementedError
+            If self.format_ is not in {"a3m", "a2m"}.
+        ValueError
+            If new_query's match-column count (uppercase + gap chars) doesn't
+            match old_query's match-column count.
+        ValueError
+            If any hit's match-column count (non-lowercase chars) doesn't match
+            old_query's match-column count.
+        """
+        if self.format_ not in {"a3m", "a2m"}:
+            raise NotImplementedError(
+                f"remap_query is not supported for format: {self.format_}"
+            )
+
+        # accept both str and RepSequence (numpy U1 array)
+        old_q = "".join(old_query)
+        new_q = "".join(new_query)
+
+        # match columns = uppercase (aligned) or gap; lowercase = insert (0 cols)
+        def match_columns(s: str) -> int:
+            return sum(1 for ch in s if not ch.islower())
+
+        n_cols = match_columns(old_q)
+
+        if match_columns(new_q) != n_cols:
+            raise ValueError(
+                f"new_query spans {match_columns(new_q)} match columns "
+                f"but old_query has {n_cols}"
+            )
+
+        for hit in self.seqs:
+            hit_cols = match_columns(hit.seq)
+            if hit_cols != n_cols:
+                raise ValueError(
+                    f"hit '{hit.id_}' has {hit_cols} match columns, "
+                    f"expected {n_cols} to match old_query"
+                )
+
+        def consume_match_column(hit_str: str, pos: int) -> tuple[str, str, int]:
+            # carry any leading lowercase insert run, then take one match char
+            start = pos
+            while pos < len(hit_str) and hit_str[pos].islower():
+                pos += 1
+            insert_run = hit_str[start:pos]
+            if pos >= len(hit_str):
+                raise ValueError("hit has fewer match columns than old_query")
+            return insert_run, hit_str[pos], pos + 1
+
+        remapped = []
+        for hit in self.seqs:
+            hit_str = hit.seq
+            out: list[str] = []
+            p = 0
+            for c in new_q:
+                if c.islower():
+                    # new-query insertion: hits have no residue here
+                    out.append(GAP)
+                elif c == GAP:
+                    # deletion: keep the hit's insert run, drop the match residue
+                    insert_run, _col, p = consume_match_column(hit_str, p)
+                    out.append(insert_run)
+                else:
+                    # substitution/match: carry insert run + residue
+                    insert_run, col, p = consume_match_column(hit_str, p)
+                    out.append(insert_run)
+                    out.append(col)
+
+            # carry any trailing (C-terminal) insert run
+            while p < len(hit_str) and hit_str[p].islower():
+                out.append(hit_str[p])
+                p += 1
+
+            if p != len(hit_str):
+                raise ValueError(
+                    f"hit '{hit.id_}' has more match columns than old_query"
+                )
+
+            remapped.append(
+                type(hit)(
+                    seq="".join(out), id=hit.id_, key=hit.key,
+                    type=hit.type_, metadata=hit.metadata,
+                )
+            )
+
+        if prepend_new_query:
+            # Store the query as the actual designed residues: gaps (deletions)
+            # dropped and insertions uppercased, matching the match columns the
+            # remapped hits are now aligned to.
+            query_residues = new_q.replace(GAP, "").upper()
+            seq_cls = type(remapped[0]) if remapped else Sequence
+            query_type = remapped[0].type_ if remapped else "protein"
+            remapped.insert(0, seq_cls(seq=query_residues, type=query_type))
+
+        return type(self)(
+            seqs=remapped,
+            aligned=True,
+            weights=self.weights,
+            format=self.format_,
+        )
+
     def serialize(self) -> dict[str, Any]:
         """
         Serialize sequences into JSON-compatible representation
