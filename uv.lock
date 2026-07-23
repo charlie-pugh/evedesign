@@ -863,7 +863,7 @@ wheels = [
 
 [[package]]
 name = "evedesign"
-version = "0.0.6"
+version = "0.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "biopython" },
@@ -900,6 +900,10 @@ evmutation2 = [
     { name = "evmutation2" },
     { name = "torch" },
 ]
+gpytorch = [
+    { name = "gpytorch" },
+    { name = "torch" },
+]
 mpnn = [
     { name = "prody" },
     { name = "torch" },
@@ -927,6 +931,7 @@ requires-dist = [
     { name = "dnachisel" },
     { name = "evcouplings", marker = "extra == 'evcouplings'" },
     { name = "evmutation2", marker = "extra == 'evmutation2'" },
+    { name = "gpytorch", marker = "extra == 'gpytorch'" },
     { name = "loguru" },
     { name = "numba" },
     { name = "numpy" },
@@ -942,11 +947,12 @@ requires-dist = [
     { name = "torch", marker = "extra == 'boltz2fold-cuda'" },
     { name = "torch", marker = "extra == 'esm2'" },
     { name = "torch", marker = "extra == 'evmutation2'" },
+    { name = "torch", marker = "extra == 'gpytorch'" },
     { name = "torch", marker = "extra == 'mpnn'" },
     { name = "transformers", marker = "extra == 'esm2'" },
     { name = "umap-learn", marker = "extra == 'umap'" },
 ]
-provides-extras = ["evmutation2", "evcouplings", "esm2", "mpnn", "boltz2fold", "boltz2fold-cuda", "umap", "notebooks"]
+provides-extras = ["evmutation2", "evcouplings", "esm2", "mpnn", "boltz2fold", "boltz2fold-cuda", "umap", "gpytorch", "notebooks"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1200,6 +1206,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/33/f6/354ae6491228b5eb40e10d89c4d13c651fe1cf7556e35ebdded50cff57ce/gitpython-3.1.50.tar.gz", hash = "sha256:80da2d12504d52e1f998772dc5baf6e553f8d2fcfe1fcc226c9d9a2ee3372dcc", size = 219798, upload-time = "2026-05-06T04:01:26.571Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/20/7a/1c6e3562dfd8950adbb11ffbc65d21e7c89d01a6e4f137fa981056de25c5/gitpython-3.1.50-py3-none-any.whl", hash = "sha256:d352abe2908d07355014abdd21ddf798c2a961469239afec4962e9da884858f9", size = 212507, upload-time = "2026-05-06T04:01:23.799Z" },
+]
+
+[[package]]
+name = "gpytorch"
+version = "1.15.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "linear-operator" },
+    { name = "mpmath" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/00/cac3e309b2f66518d937ce4d9fa821f167d9070d004fcb070b1780cd1d94/gpytorch-1.15.2.tar.gz", hash = "sha256:380625e93f851b85f772b25c5fb0a6c6d2e3eb2ef667f1e566ab4f95b8775361", size = 2781831, upload-time = "2026-02-28T01:12:55.172Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/70/c419a361b09ccb618b5165daa919003ccdd9c148356f7ff71a710db6bcf0/gpytorch-1.15.2-py3-none-any.whl", hash = "sha256:2112fdc7c0c0bf56a7f2444663cfc80fdfc3e19724399d6303a83d8efdd71e9e", size = 291209, upload-time = "2026-02-28T01:12:52.587Z" },
 ]
 
 [[package]]
@@ -1571,6 +1592,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f1/45/7fa8f56b17dc0f0a41ec70dd307ecd6787254483549843bef4c30ab5adce/lightning_utilities-0.15.3.tar.gz", hash = "sha256:792ae0204c79f6859721ac7f386c237a33b0ed06ba775009cb894e010a842033", size = 33553, upload-time = "2026-02-22T14:48:53.348Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/25/f4/ead6e0e37209b07c9baa3e984ccdb0348ca370b77cea3aaea8ddbb097e00/lightning_utilities-0.15.3-py3-none-any.whl", hash = "sha256:6c55f1bee70084a1cbeaa41ada96e4b3a0fea5909e844dd335bd80f5a73c5f91", size = 31906, upload-time = "2026-02-22T14:48:52.488Z" },
+]
+
+[[package]]
+name = "linear-operator"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "scipy" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/02/1a/0d6d0269cf7327e31a2fe80b274d5bf5001dc4462acbef26240da6ac5dfe/linear_operator-0.6.1.tar.gz", hash = "sha256:3fba49a8080d16f822a5d870f462279cd6afbcf4ed670f4511b38fad96f61831", size = 181898, upload-time = "2026-02-27T23:43:18.716Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/34/ee74708a93704baca5c1ef439817c4cb649f73382c518380ccc5ab335603/linear_operator-0.6.1-py3-none-any.whl", hash = "sha256:a5981c1fcda08df3a210dffb6e8019b4751f4afaf3ffc822c24eaaf56b11eed9", size = 174770, upload-time = "2026-02-27T23:43:17.074Z" },
 ]
 
 [[package]]
