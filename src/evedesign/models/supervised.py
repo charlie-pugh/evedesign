@@ -1,7 +1,9 @@
 """
 Supervised regression models trained on top of embeddings and/or scores from zero-shot models
 """
+import copy
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from typing import Any, Sequence, Literal
 import numpy as np
 from sklearn.base import ClassifierMixin
@@ -14,7 +16,14 @@ from evedesign.dataset import LabeledInstanceDataset
 from evedesign.system import System, SystemInstance
 from evedesign.model import Transformer, Scorer, SupervisedBaseModel, MutationScorer, \
     ConditionalMutationScorer, assign_scores_to_instances
-from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize
+from evedesign.types import StatusCallback, ModelStats, BioPolymers, BatchSize, DeviceType
+
+try:
+    import torch
+    import gpytorch
+    GPYTORCH_AVAILABLE = True
+except ImportError:
+    GPYTORCH_AVAILABLE = False
 
 spearman_score = lambda y_true, y_pred: spearmanr(y_true, y_pred).correlation
 pearson_score = lambda y_true, y_pred: pearsonr(y_true, y_pred).correlation
@@ -655,3 +664,318 @@ class SklearnPredictorOnEmbeddingsScores(SupervisedPredictorOnEmbeddingsScores):
             return self.predictor.predict(
                 instances_transformed
             ).astype(float)
+
+
+if GPYTORCH_AVAILABLE:
+    class _ExactGPModel(gpytorch.models.ExactGP):
+        """
+        Generic exact GP that wires a supplied mean and covariance module into the standard
+        forward, MultivariateNormal(mean(x), covar(x)), paired with the supplied likelihood.
+
+        This covers standard exact GP regression for any combination of gpytorch mean/kernel/likelihood
+        modules, which can all be instantiated upfront and passed to GpytorchModel. Models requiring a
+        custom forward (e.g. deep kernels with neural feature extractors, multitask GPs) are not handled.
+        """
+        def __init__(self, train_x, train_y, likelihood, mean_module, covar_module):
+            super().__init__(train_x, train_y, likelihood)
+            self.mean_module = mean_module
+            self.covar_module = covar_module
+
+        def forward(self, x):
+            mean_x = self.mean_module(x)
+            covar_x = self.covar_module(x)
+            return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+class GpytorchModel(SupervisedPredictorOnEmbeddingsScores):
+    """
+    Supervised Gaussian process regression on pooled molecular embeddings/scores, backed by gpytorch.
+
+    The fitted model and likelihood are kept on CPU outside of inference (see _model_on_device) so the model
+    stays serializable
+    """
+    available = GPYTORCH_AVAILABLE
+    name: str = "Gaussian process predictor on sequence embeddings/scores"
+    citations: list[str] = ["doi:10.1038/s41587-021-01146-5", "doi:10.48550/arXiv.1809.11165"]
+
+    requires_gpu: bool = False
+    supports_gpu: bool = True
+    supports_gpu_parallel: bool = False
+    supports_cpu_parallel: bool = True
+
+    def __init__(
+        self,
+        mean_module: "gpytorch.means.Mean | None" = None,
+        covar_module: "gpytorch.kernels.Kernel | None" = None,
+        likelihood: "gpytorch.likelihoods.Likelihood | None" = None,
+        num_iters: int = 100,
+        learning_rate: float = 0.1,
+        optimizer: "type[torch.optim.Optimizer] | None" = None,
+        optimizer_kwargs: dict[str, Any] | None = None,
+        mll: "type[gpytorch.mlls.MarginalLogLikelihood] | None" = None,
+        standardize_targets: bool = True,
+        device: DeviceType = "cpu",
+        embedder: Transformer | None = None,
+        scorer: Scorer | None = None,
+        use_embeddings: bool = True,
+        use_scores: bool = True,
+        override_models_for_training: bool = False,
+        target_name: str | None = None,
+        pooling: Literal["mean", "max"] | None = "mean",
+        batch_size: BatchSize = 128,
+    ):
+        """
+        Train an exact Gaussian process regression model on top of molecular model embeddings/scores.
+
+        The GP is specified by supplying instantiated gpytorch mean, covariance, and likelihood
+        modules. These are fed to a standard exact-GP forward (MultivariateNormal(mean(x), covar(x)))
+        and copied for each fit so repeated fits start from the same initial hyperparameters
+
+        Parameters
+        ----------
+        mean_module
+            A fully-instantiated gpytorch mean module (gpytorch.means.Mean). If None, a ConstantMean is used
+        covar_module
+            A fully-instantiated gpytorch kernel module (gpytorch.kernels.Kernel). If None, a scaled RBF kernel
+            ScaleKernel(RBFKernel()) is used
+        likelihood
+            A fully-instantiated gpytorch Likelihood instance to use. If None, a GaussianLikelihood is used
+        num_iters
+            Number of optimizer steps for the training loop
+        learning_rate
+            Learning rate for the optimizer
+        optimizer
+            A torch.optim optimizer class to use, constructed per fit as optimizer(model.parameters(), lr=learning_rate, 
+            **optimizer_kwargs). If None, torch.optim.Adam is used
+        optimizer_kwargs
+            Extra keyword arguments forwarded to the optimizer constructor
+        mll
+            A gpytorch.mlls marginal log-likelihood class constructed per fit as mll(likelihood, model) and maximized 
+            during training. If None, ExactMarginalLogLikelihood is used.
+        standardize_targets
+            If True, standardize y to zero mean / unit variance before fitting and invert the transform on
+            predictions
+        device
+            Device on which to run inference ("cpu", "cuda" or "mps")
+        embedder, scorer, use_embeddings, use_scores, override_models_for_training, target_name, pooling, batch_size
+            See SupervisedPredictorOnEmbeddingsScores
+        """
+        if not self.available:
+            raise ImportError(
+                "gpytorch package could not be imported"
+                "Install with the optional dependency pip install evedesign[gpytorch]"
+            )
+
+        # validate module specs (safe to reference gpytorch after availability check above)
+        if mean_module is not None and not isinstance(mean_module, gpytorch.means.Mean):
+            raise ValueError(
+                "mean_module must be a gpytorch Mean instance, or None for a ConstantMean"
+            )
+
+        if covar_module is not None and not isinstance(covar_module, gpytorch.kernels.Kernel):
+            raise ValueError(
+                "covar_module must be a gpytorch Kernel instance, or None for a scaled RBF kernel"
+            )
+
+        if likelihood is not None and not isinstance(likelihood, gpytorch.likelihoods.Likelihood):
+            raise ValueError(
+                "likelihood must be a gpytorch Likelihood instance, or None for a GaussianLikelihood"
+            )
+
+        if optimizer is not None and not (isinstance(optimizer, type) and issubclass(optimizer, torch.optim.Optimizer)):
+            raise ValueError(
+                "optimizer must be a torch.optim.Optimizer subclass (e.g. torch.optim.Adam), "
+                "or None for torch.optim.Adam"
+            )
+
+        if mll is not None and not (isinstance(mll, type) and issubclass(mll, gpytorch.mlls.MarginalLogLikelihood)):
+            raise ValueError(
+                "mll must be a gpytorch.mlls.MarginalLogLikelihood subclass "
+                "(e.g. gpytorch.mlls.ExactMarginalLogLikelihood), or None for ExactMarginalLogLikelihood"
+            )
+
+        super().__init__(
+            embedder=embedder,
+            scorer=scorer,
+            use_embeddings=use_embeddings,
+            use_scores=use_scores,
+            override_models_for_training=override_models_for_training,
+            target_name=target_name,
+            pooling=pooling,
+            batch_size=batch_size,
+            is_classifier=False,
+        )
+
+        self.mean_spec = mean_module
+        self.covar_spec = covar_module
+        self.likelihood_spec = likelihood
+        self.num_iters = num_iters
+        self.learning_rate = learning_rate
+        self.optimizer = optimizer if optimizer is not None else torch.optim.Adam
+        self.optimizer_kwargs = optimizer_kwargs if optimizer_kwargs is not None else {}
+        self.mll = mll if mll is not None else gpytorch.mlls.ExactMarginalLogLikelihood
+        self.standardize_targets = standardize_targets
+        self.device = device
+
+        # fitted state (set by _fit)
+        self._model = None
+        self._likelihood = None
+        self._y_mean: float = 0.0
+        self._y_std: float = 1.0
+
+    @property
+    def ready(self) -> bool:
+        return self.system is not None and self._model is not None and self._likelihood is not None
+
+    def _make_mean(self):
+        # copy the supplied module (or build a default) so each fit starts from the same initial hyperparameters
+        if self.mean_spec is None:
+            return gpytorch.means.ConstantMean()
+        return copy.deepcopy(self.mean_spec)
+
+    def _make_covar(self):
+        if self.covar_spec is None:
+            return gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+        return copy.deepcopy(self.covar_spec)
+
+    def _make_likelihood(self):
+        if self.likelihood_spec is None:
+            return gpytorch.likelihoods.GaussianLikelihood()
+        return copy.deepcopy(self.likelihood_spec)
+
+    def _build_gp(self, train_x, train_y, likelihood):
+        # construct a GP model from the training tensors, wiring in fresh mean/covariance modules
+        return _ExactGPModel(
+            train_x, train_y, likelihood, self._make_mean(), self._make_covar()
+        )
+
+    def _release_cache(self) -> None:
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            torch.mps.empty_cache()
+
+    @contextmanager
+    def _model_on_device(self):
+        """
+        Yield the fitted GP model and likelihood on self.device for the duration of the context.
+
+        """
+        if self.device == "cpu" or self._model is None or self._likelihood is None:
+            # nothing to move
+            yield self._model, self._likelihood
+            return
+
+        device = torch.device(self.device)
+        # deepcopy before moving so the canonical CPU state on the instance is never mutated
+        model = copy.deepcopy(self._model).to(device)
+        likelihood = copy.deepcopy(self._likelihood).to(device)
+        try:
+            yield model, likelihood
+        finally:
+            # release the device copies and clear the device cache
+            del model, likelihood
+            self._release_cache()
+
+    def _to_tensor(self, array) -> "torch.Tensor":
+        return torch.as_tensor(
+            np.asarray(array), dtype=torch.get_default_dtype(), device=torch.device(self.device)
+        )
+
+    def _fit(
+        self,
+        instances_transformed,
+        values
+    ) -> None:
+        train_x = self._to_tensor(instances_transformed)
+
+        # standardize targets for GP numerical stability; invert on prediction
+        y = np.asarray(values, dtype=float)
+        if self.standardize_targets:
+            self._y_mean = float(y.mean())
+            # guard against constant targets (zero variance)
+            self._y_std = float(y.std()) or 1.0
+        else:
+            self._y_mean, self._y_std = 0.0, 1.0
+
+        train_y = self._to_tensor((y - self._y_mean) / self._y_std)
+
+        # build fresh likelihood and model on the target device (train_x/train_y already on device)
+        device = torch.device(self.device)
+        likelihood = self._make_likelihood().to(device)
+        model = self._build_gp(train_x, train_y, likelihood).to(device)
+
+        # marginal log-likelihood to maximize during training
+        mll = self.mll(likelihood, model)
+
+        model.train()
+        likelihood.train()
+
+        optimizer = self.optimizer(
+            model.parameters(), lr=self.learning_rate, **self.optimizer_kwargs
+        )
+        for _ in range(self.num_iters):
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -mll(output, train_y)
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        likelihood.eval()
+
+        # keep fitted state on CPU so the model is serializable
+        self._model = model.to("cpu")
+        self._likelihood = likelihood.to("cpu")
+        self._release_cache()
+
+    def _posterior(
+        self,
+        instances_transformed,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute posterior predictive mean and standard deviation (on the original target scale)
+        for pre-transformed instances using the fitted GP.
+        """
+        with torch.no_grad(), gpytorch.settings.fast_pred_var(), self._model_on_device() as (model, likelihood):
+            # model/likelihood are on self.device inside this context
+            test_x = self._to_tensor(instances_transformed)
+
+            model.eval()
+            likelihood.eval()
+
+            # pass through likelihood to obtain distribution
+            posterior = likelihood(model(test_x))
+            mean = posterior.mean.detach().cpu().numpy().astype(float)
+            std = posterior.stddev.detach().cpu().numpy().astype(float)
+
+        # invert target standardization
+        mean = mean * self._y_std + self._y_mean
+        std = std * self._y_std
+
+        return mean, std
+
+    # this doesn't actually get used, but just leaving this here for now
+    def _score(
+        self,
+        instances_transformed,
+    ) -> np.ndarray[tuple[int], np.dtype[float]]:
+        mean, _ = self._posterior(instances_transformed)
+        return mean
+
+    # override base score() to attach the posterior predictive standard deviation
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None
+    ) -> list[SystemInstance]:
+        self.ready_or_raise()
+
+        x_pred = self._transform_and_validate_instances(
+            instances, override_models=False, status_callback=status_callback
+        )
+
+        mean, std = self._posterior(x_pred)
+
+        # store the posterior predictive stddev under the confidence attribute
+        return assign_scores_to_instances(instances, mean, confidences=std)
