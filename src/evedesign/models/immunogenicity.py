@@ -1,5 +1,6 @@
 import subprocess
 from collections import OrderedDict
+from math import log10
 from os import PathLike, path
 from tempfile import TemporaryDirectory
 from typing import Sequence, Any, Self
@@ -55,7 +56,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     requires_target: bool = False
     requires_fixed_length: bool = False
     handles_deletions: bool = True
-    handles_insertions: bool = False  # TODO: could be set to True
+    handles_insertions: bool = False  # TODO: can be set to True
     requires_gpu: bool = False
     supports_gpu: bool = False
     supports_gpu_parallel: bool = False
@@ -302,10 +303,8 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
             # apply floor to bound rank range based on # random peptides used for calibration,
             # and sum py core starting position
             pos_to_burden = {
-                pos: float(
-                    -np.log10([
-                        self.alleles[core] * max(rank, self.floor_rank) / 100.0 for core, rank in cores.items()
-                    ]).sum()
+                pos: sum(
+                    self.alleles[core] * -log10(max(rank, self.floor_rank)) for core, rank in cores.items()
                 )
                 for pos, cores in pos_to_cores.items()
             }
@@ -319,6 +318,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
                     "type": "t_cell_epitope",
                     "subtype": core,
                     "score": rank,
+                    # "score2": self.alleles[core]  * -log10(max(rank, self.floor_rank)),
                     "weight": self.alleles[core],
                 }
                 for (entity_idx, pos), cores in pos_to_cores.items()
