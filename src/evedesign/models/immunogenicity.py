@@ -78,6 +78,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         alleles: dict[str, float],
         binary: PathLike,
         peptide_lengths: Sequence[int] = (15,),
+        floor_rank: float = 1e-05,
         truncate_rank: float | None = 10.0,
         prediction_cache_size: int = 10 ** 8,
     ):
@@ -91,6 +92,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         self.peptide_lengths = peptide_lengths
         self.binary = binary
         self.truncate_rank = truncate_rank
+        self.floor_rank = floor_rank
         self._lru_cache = LRU(
             maxsize=prediction_cache_size
         )
@@ -287,9 +289,10 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         for instance_idx, pos_to_cores in core_map.items():
             instance_sum = 0
             for pos, cores in pos_to_cores.items():
-                # normalize ranks to 0-1 range, apply allele weights
+                # normalize ranks to 0-1 range, apply allele weights;
+                # apply floor to bound rank range based on # random peptides used for calibration
                 pos_transformed = -np.log10(
-                    [self.alleles[core] * rank / 100.0 for core, rank in cores.items()]
+                    [self.alleles[core] * max(rank, self.floor_rank) / 100.0 for core, rank in cores.items()]
                 )
 
                 instance_sum += pos_transformed.sum()
