@@ -2,7 +2,7 @@ import subprocess
 from collections import OrderedDict
 from os import PathLike, path
 from tempfile import TemporaryDirectory
-from typing import Sequence, Literal, Any, Self
+from typing import Sequence, Any, Self
 import numpy as np
 import pandas as pd
 
@@ -14,19 +14,10 @@ from evedesign.model import (
     assign_scores_to_instances,
 )
 from evedesign.system import System, SystemInstance
-from evedesign.types import StatusCallback, DeviceType
-from evedesign.utils import status_start, status_done, status_progress
+from evedesign.types import StatusCallback, Site
+from evedesign.utils import status_start, status_done
 
-try:
-    from aiki_hla.inference import score_dataframe
-    from aiki_hla.scan.extract import extract_peptides, unique_peptide_strings
-    from aiki_hla.scan.alleles import resolve_allele_panel
-    from aiki_hla.scan.aggregate import aggregate_hotspots
-    from aiki_hla.viability_gate import score_gate_batch, compose
-    from aiki_hla.data.sequences import list_alleles
-    AIKI_HLA_AVAILABLE = True
-except ImportError:
-    AIKI_HLA_AVAILABLE = False
+MHCII_EPITOPE_CORE_LENGTH = 9
 
 
 class LRU(OrderedDict):
@@ -54,10 +45,10 @@ class LRU(OrderedDict):
 
 class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
     """
-    Wrapper around MixMHC2Pred
+    Wrapper around MixMHC2pred MHCII display predictor
     """
     available = True
-    name: str = "MixMHC2Pred"
+    name: str = "MixMHC2pred"
     citations: list[str] = ["doi.org/10.1038/s41587-019-0289-6", "10.1016/j.immuni.2023.03.009"]
 
     # core properties
@@ -79,11 +70,31 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         binary: PathLike,
         peptide_lengths: Sequence[int] = (15,),
         floor_rank: float = 1e-05,
-        truncate_rank: float | None = 10.0,
+        truncate_rank: float | None = None,
         prediction_cache_size: int = 10 ** 8,
     ):
         """
-        # TODO: docs
+        Create new MixMHC2pred predictor
+
+        Parameters
+        ----------
+        alleles
+            Mapping from allele (e.g. HLA-DRB1*03:01 or DRB1*03:01) to weight/population frequency.
+            Alleles will be remapped to MixMHC2pred naming convention with underscores internally.
+            Values of dictionary will be used to weight binding core scores in epitope burden
+            calculations.
+        binary
+            Path to MixMHC2pred binary
+        peptide_lengths
+            Length of peptides that sequence will be chunked into for scanning
+        floor_rank
+            Floor the rank at this value based on number of random peptides that method
+            was calibrated on (e.g. 1e-05 when calibrated on 100k peptides)
+        truncate_rank
+            Exclude epitopes below this rank from scoring and inclusion in output
+        prediction_cache_size
+            Size of LRU cache to reuse calculations for peptides (larger cache = quicker
+            calculations on large mutation sets, but higher memory footprint)
         """
         self.alleles = {
             allele.replace("HLA-", "").replace("*", "_").replace(":", "_"): weight
@@ -243,8 +254,6 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         else:
             new_preds = {}
 
-        print("NEW PEPS:", len(new_peps), "REUSING:", reusing)   # TODO: remove
-
         # deduplicate binding cores
         core_map = {}
 
@@ -286,18 +295,39 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         # assign scores to instances, this creates shallow copy after which we
         # can also attach binding cores as metadata
         scores = np.zeros((len(instances)))
+        metadata = [None] * len(instances)
+
         for instance_idx, pos_to_cores in core_map.items():
-            instance_sum = 0
-            for pos, cores in pos_to_cores.items():
-                # normalize ranks to 0-1 range, apply allele weights;
-                # apply floor to bound rank range based on # random peptides used for calibration
-                pos_transformed = -np.log10(
-                    [self.alleles[core] * max(rank, self.floor_rank) / 100.0 for core, rank in cores.items()]
+            # compute weighted sum of allele frequency * log-transformed rank for all cores,
+            # apply floor to bound rank range based on # random peptides used for calibration,
+            # and sum py core starting position
+            pos_to_burden = {
+                pos: float(
+                    -np.log10([
+                        self.alleles[core] * max(rank, self.floor_rank) / 100.0 for core, rank in cores.items()
+                    ]).sum()
                 )
+                for pos, cores in pos_to_cores.items()
+            }
 
-                instance_sum += pos_transformed.sum()
+            # also accumulate flat list of epitopes to store in metadata
+            metadata[instance_idx]: Site = [  # noqa
+                {
+                    "entity": entity_idx,
+                    "pos": pos,
+                    "length": MHCII_EPITOPE_CORE_LENGTH,
+                    "type": "t_cell_epitope",
+                    "subtype": core,
+                    "score": rank,
+                    "weight": self.alleles[core],
+                }
+                for (entity_idx, pos), cores in pos_to_cores.items()
+                for core, rank in cores.items()
+            ]
 
-            scores[instance_idx] = instance_sum
+
+            # sum over entire entity for aggregated score
+            scores[instance_idx] = sum(pos_to_burden.values())
 
         # first assign scores, this creates a shallow copy of instances
         scored_instances = assign_scores_to_instances(
@@ -308,7 +338,13 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         for instance_idx, pos_to_cores in core_map.items():
             if scored_instances[instance_idx].metadata is None:
                 scored_instances[instance_idx].metadata = {}
-            scored_instances[instance_idx].metadata["t_cell_epitopes"] = pos_to_cores
+
+            if "sites" not in scored_instances[instance_idx].metadata:
+                scored_instances[instance_idx].metadata["sites"] = []
+
+            scored_instances[instance_idx].metadata["sites"] += metadata[instance_idx]
+
+        status_done(status_callback, "Finished scoring")
 
         return scored_instances
 
