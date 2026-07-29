@@ -91,9 +91,6 @@ class RangeRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutationScore
         instances: Sequence[SystemInstance],
         status_callback: StatusCallback | None = None,
     ) -> list[SystemInstance]:
-        """
-        Score immunogenicity for full sequence (higher = more immunogenic)
-        """
         self.ready_or_raise()
         self._validate_instances(instances)
 
