@@ -161,8 +161,9 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
             return False, "Model does not support a data parameter (must be None)"
 
         # for now only handle single-protein systems but can trivially extend to multiple proteins
-        if len(system) != 1 or system[0].type != "protein":
-            return False, "For now can only handle a single-component protein system"
+        for entity_idx, entity in enumerate(system):
+            if entity.type != "protein":
+                return False, "Can only handle protein entities"
 
         return True, ""
 
@@ -195,35 +196,40 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
 
         # also collect which peptides are not yet in cache
         new_peps = set()
+        reusing = 0
 
         for instance_idx, instance in enumerate(instances):
-            # remove deletions and insertions from sequence
-            seq = "".join(instance[0].normalized_rep())
+            for entity_idx, entity in enumerate(instance):
+                # remove deletions and insertions from sequence
+                seq = "".join(entity.normalized_rep())
 
-            # extract all peptides for current instance
-            peps = self.extract_peptides(
-                seq=seq,
-                lengths=self.peptide_lengths,
-                n_flank_length=3,
-                c_flank_length=3,
-            )
-
-            # iterate peptides, compute context and store in global map
-            for pep_seq, seq_idx, ctx_n, ctx_c in peps:
-                ctx = "".join([
-                    ctx_n.ljust(3, "-"), pep_seq[:3], pep_seq[-3:], ctx_c.rjust(3, "-")
-                ])
-
-                key = (pep_seq, ctx)
-
-                if key not in unique_peps:
-                    unique_peps[key] = []
-                unique_peps[key].append(
-                    (instance_idx, seq_idx)
+                # extract all peptides for current instance
+                peps = self.extract_peptides(
+                    seq=seq,
+                    lengths=self.peptide_lengths,
+                    n_flank_length=3,
+                    c_flank_length=3,
                 )
 
-                if key not in self._lru_cache:
-                    new_peps.add(key)
+                # iterate peptides, compute context and store in global map
+                for pep_seq, seq_idx, ctx_n, ctx_c in peps:
+                    ctx = "".join([
+                        ctx_n.ljust(3, "-"), pep_seq[:3], pep_seq[-3:], ctx_c.rjust(3, "-")
+                    ])
+
+                    key = (pep_seq, ctx)
+
+                    if key not in unique_peps:
+                        unique_peps[key] = []
+
+                    unique_peps[key].append(
+                        (instance_idx, entity_idx, seq_idx)
+                    )
+
+                    if key not in self._lru_cache:
+                        new_peps.add(key)
+                    else:
+                        reusing += 1
 
         # predict peptides we haven't seen before and stored in cache
         if len(new_peps) > 0:
@@ -235,7 +241,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         else:
             new_preds = {}
 
-        print("NEW PEPS", len(new_peps))
+        print("NEW PEPS:", len(new_peps), "REUSING:", reusing)   # TODO: remove
 
         # deduplicate binding cores
         core_map = {}
@@ -254,13 +260,15 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
                 if self.truncate_rank is not None and rank > self.truncate_rank:
                     continue
 
-                # assign cores to instances
-                for instance_idx, pos_idx in hit_list:
+                # assign cores to instances/entities
+                for instance_idx, entity_idx, pos_idx in hit_list:
                     if instance_idx not in core_map:
                         core_map[instance_idx] = {}
 
-                    # 1-based index for returned binding cores, add pos from hit list and first_index
-                    instance_pos = self._system[0].first_index + pos_idx + core_hit - 1
+                    # 1-based index for returned binding cores, add pos from hit list and
+                    # first_index of respective entity
+                    pos_remapped = self._system[entity_idx].first_index + pos_idx + core_hit - 1
+                    instance_pos = (entity_idx, pos_remapped)
 
                     if instance_pos not in core_map[instance_idx]:
                         core_map[instance_idx][instance_pos] = {}
