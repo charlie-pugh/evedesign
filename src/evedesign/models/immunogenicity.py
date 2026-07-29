@@ -1,4 +1,7 @@
+import subprocess
 from collections import OrderedDict
+from os import PathLike, path
+from tempfile import TemporaryDirectory
 from typing import Sequence, Literal, Any, Self
 import numpy as np
 import pandas as pd
@@ -47,6 +50,256 @@ class LRU(OrderedDict):
         if len(self) > self.maxsize:
             oldest = next(iter(self))
             del self[oldest]
+
+
+class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
+    """
+    Wrapper around MixMHC2Pred
+    """
+    available = True
+    name: str = "MixMHC2Pred"
+    citations: list[str] = ["doi.org/10.1038/s41587-019-0289-6", "10.1016/j.immuni.2023.03.009"]
+
+    # core properties
+    requires_target: bool = False
+    requires_fixed_length: bool = False
+    handles_deletions: bool = True
+    handles_insertions: bool = False  # TODO: could be set to True
+    requires_gpu: bool = False
+    supports_gpu: bool = False
+    supports_gpu_parallel: bool = False
+    supports_cpu_parallel: bool = False
+
+    required_entity_attributes: list[str] | None = None
+    optional_entity_attributes: list[str] | None = None
+
+    def __init__(
+        self,
+        alleles: dict[str, float],
+        binary: PathLike,
+        peptide_lengths: Sequence[int] = (15,),
+        truncate_rank: float | None = 10.0,
+        prediction_cache_size: int = 10 ** 8,
+    ):
+        """
+        # TODO: docs
+        """
+        self.alleles = {
+            allele.replace("HLA-", "").replace("*", "_").replace(":", "_"): weight
+            for allele, weight in alleles.items()
+        }
+        self.peptide_lengths = peptide_lengths
+        self.binary = binary
+        self.truncate_rank = truncate_rank
+        self._lru_cache = LRU(
+            maxsize=prediction_cache_size
+        )
+        self._system = None
+
+    @staticmethod
+    def extract_peptides(
+        seq: str,
+        lengths: Sequence[int],
+        n_flank_length: int | None = None,
+        c_flank_length: int | None = None,
+    ):
+        peps = []
+        for length in lengths:
+            for i in range(len(seq) - length + 1):
+                pep = seq[i:i + length]
+
+                if n_flank_length is not None:
+                    n_flank = seq[max(0, i - n_flank_length):i]
+                else:
+                    n_flank = None
+
+                if c_flank_length is not None:
+                    c_flank = seq[i + length:i + length + c_flank_length]
+                else:
+                    c_flank = None
+
+                peps.append(
+                    (pep, i, n_flank, c_flank)
+                )
+
+        return peps
+
+    def _run_mixmhc2pred(
+        self,
+        peptides_with_context: set[tuple[str, str]],
+    ):
+        with TemporaryDirectory() as tmpdir:
+            input_file = path.join(tmpdir, "input.txt")
+            output_file = path.join(tmpdir, "output.txt")
+
+            with open(input_file, "w") as f:
+                for (pep, pep_ctx) in peptides_with_context:
+                    f.write(f"{pep}\t{pep_ctx}\n")
+
+            cmd = [
+                self.binary, "--input", input_file, "--output", output_file, "-a"
+            ] + list(self.alleles)
+
+            subprocess.run(
+                cmd, capture_output=True, text=True, check=True,
+                cwd=None, shell=False, env=None,
+            )
+
+            return pd.read_csv(output_file, sep="\t", comment="#")
+
+    @property
+    def system(self) -> System | None:
+        return self._system
+
+    @property
+    def ready(self) -> bool:
+        return self._system is not None
+
+    @classmethod
+    def can_model(cls, system: System, data: Any = None) -> tuple[bool, str]:
+        if data is not None:
+            return False, "Model does not support a data parameter (must be None)"
+
+        # for now only handle single-protein systems but can trivially extend to multiple proteins
+        if len(system) != 1 or system[0].type != "protein":
+            return False, "For now can only handle a single-component protein system"
+
+        return True, ""
+
+    def build(
+        self,
+        system: System,
+        data: None = None,
+        status_callback: StatusCallback | None = None,
+    ) -> Self:
+        self.can_model_or_raise(system, data)
+        self._system = system
+        return self
+
+    # elected to score full sequence to avoid dealing with indexing
+    def score(
+        self,
+        instances: Sequence[SystemInstance],
+        status_callback: StatusCallback | None = None,
+    ) -> list[SystemInstance]:
+        """
+        Score immunogenicity for full sequence (higher = more immunogenic)
+        """
+        self.ready_or_raise()
+        self._validate_instances(instances)
+
+        status_start(status_callback, "Starting scoring")
+
+        # first collect all peptides for this run
+        unique_peps = {}
+
+        # also collect which peptides are not yet in cache
+        new_peps = set()
+
+        for instance_idx, instance in enumerate(instances):
+            # remove deletions and insertions from sequence
+            seq = "".join(instance[0].normalized_rep())
+
+            # extract all peptides for current instance
+            peps = self.extract_peptides(
+                seq=seq,
+                lengths=self.peptide_lengths,
+                n_flank_length=3,
+                c_flank_length=3,
+            )
+
+            # iterate peptides, compute context and store in global map
+            for pep_seq, seq_idx, ctx_n, ctx_c in peps:
+                ctx = "".join([
+                    ctx_n.ljust(3, "-"), pep_seq[:3], pep_seq[-3:], ctx_c.rjust(3, "-")
+                ])
+
+                key = (pep_seq, ctx)
+
+                if key not in unique_peps:
+                    unique_peps[key] = []
+                unique_peps[key].append(
+                    (instance_idx, seq_idx)
+                )
+
+                if key not in self._lru_cache:
+                    new_peps.add(key)
+
+        # predict peptides we haven't seen before and stored in cache
+        if len(new_peps) > 0:
+            new_preds = self._run_mixmhc2pred(
+                new_peps
+            ).set_index(
+                ["Peptide", "Context"]
+            ).to_dict("index")
+        else:
+            new_preds = {}
+
+        print("NEW PEPS", len(new_peps))
+
+        # deduplicate binding cores
+        core_map = {}
+
+        for key, hit_list in unique_peps.items():
+            try:
+                stats = new_preds[key]
+            except KeyError:
+                stats = self._lru_cache[key]
+
+            for allele, allele_weight in self.alleles.items():
+                rank = stats["%Rank_" + allele]
+                core_hit = stats["CoreP1_" + allele]
+
+                # skip cores if truncation is enabled and rank not high enough
+                if self.truncate_rank is not None and rank > self.truncate_rank:
+                    continue
+
+                # assign cores to instances
+                for instance_idx, pos_idx in hit_list:
+                    if instance_idx not in core_map:
+                        core_map[instance_idx] = {}
+
+                    # 1-based index for returned binding cores, add pos from hit list and first_index
+                    instance_pos = self._system[0].first_index + pos_idx + core_hit - 1
+
+                    if instance_pos not in core_map[instance_idx]:
+                        core_map[instance_idx][instance_pos] = {}
+
+                    if rank < core_map[instance_idx][instance_pos].get(allele, 999):
+                        core_map[instance_idx][instance_pos][allele] = rank
+
+
+        # update cache with latest predictions (only at end to avoid losing entries)
+        for k, v in new_preds.items():
+            self._lru_cache[k] = v
+
+        # assign scores to instances, this creates shallow copy after which we
+        # can also attach binding cores as metadata
+        scores = np.zeros((len(instances)))
+        for instance_idx, pos_to_cores in core_map.items():
+            instance_sum = 0
+            for pos, cores in pos_to_cores.items():
+                # normalize ranks to 0-1 range, apply allele weights
+                pos_transformed = -np.log10(
+                    [self.alleles[core] * rank / 100.0 for core, rank in cores.items()]
+                )
+
+                instance_sum += pos_transformed.sum()
+
+            scores[instance_idx] = instance_sum
+
+        # first assign scores, this creates a shallow copy of instances
+        scored_instances = assign_scores_to_instances(
+            instances, np.asarray(scores, dtype=float)
+        )
+
+        # also attach epitope hits to instances
+        for instance_idx, pos_to_cores in core_map.items():
+            if scored_instances[instance_idx].metadata is None:
+                scored_instances[instance_idx].metadata = {}
+            scored_instances[instance_idx].metadata["t_cell_epitopes"] = pos_to_cores
+
+        return scored_instances
 
 
 class AikiHLA(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):

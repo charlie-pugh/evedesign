@@ -44,7 +44,6 @@ boltz2fold = ["torch", "boltz>=2.2", "pyyaml"]
 boltz2fold-cuda = ["torch", "boltz[cuda]>=2.2; sys_platform == 'linux'", "pyyaml"]
 umap = ["umap-learn"]
 gpytorch = ["torch", "gpytorch"]
-aikihla = ["aiki-hla"]
 notebooks = ["py3Dmol"]
 
 [project.urls]
