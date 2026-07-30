@@ -85,6 +85,7 @@ Note that most methods listed as `Scorer` also support the `MutationScorer` and 
 | One-hot encoding embedder   | `evedesign.models.embedders.OneHotEmbedder`                      | `Transformer`                        |
 | BLOSUM embedder             | `evedesign.models.embedders.BLOSUMEmbedder`                      | `Transformer`                        |
 | Sequence distance restraint | `evedesign.restraints.seq_dist.LinearSeqDistRestraint`           | `Scorer`                             |
+| Exposed sequence motifs     | `evedesign.restraints.motif.ExposedMotifRestraint`               | `Scorer`                             |
 | Isoelectric point restraint | `evedesign.restraints.physicochemical.IsoelectricPointRestraint` | `Scorer`                             |
 | Molecular weight restraint  | `evedesign.restraints.physicochemical.MolecularWeightRestraint`  | `Scorer`                             |
 
