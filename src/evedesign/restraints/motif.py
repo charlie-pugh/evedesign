@@ -67,16 +67,16 @@ class MotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutationScore
         missing_exposure: Literal["exclude", "include"] = "include",
     ):
         """
-        Create new sequence motif scanner
+        Create new sequence motif restraint
 
         Parameters
         ----------
         exposure_cutoff
             Minimal exposure cutoff to consider a motif a hit
         exposure_source
-            If "system", retrieve from structures on system, if "instance", retrieve
-            from structural model on instance (needs prior transform with structure prediction
-            model applied). If None, perform purely sequence-based lookup.
+            If "system", approximate from structures on system (may have different side chains),
+            if "instance", retrieve from structural model on instance (needs prior transform with
+            structure prediction model applied). If None, perform purely sequence-based lookup.
         exposure_agg
             Use this function to aggregate multiple rSASA values per residue
         missing_exposure
@@ -193,9 +193,9 @@ class ExposedMotifRestraint(MotifRestraint):
         exposure_cutoff
             Minimal exposure cutoff to consider a motif a hit
         exposure_source
-            If "system", retrieve from structures on system, if "instance", retrieve
-            from structural model on instance (needs prior transform with structure prediction
-            model applied). If None, perform purely sequence-based lookup.
+            If "system", approximate from structures on system (may have different side chains),
+            if "instance", retrieve from structural model on instance (needs prior transform with
+            structure prediction model applied). If None, perform purely sequence-based lookup.
         exposure_agg
             Use this function to aggregate multiple rSASA values per residue
         missing_exposure
