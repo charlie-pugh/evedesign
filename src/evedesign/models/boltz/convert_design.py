@@ -34,7 +34,7 @@ from evedesign.types import EntityPosList
 # INPUT: evedesign System -> BoltzGen design YAML
 
 
-# 1a. Entity classification 
+# 1a. Entity classification
 
 
 def _is_design_entity(entity: Entity) -> bool:
@@ -59,10 +59,20 @@ def _is_design_entity(entity: Entity) -> bool:
 # 1b. Sequence spec (letters fixed, numbers designed)
 
 
-def _entity_to_sequence_spec(entity: Entity) -> str:
+def _entity_to_sequence_spec(
+    entity: Entity,
+    fixed_pos: Sequence[int] | None = None,
+) -> str:
     """
     Convert entity length info into BoltzGen sequence
     spec string.
+
+    In a BoltzGen spec, letters are held fixed and numbers
+    are designed, chosen per residue rather than per chain
+    (res_design_mask, schema.py:530-547). An entity counts as
+    designed when its spec contains any digit
+    (schema.py:879). So "60..80" designs a whole chain, while
+    "3EFG4" designs 3 residues, keeps EFG, then designs 4.
 
     BoltzGen YAML accepts three formats for the
     sequence field of a designable entity:
@@ -72,13 +82,61 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
       handled elsewhere)
 
     Resolution order:
-    1. min_length and max_length both set -> "min..max"
-    2. min_length only -> "min"
-    3. max_length only -> "max"
-    4. rep is set -> len(rep) (fixed length matching rep)
-    5. Fallback -> "80..140" (matches BoltzGen's vanilla
+    1. fixed_pos given -> interleaved motif spec built from
+       entity.rep (requires rep; length fixed at len(rep))
+    2. min_length and max_length both set -> "min..max"
+    3. min_length only -> "min"
+    4. max_length only -> "max"
+    5. rep is set -> len(rep) (fixed length matching rep)
+    6. Fallback -> "80..140" (matches BoltzGen's vanilla
        binder default; emits a warning when triggered)
+
+    Parameters
+    ----------
+    fixed_pos : Sequence[int], optional
+        1-based positions to hold fixed (motif scaffolding).
+        Requires entity.rep, since the fixed residues are
+        taken from it.
+
+    Notes
+    -----
+    Variable-length designed segments around a motif (e.g.
+    BoltzGen's "15..20AAAA18") are not expressible here: an
+    Entity carries one min/max for the whole chain, not
+    per-segment ranges. Motif specs are fixed-length.
     """
+    if fixed_pos:
+        if entity.rep is None:
+            raise ValueError(
+                f"Entity '{entity.id}': fixed_pos needs rep, which "
+                "supplies the fixed residues."
+            )
+        rep = list(entity.rep)
+        length = len(rep)
+        keep = sorted({int(p) for p in fixed_pos})
+
+        out_of_range = [p for p in keep if not 1 <= p <= length]
+        if out_of_range:
+            raise ValueError(
+                f"Entity '{entity.id}': fixed_pos {out_of_range} outside "
+                f"1..{length}."
+            )
+
+        keep_set = set(keep)
+        spec: list[str] = []
+        run = 0
+        for pos in range(1, length + 1):
+            if pos in keep_set:
+                if run:
+                    spec.append(str(run))
+                    run = 0
+                spec.append(str(rep[pos - 1]))
+            else:
+                run += 1
+        if run:
+            spec.append(str(run))
+        return "".join(spec)
+
     if (
         entity.min_length is not None
         and entity.max_length is not None
@@ -100,12 +158,196 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
     )
     return "80..140"
 
-# 1c. Entity emitters: the two input cases
+# 1c. Per-entity conditioning blocks
+#
+# Each helper mirrors one block of BoltzGen's spec parser in
+# boltzgen/data/parse/schema.py; line refs are for boltzgen 0.3.2.
+
+
+# H(elix), S(heet), L(oop), U(nspecified) -- schema.py:1113-1124
+_SS_TO_BOLTZGEN = {"H": "H", "E": "S", "C": "L"}
+
+
+def _positions_to_range_spec(positions: Sequence[int]) -> str:
+    """
+    Collapse 1-based positions into BoltzGen range syntax,
+    e.g. [5, 6, 7, 13] -> "5..7,13".
+
+    Consumed by parse_range (schema.py:646-680), which reads
+    single values and ranges as 1-indexed and end-inclusive.
+    """
+    ordered = sorted({int(p) for p in positions})
+    if not ordered:
+        return ""
+
+    runs: list[tuple[int, int]] = []
+    start = prev = ordered[0]
+    for pos in ordered[1:]:
+        if pos == prev + 1:
+            prev = pos
+            continue
+        runs.append((start, prev))
+        start = prev = pos
+    runs.append((start, prev))
+
+    return ",".join(
+        str(a) if a == b else f"{a}..{b}" for a, b in runs
+    )
+
+
+def _spec_length(entity: Entity) -> int | None:
+    """
+    Residue count for per-residue specs, or None if unknown.
+
+    schema.py:1127-1132 pads a short per-residue string with
+    UNSPECIFIED but raises when it is longer than the sampled
+    chain, so anchor on the shortest length the entity allows.
+    """
+    if entity.rep is not None:
+        return len(entity.rep)
+    if entity.min_length is not None:
+        return entity.min_length
+    if entity.max_length is not None:
+        return entity.max_length
+    return None
+
+
+def _secondary_structure_spec(entity: Entity) -> str | None:
+    """
+    Per-residue secondary structure string, or None.
+
+    Maps evedesign H/E/C (helix/sheet/coil) onto BoltzGen
+    H/S/L, padding with U (schema.py:1113-1124). BoltzGen
+    only accepts this on designed residues (data.py:1957).
+    """
+    ss = getattr(entity, "secondary_structure", None)
+    if not ss:
+        return None
+
+    length = _spec_length(entity)
+    if length is None:
+        raise ValueError(
+            f"Entity '{entity.id}': secondary_structure needs a "
+            "known length (set rep, min_length or max_length)."
+        )
+
+    chars = ["U"] * length
+    for item in ss:
+        if item.type not in _SS_TO_BOLTZGEN:
+            raise ValueError(
+                f"Entity '{entity.id}': bad secondary structure type "
+                f"{item.type!r}, expected one of {sorted(_SS_TO_BOLTZGEN)}."
+            )
+        symbol = _SS_TO_BOLTZGEN[item.type]
+        if item.pos is None:
+            chars = [symbol] * length
+            continue
+        idx = int(item.pos) - 1
+        if not 0 <= idx < length:
+            raise ValueError(
+                f"Entity '{entity.id}': secondary_structure position "
+                f"{item.pos} outside 1..{length}."
+            )
+        chars[idx] = symbol
+
+    return "".join(chars)
+
+
+def _binding_types_spec(entity: Entity) -> dict[str, str] | None:
+    """
+    binding_types mapping from Entity.interactions, or None.
+
+    avoid=False -> "binding", avoid=True -> "not_binding";
+    pos=None covers the whole entity. Keys consumed at
+    schema.py:1094-1100.
+    """
+    interactions = getattr(entity, "interactions", None)
+    if not interactions:
+        return None
+
+    length = _spec_length(entity)
+    binding: list[int] = []
+    not_binding: list[int] = []
+
+    for item in interactions:
+        if item.partner_ids:
+            raise ValueError(
+                f"Entity '{entity.id}': Interaction '{item.id}' sets "
+                "partner_ids, which binding_types cannot express."
+            )
+        target = not_binding if item.avoid else binding
+        if item.pos is None:
+            if length is None:
+                raise ValueError(
+                    f"Entity '{entity.id}': Interaction '{item.id}' "
+                    "covers the whole entity but its length is unknown."
+                )
+            target.extend(range(1, length + 1))
+            continue
+        target.extend(int(p) for p in item.pos)
+
+    overlap = sorted(set(binding) & set(not_binding))
+    if overlap:
+        raise ValueError(
+            f"Entity '{entity.id}': positions {overlap} marked both "
+            "binding and not_binding."
+        )
+
+    spec: dict[str, str] = {}
+    if binding:
+        spec["binding"] = _positions_to_range_spec(binding)
+    if not_binding:
+        spec["not_binding"] = _positions_to_range_spec(not_binding)
+    return spec or None
+
+
+def _attach_conditioning(entity: Entity, inner: dict) -> None:
+    """
+    Attach the optional conditioning blocks to an inline
+    entity dict, in place.
+
+    BoltzGen decides which combinations are legal: secondary
+    structure is rejected on non-designed residues and binding
+    types on designed ones (data.py:1953-1960). File entities
+    take list-of-chain forms, handled by the caller.
+    """
+    ss_spec = _secondary_structure_spec(entity)
+    if ss_spec is not None:
+        inner["secondary_structure"] = ss_spec
+
+    binding_spec = _binding_types_spec(entity)
+    if binding_spec is not None:
+        inner["binding_types"] = binding_spec
+
+    if entity.cyclic:
+        inner["cyclic"] = True
+
+
+def _reject_unsupported(entity: Entity) -> None:
+    """
+    Raise on Entity attributes with no settled BoltzGen
+    mapping, rather than dropping them silently.
+    """
+    if getattr(entity, "residue_bias", None):
+        raise NotImplementedError(
+            f"Entity '{entity.id}': residue_bias weights have no "
+            "BoltzGen equivalent; residue_constraints "
+            "(schema.py:804-822) take hard allowed/disallowed sets."
+        )
+    if getattr(entity, "symmetry", None) is not None:
+        raise NotImplementedError(
+            f"Entity '{entity.id}': symmetry {entity.symmetry!r} has no "
+            "BoltzGen equivalent; symmetric_group (schema.py:147) is an "
+            "integer group index, not a point group."
+        )
+
+# 1d. Entity emitters: the two input cases
 
 def _emit_design_entity(
     entity: Entity,
     chain_ids: list[str],
     pointer: int,
+    fixed_pos: Sequence[int] | None = None,
 ) -> tuple[dict, int]:
     """
     Emit a YAML entity dict for a designable entity.
@@ -120,8 +362,13 @@ def _emit_design_entity(
         {"ligand": {"id": "A", "smiles": "..."}} or
         {"ligand": {"id": "A", "ccd": "..."}}
 
+    Conditioning blocks from section 1c are attached when the
+    entity specifies them.
+
     Returns the YAML dict and the updated chain ID pointer.
     """
+    _reject_unsupported(entity)
+
     copies = (
         entity.copies if entity.copies is not None
         else 1
@@ -161,8 +408,8 @@ def _emit_design_entity(
             }
         return entry, pointer + copies
 
-    # Protein / DNA / RNA:use type if valid, else protein
-    seq_spec = _entity_to_sequence_spec(entity)
+    # Protein / DNA / RNA: use type if valid, else protein
+    seq_spec = _entity_to_sequence_spec(entity, fixed_pos=fixed_pos)
     entity_type = (
         entity.type
         if entity.type in ("protein", "dna", "rna")
@@ -173,6 +420,7 @@ def _emit_design_entity(
         "id": id_field,
         "sequence": seq_spec,
     }
+    _attach_conditioning(entity, entry_inner)
 
     entry = {entity_type: entry_inner}
     return entry, pointer + copies
@@ -195,9 +443,15 @@ def _emit_context_entity(
     Falls back to a protein sequence-only entry if
     no structure is available.
 
+    Conditioning is attached in whichever form the branch
+    needs: the inline entry takes the dict form, the file
+    entry a list of chain blocks (schema.py:2187-2191).
+
     Returns the YAML dict and the updated chain ID
     pointer.
     """
+    _reject_unsupported(entity)
+
     copies = (
         entity.copies if entity.copies is not None
         else 1
@@ -219,42 +473,120 @@ def _emit_context_entity(
             if entity.rep is not None
             else "A" * 10
         )
-        entry = {
-            "protein": {"id": id_field, "sequence": seq}
-        }
+        inner: dict = {"id": id_field, "sequence": seq}
+        _attach_conditioning(entity, inner)
+        entry = {"protein": inner}
         return entry, pointer + copies
 
-    # Write the structure to a CIF in tmp_dir/structures/
-    cif_path = (
-        tmp_dir / "structures" / f"entity_{entity_idx}.cif"
+    # PDB, not CIF: BoltzGen branches on the suffix
+    # (schema.py:1920) and its mmCIF reader needs
+    # _entity_poly_seq (mmcif.py:980), which holds the full
+    # polymer sequence including unobserved residues and does
+    # not survive an AtomArray. parse_pdb uses the observed
+    # residues instead.
+    structure_path = (
+        tmp_dir / "structures" / f"entity_{entity_idx}.pdb"
     )
-    cif_path.parent.mkdir(parents=True, exist_ok=True)
+    structure_path.parent.mkdir(parents=True, exist_ok=True)
 
     first_key = next(iter(entity.structures))
     model = entity.structures[first_key]
     if isinstance(model, list):
         model = model[0]
-    model.to_file(str(cif_path), format="cif")
+    model.to_file(str(structure_path), format="pdb")
 
-    # Build the file entry: currently includes only
-    # the chain for entity_idx (no binding-site or
-    # interaction constraints yet; those will be
-    # added later)
+    # Build the file entry for the chain at entity_idx.
+    # File entities take binding_types as a list of chain
+    # blocks (schema.py:2187-2191), not the dict form inline
+    # entities use, so _attach_conditioning does not apply.
     chain_id = chain_ids[pointer]
     file_entry: dict = {
-        "path": str(cif_path.resolve()),
+        "path": str(structure_path.resolve()),
         "include": [{"chain": {"id": chain_id}}],
     }
+
+    binding_spec = _binding_types_spec(entity)
+    if binding_spec is not None:
+        file_entry["binding_types"] = [
+            {"chain": {"id": chain_id, **binding_spec}}
+        ]
 
     entry = {"file": file_entry}
     return entry, pointer + copies
 
-# 1d. System level 
+# 1e. System level
+
+
+def _atom_bond_constraints(
+    system: System,
+    chain_ids: list[str],
+) -> list[dict]:
+    """
+    Collect Entity.atom_bonds into BoltzGen's top-level
+    constraints block:
+
+        constraints:
+          - bond:
+              atom1: [<chain>, <res>, <atom>]
+              atom2: [<chain>, <res>, <atom>]
+
+    Read at schema.py:1703-1710, which only forms covalent
+    connections, so other BondType values are rejected
+    rather than silently dropped.
+    """
+    entity_id_to_chain: dict[str, str] = {}
+    pointer = 0
+    for entity in system:
+        copies = entity.copies if entity.copies is not None else 1
+        if entity.id is not None:
+            entity_id_to_chain[entity.id] = chain_ids[pointer]
+        pointer += copies
+
+    constraints: list[dict] = []
+    pointer = 0
+    for entity in system:
+        copies = entity.copies if entity.copies is not None else 1
+        source_chain = chain_ids[pointer]
+        pointer += copies
+
+        for bond in getattr(entity, "atom_bonds", None) or []:
+            if bond.type != "covalent":
+                raise ValueError(
+                    f"Entity '{entity.id}': AtomBond type {bond.type!r} "
+                    "unsupported; BoltzGen models covalent bonds only."
+                )
+            target_chain = entity_id_to_chain.get(bond.target_entity_id)
+            if target_chain is None:
+                raise ValueError(
+                    f"Entity '{entity.id}': AtomBond targets unknown "
+                    f"entity id {bond.target_entity_id!r}."
+                )
+            if bond.source_pos is None or bond.target_pos is None:
+                raise ValueError(
+                    f"Entity '{entity.id}': AtomBond needs explicit "
+                    "source_pos and target_pos."
+                )
+            constraints.append({
+                "bond": {
+                    "atom1": [
+                        source_chain,
+                        int(bond.source_pos),
+                        bond.source_atom,
+                    ],
+                    "atom2": [
+                        target_chain,
+                        int(bond.target_pos),
+                        bond.target_atom,
+                    ],
+                }
+            })
+    return constraints
 
 
 def system_to_boltzgen_yaml(
     system: System,
     output_path: Path,
+    fixed_pos: EntityPosList | None = None,
 ) -> Path:
     """
     Convert an evedesign System into a BoltzGen design
@@ -268,6 +600,16 @@ def system_to_boltzgen_yaml(
       -> emitted as a file: reference via
       _emit_context_entity (the structure CIF is
       written to output_path.parent / structures/)
+
+    Entity.atom_bonds across the system become the top-level
+    constraints block.
+
+    Parameters
+    ----------
+    fixed_pos : EntityPosList, optional
+        Entity index -> 1-based positions to hold fixed within
+        that entity (motif scaffolding). The fixed residues
+        come from the entity's rep.
 
     Returns the output_path for chaining.
     """
@@ -287,9 +629,21 @@ def system_to_boltzgen_yaml(
     )
 
     for entity_idx, entity in enumerate(system):
-        if _is_design_entity(entity):
+        entity_fixed = (
+            fixed_pos.get(entity_idx)
+            if fixed_pos is not None else None
+        )
+        # Ligands always emit a ligand: entry, designed or not.
+        # fixed_pos yields a spec with digits, which BoltzGen
+        # counts as designed (schema.py:879)
+        if (
+            entity.type == "ligand"
+            or _is_design_entity(entity)
+            or entity_fixed
+        ):
             entry, pointer = _emit_design_entity(
                 entity, chain_ids, pointer,
+                fixed_pos=entity_fixed,
             )
         else:
             entry, pointer = _emit_context_entity(
@@ -302,6 +656,10 @@ def system_to_boltzgen_yaml(
         entities_list.append(entry)
 
     yaml_data: dict = {"entities": entities_list}
+
+    constraints = _atom_bond_constraints(system, chain_ids)
+    if constraints:
+        yaml_data["constraints"] = constraints
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
