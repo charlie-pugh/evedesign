@@ -10,7 +10,7 @@ SecondaryStructureType = Literal["H", "E", "C"]  # helix, sheet, coil
 SymmetryType = Literal["C", "D", "T", "O", "I"]
 DeviceType = Literal["cpu", "cuda", "mps"]
 BatchSize = int | Literal["auto"] | None
-SiteType = Literal["t_cell_epitope"]
+SiteType = Literal["t_cell_epitope", "liability_motif"]
 
 
 class DesignChain(TypedDict):
