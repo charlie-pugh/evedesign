@@ -1,4 +1,5 @@
 import re
+from abc import ABC
 from typing import Sequence, Any, Self, TypedDict, Literal
 
 import numpy as np
@@ -39,13 +40,11 @@ MOTIFS: dict[str, Motif] = {
 }
 
 
-class ExposedMotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
+class MotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer, ABC):
     """
-    Restraint on maintaining a defined isoelectric point range
+    Base restraint for rSASA-based sequence liabilities
     """
     available = True
-    name: str = "ExposedMotifRestraint"
-    citations: list[str] = []
 
     # core properties
     requires_target: bool = False
@@ -62,7 +61,6 @@ class ExposedMotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutati
 
     def __init__(
         self,
-        motifs: list[Motif],
         exposure_cutoff: float = 0.2,
         exposure_source: Literal["system", "instance"] | None = "system",
         exposure_agg: Literal["mean", "median", "min", "max"] = "max",
@@ -73,8 +71,6 @@ class ExposedMotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutati
 
         Parameters
         ----------
-        motifs
-            List of sequence-based motifs
         exposure_cutoff
             Minimal exposure cutoff to consider a motif a hit
         exposure_source
@@ -86,15 +82,6 @@ class ExposedMotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutati
         missing_exposure
             If "include", consider hits for which no 3D structure information is available
         """
-        # compile motif regexes
-        self.motifs = [
-            {
-                **motif_spec,
-                # lookahead wraps a capturing group to not consume match
-                "re_compiled": re.compile(f"(?=({motif_spec['regex']}))")
-            } for motif_spec in motifs
-        ]
-
         if exposure_agg == "mean":
             self._agg_func = np.mean
         elif exposure_agg == "median":
@@ -178,6 +165,57 @@ class ExposedMotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutati
                 )
 
         return self
+
+
+class ExposedMotifRestraint(MotifRestraint):
+    """
+    Restraint on occurrence of solvent-exposed sequence motifs
+    """
+    available = True
+    name: str = "ExposedMotifRestraint"
+    citations: list[str] = []
+
+    def __init__(
+        self,
+        motifs: list[Motif],
+        exposure_cutoff: float = 0.2,
+        exposure_source: Literal["system", "instance"] | None = "system",
+        exposure_agg: Literal["mean", "median", "min", "max"] = "max",
+        missing_exposure: Literal["exclude", "include"] = "include",
+    ):
+        """
+        Create new sequence motif scanner
+
+        Parameters
+        ----------
+        motifs
+            List of sequence-based motifs
+        exposure_cutoff
+            Minimal exposure cutoff to consider a motif a hit
+        exposure_source
+            If "system", retrieve from structures on system, if "instance", retrieve
+            from structural model on instance (needs prior transform with structure prediction
+            model applied). If None, perform purely sequence-based lookup.
+        exposure_agg
+            Use this function to aggregate multiple rSASA values per residue
+        missing_exposure
+            If "include", consider hits for which no 3D structure information is available
+        """
+        super().__init__(
+            exposure_cutoff=exposure_cutoff,
+            exposure_source=exposure_source,
+            exposure_agg=exposure_agg,
+            missing_exposure=missing_exposure
+        )
+
+        # compile motif regexes
+        self.motifs = [
+            {
+                **motif_spec,
+                # lookahead wraps a capturing group to not consume match
+                "re_compiled": re.compile(f"(?=({motif_spec['regex']}))")
+            } for motif_spec in motifs
+        ]
 
     # elected to score full sequence to avoid dealing with indexing
     def score(
