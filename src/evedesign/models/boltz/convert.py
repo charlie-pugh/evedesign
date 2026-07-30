@@ -15,6 +15,7 @@ import yaml
 import json
 from loguru import logger
 
+from evedesign.models.boltz.chains import _get_chain_ids
 from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap, Structure
 from evedesign.structure import StructureFile
 from evedesign.types import Score, RepSequence
