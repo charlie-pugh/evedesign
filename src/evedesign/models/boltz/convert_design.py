@@ -13,6 +13,7 @@ functions without importing boltzgen directly.
 """
 import re
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import yaml
@@ -20,7 +21,6 @@ from loguru import logger
 
 from evedesign.models.boltz.chains import (
     _chain_to_entity_map,
-    _get_chain_id,
     _get_chain_ids,
 )
 from evedesign.system import (
@@ -29,9 +29,12 @@ from evedesign.system import (
     System,
     SystemInstance,
 )
+from evedesign.types import EntityPosList
+
+# INPUT: evedesign System -> BoltzGen design YAML
 
 
-# ─── Entity classification ────────────────────────────
+# 1a. Entity classification 
 
 
 def _is_design_entity(entity: Entity) -> bool:
@@ -53,6 +56,8 @@ def _is_design_entity(entity: Entity) -> bool:
         return True
     return False
 
+# 1b. Sequence spec (letters fixed, numbers designed)
+
 
 def _entity_to_sequence_spec(entity: Entity) -> str:
     """
@@ -67,11 +72,11 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
       handled elsewhere)
 
     Resolution order:
-    1. min_length and max_length both set → "min..max"
-    2. min_length only → "min"
-    3. max_length only → "max"
-    4. rep is set → len(rep) (fixed length matching rep)
-    5. Fallback → "80..140" (matches BoltzGen's vanilla
+    1. min_length and max_length both set -> "min..max"
+    2. min_length only -> "min"
+    3. max_length only -> "max"
+    4. rep is set -> len(rep) (fixed length matching rep)
+    5. Fallback -> "80..140" (matches BoltzGen's vanilla
        binder default; emits a warning when triggered)
     """
     if (
@@ -87,7 +92,7 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
         return str(len(entity.rep))
     logger.warning(
         "Designable entity has no min_length, "
-        "max_length, or rep — defaulting to "
+        "max_length, or rep, defaulting to "
         "BoltzGen's vanilla binder range '80..140'. "
         "Set min_length/max_length on the Entity "
         "to suppress this warning and control the "
@@ -95,9 +100,7 @@ def _entity_to_sequence_spec(entity: Entity) -> str:
     )
     return "80..140"
 
-
-# ─── YAML entity emitters ─────────────────────────
-
+# 1c. Entity emitters: the two input cases
 
 def _emit_design_entity(
     entity: Entity,
@@ -152,13 +155,13 @@ def _emit_design_entity(
                 }
             }
         else:
-            # Designable ligand with no rep — default to UNK
+            # Designable ligand with no rep, default to UNK
             entry = {
                 "ligand": {"id": id_field, "ccd": "UNK"}
             }
         return entry, pointer + copies
 
-    # Protein / DNA / RNA — use type if valid, else protein
+    # Protein / DNA / RNA:use type if valid, else protein
     seq_spec = _entity_to_sequence_spec(entity)
     entity_type = (
         entity.type
@@ -200,7 +203,7 @@ def _emit_context_entity(
         else 1
     )
 
-    # Fallback: no structure attached → emit as
+    # Fallback: no structure attached -> emit as
     # sequence-only protein entry
     if (
         entity.structures is None
@@ -233,10 +236,10 @@ def _emit_context_entity(
         model = model[0]
     model.to_file(str(cif_path), format="cif")
 
-    # Build the file entry — currently includes only
+    # Build the file entry: currently includes only
     # the chain for entity_idx (no binding-site or
-    # interaction constraints yet — those will be
-    # added in a later prompt)
+    # interaction constraints yet; those will be
+    # added later)
     chain_id = chain_ids[pointer]
     file_entry: dict = {
         "path": str(cif_path.resolve()),
@@ -246,8 +249,7 @@ def _emit_context_entity(
     entry = {"file": file_entry}
     return entry, pointer + copies
 
-
-# ─── Top-level System → YAML ─────────────────────
+# 1d. System level 
 
 
 def system_to_boltzgen_yaml(
@@ -260,10 +262,10 @@ def system_to_boltzgen_yaml(
 
     Each entity in the system is classified as either:
     - Designable (rep=None or min_length/max_length set)
-      → emitted as a sequence/length spec via
+      -> emitted as a sequence/length spec via
       _emit_design_entity
     - Context (has a fixed structure attached)
-      → emitted as a file: reference via
+      -> emitted as a file: reference via
       _emit_context_entity (the structure CIF is
       written to output_path.parent / structures/)
 
@@ -312,8 +314,10 @@ def system_to_boltzgen_yaml(
 
     return output_path
 
+# OUTPUT: BoltzGen output tree -> SystemInstance
 
-# ─── Output parsing ─────────────────────────────────
+
+# 2a. Single design
 
 
 def _parse_single_design(
@@ -321,6 +325,7 @@ def _parse_single_design(
     system: System,
     chain_to_entity: dict[str, int],
     metrics_row: dict | None = None,
+    design_id: str | None = None,
 ) -> SystemInstance:
     """
     Parse a single BoltzGen output CIF into a
@@ -332,10 +337,14 @@ def _parse_single_design(
     for designed entities; original entity.rep is kept
     for context entities that have no chain in the CIF.
 
-    metrics_row (optional) — a dict from the BoltzGen
+    metrics_row (optional): a dict from the BoltzGen
     metrics CSV. Used to populate instance.metadata
     and instance.score (using iptm, falling back to
     ptm, falling back to complex_plddt).
+
+    design_id (optional):the BoltzGen design id, e.g.
+    "design_spec_5". Must be given when the CIF filename
+    carries a rank prefix
     """
     from evedesign.structure import Structure, StructureFile
 
@@ -348,7 +357,7 @@ def _parse_single_design(
         if chain_id not in chain_to_entity:
             logger.warning(
                 f"Chain '{chain_id}' in {cif_path.name} "
-                f"not in chain_to_entity mapping — skipping"
+                f"not in chain_to_entity mapping...skipping"
             )
             continue
         entity_idx = chain_to_entity[chain_id]
@@ -363,7 +372,7 @@ def _parse_single_design(
         chains = entity_chains.get(entity_idx)
 
         if chains is None or len(chains) == 0:
-            # Entity missing from CIF — preserve its
+            # Entity missing from CIF: preserve its
             # original rep
             rep = (
                 entity.rep.copy()
@@ -386,7 +395,7 @@ def _parse_single_design(
                 ["X"] * len(res_df), dtype="U1"
             )
 
-        # Build the models dict — single chain or
+        # Build the models dict: single chain or
         # homo-oligomer list
         if len(chains) == 1:
             models = {"model_0": chains[0]}
@@ -399,8 +408,11 @@ def _parse_single_design(
 
     instance = SystemInstance(entity_instances)
 
-    # Attach metadata
-    design_id = cif_path.stem  # e.g. "design_spec_0"
+    # Attach metadata. Prefer the caller-supplied id: the
+    # Diverse set files are named "rank<N>_design_spec_<M>.cif",
+    # so the stem alone would not match the metrics CSV "id".
+    if design_id is None:
+        design_id = cif_path.stem  # e.g. "design_spec_0"
     instance.metadata = {"boltzgen_design_id": design_id}
 
     if metrics_row is not None:
@@ -418,7 +430,7 @@ def _parse_single_design(
             except (ValueError, TypeError):
                 pass
 
-        # Confidence — matches BoltzFold's default of
+        # Confidence: matches BoltzFold's default of
         # complex_plddt for cross-model consistency
         confidence_val = metrics_row.get("complex_plddt")
         if confidence_val is not None:
@@ -429,68 +441,7 @@ def _parse_single_design(
 
     return instance
 
-
-def parse_design_output(
-    output_dir: Path,
-    system: System,
-    chain_to_entity: dict[str, int],
-    return_all: bool = False,
-) -> list[SystemInstance]:
-    """
-    Parse a BoltzGen output directory into a list of
-    SystemInstance objects.
-
-    By default returns the **Diverse set**: the
-    budget-filtered, diversity-selected designs from
-    final_ranked_designs/final_<N>_designs/. This
-    matches BoltzGen's "final output" convention as
-    documented in boltzgen.task.filter.filter.Filter.
-
-    With return_all=True, returns every design listed
-    in all_designs_metrics.csv (the full post-analysis
-    set, before diversity filtering). Useful when you
-    want to apply custom filtering downstream.
-
-    Parameters
-    ----------
-    output_dir : Path
-        BoltzGen --output directory (the parent of
-        final_ranked_designs/).
-    system : System
-        Template system used for chain → entity routing.
-    chain_to_entity : dict[str, int]
-        Mapping from chain ID to entity index.
-    return_all : bool, default False
-        If False (default), return only the Diverse set
-        (--budget designs). If True, return all designs
-        in all_designs_metrics.csv (with CIFs sourced
-        from intermediate_designs/).
-
-    Returns
-    -------
-    list[SystemInstance]
-        Each instance has structures + metrics + score
-        + confidence populated. For Diverse set,
-        metadata["boltzgen_rank"] gives the
-        quality+diversity rank (1 = best).
-    """
-    ranked_dir = output_dir / "final_ranked_designs"
-
-    if not ranked_dir.exists():
-        logger.warning(
-            f"BoltzGen final_ranked_designs not found "
-            f"at {ranked_dir}. Did BoltzGen finish?"
-        )
-        return []
-
-    if return_all:
-        return _parse_all_designs(
-            output_dir, ranked_dir, system, chain_to_entity
-        )
-    return _parse_diverse_set(
-        ranked_dir, system, chain_to_entity
-    )
-
+# 2b. Output-set variants: the two output cases
 
 def _parse_diverse_set(
     ranked_dir: Path,
@@ -595,6 +546,7 @@ def _parse_diverse_set(
                 system=system,
                 chain_to_entity=chain_to_entity,
                 metrics_row=metrics_row,
+                design_id=design_id,
             )
             if instance.metadata is None:
                 instance.metadata = {}
@@ -688,3 +640,65 @@ def _parse_all_designs(
         f"{intermediate_dir}"
     )
     return instances
+
+# 2c. Entry point
+
+
+def parse_design_output(
+    output_dir: Path,
+    system: System,
+    return_all: bool = False,
+) -> list[SystemInstance]:
+    """
+    Parse a BoltzGen output directory into a list of
+    SystemInstance objects.
+
+    By default returns the **Diverse set**: the
+    budget-filtered, diversity-selected designs from
+    final_ranked_designs/final_<N>_designs/. This
+    matches BoltzGen's "final output" convention as
+    documented in boltzgen.task.filter.filter.Filter.
+
+    With return_all=True, returns every design listed
+    in all_designs_metrics.csv (the full post-analysis
+    set, before diversity filtering). Useful when you
+    want to apply custom filtering downstream.
+
+    Parameters
+    ----------
+    output_dir : Path
+        BoltzGen --output directory (the parent of
+        final_ranked_designs/).
+    system : System
+        Template system used for chain -> entity routing.
+        The chain ID -> entity index mapping is derived
+        from it via _chain_to_entity_map.
+    return_all : bool, default False
+        If False (default), return only the Diverse set
+        (--budget designs). If True, return all designs
+        in all_designs_metrics.csv (with CIFs sourced
+        from intermediate_designs/).
+
+    Returns
+    -------
+    list[SystemInstance]
+        Each instance has structures + metrics + score
+        + confidence populated. 
+    """
+    chain_to_entity = _chain_to_entity_map(system)
+    ranked_dir = output_dir / "final_ranked_designs"
+
+    if not ranked_dir.exists():
+        logger.warning(
+            f"BoltzGen final_ranked_designs not found "
+            f"at {ranked_dir}. Did BoltzGen finish?"
+        )
+        return []
+
+    if return_all:
+        return _parse_all_designs(
+            output_dir, ranked_dir, system, chain_to_entity
+        )
+    return _parse_diverse_set(
+        ranked_dir, system, chain_to_entity
+    )

@@ -2,14 +2,9 @@
 BoltzGen Generator: wraps BoltzGen diffusion-based de novo
 protein structure design into the evedesign Generator interface.
 
-Generates new protein backbones conditioned on a target
-structure. Returns SystemInstance objects with structures
-populated but placeholder sequences. Use LigandMPNN downstream
-for sequence design and BoltzFoldTransformer for refolding.
-
-NOTE: Requires the boltzgen package (pip install evedesign[boltzdesign]).
-The boltzgen package pins cuequivariance_* dependencies that do
-not install on macOS or CPU-only Linux.
+NOTE: Requires the boltzgen package (pip install evedesign[boltzgen]).
+A CUDA GPU is mandatory: the boltzgen CLI calls torch.cuda.get_device_capability()
+unconditionally, so there is no CPU path.
 """
 import os
 import shutil
@@ -28,7 +23,6 @@ except ImportError:
 
 from evedesign.model import BaseModel, Generator
 from evedesign.models.boltz.convert_design import (
-    _chain_to_entity_map,
     _is_design_entity,
     parse_design_output,
     system_to_boltzgen_yaml,
@@ -64,12 +58,10 @@ class BoltzGenGenerator(BaseModel, Generator):
     Wraps BoltzGen diffusion-based de novo structure
     design into the evedesign Generator interface.
 
-    Generates de novo protein backbones conditioned
-    on a target structure. Returns SystemInstance
-    objects with structures populated.
-
-    For sequence design after backbone generation use
-    LigandMPNN. For refolding use BoltzFoldTransformer.
+    Generates de novo protein backbones, optionally
+    conditioned on a target. Returned SystemInstance
+    objects have both structures and designed sequences
+    populated.
     """
     available = IMPORT_AVAILABLE
     name: str = "BoltzGen"
@@ -382,11 +374,9 @@ class BoltzGenGenerator(BaseModel, Generator):
                 )
 
             # 3. Parse outputs into list[SystemInstance]
-            chain_to_entity = _chain_to_entity_map(self._system)
             instances = parse_design_output(
                 output_dir=output_dir,
                 system=self._system,
-                chain_to_entity=chain_to_entity,
             )
 
             if status_callback is not None:
