@@ -61,6 +61,7 @@ testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow-running",
     "boltz2fold: tests requiring the boltz2fold extra (torch, boltz, pyyaml)",
+    "boltzgen: tests requiring the boltzgen extra",
     "esm2: tests requiring the esm2 extra (torch, transformers)",
     "evcouplings: tests requiring the evcouplings extra",
     "mpnn: tests requiring the mpnn extra (torch, prody)",
