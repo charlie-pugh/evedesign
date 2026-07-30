@@ -278,9 +278,14 @@ class BoltzGenGenerator(BaseModel, Generator):
 
         BoltzGen determines designable entities from
         the System spec itself (entities with rep=None
-        or min_length/max_length). The entities and
-        fixed_pos parameters are accepted for interface
-        compatibility but currently logged as warnings.
+        or min_length/max_length), so the entities
+        parameter is accepted for interface compatibility
+        but logged as a warning.
+
+        fixed_pos holds the given 1-based positions of an
+        entity fixed while the rest of that chain is
+        designed (motif scaffolding). The fixed residues
+        are read from the entity's rep, which must be set.
         """
         self.ready_or_raise()
 
@@ -288,15 +293,9 @@ class BoltzGenGenerator(BaseModel, Generator):
             logger.warning(
                 "BoltzGen determines designable entities "
                 "from the System specification. The "
-                "'entities' parameter is ignored — entity "
+                "'entities' parameter is ignored - entity "
                 "selection is controlled via Entity.rep / "
                 "Entity.min_length / Entity.max_length."
-            )
-
-        if fixed_pos is not None:
-            logger.warning(
-                "BoltzGen does not yet support fixed_pos "
-                "via the evedesign interface — ignored."
             )
 
         # Map temperature to step_scale if user didn't
@@ -312,7 +311,9 @@ class BoltzGenGenerator(BaseModel, Generator):
         try:
             # 1. Write the YAML design spec
             yaml_path = tmp_dir / "design_spec.yaml"
-            system_to_boltzgen_yaml(self._system, yaml_path)
+            system_to_boltzgen_yaml(
+                self._system, yaml_path, fixed_pos=fixed_pos
+            )
             logger.info(
                 f"BoltzGen YAML written to {yaml_path}"
             )
