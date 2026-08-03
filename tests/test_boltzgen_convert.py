@@ -184,7 +184,7 @@ def test_context_entity_with_structure_emits_a_file_entry(tmp_path):
 # Conditioning blocks
 
 
-def test_secondary_structure_inline_is_a_dense_padded_string():
+def test_secondary_structure_is_emitted_as_ranges():
     e = Protein(
         rep=None, min_length=20, max_length=20,
         secondary_structure=[
@@ -196,26 +196,26 @@ def test_secondary_structure_inline_is_a_dense_padded_string():
         ],
         id="binder",
     )
-    # evedesign H/E/C -> boltzgen H/S/L, everything else U
-    assert _secondary_structure_spec(e) == "UUUUUUUUUUUUULHHHUSU"
+    # evedesign H/E/C -> boltzgen helix/sheet/loop, positions collapsed
+    assert _secondary_structure_spec(e) == {
+        "loop": "14", "helix": "15..17", "sheet": "19",
+    }
 
 
-
-def test_secondary_structure_without_a_known_length_raises():
+def test_secondary_structure_without_a_known_length():
+    # ranges carry no length, so an entity with no min/max is fine
     e = Protein(rep=None, secondary_structure=[SecondaryStructure(pos=1, type="H")], id="binder")
-    with pytest.raises(ValueError, match="needs a known length"):
-        _secondary_structure_spec(e)
+    assert _secondary_structure_spec(e) == {"helix": "1"}
 
 
-def test_secondary_structure_anchors_on_the_shortest_length():
-    # BoltzGen raises when the string is longer than the sampled chain,
-    # so a variable-length entity anchors on min_length
+def test_secondary_structure_beyond_the_shortest_length():
+    # positions past min_length stay expressible, unlike the string form
     e = Protein(
         rep=None, min_length=5, max_length=50,
-        secondary_structure=[SecondaryStructure(pos=1, type="H")],
+        secondary_structure=[SecondaryStructure(pos=40, type="H")],
         id="binder",
     )
-    assert _secondary_structure_spec(e) == "HUUUU"
+    assert _secondary_structure_spec(e) == {"helix": "40"}
 
 
 def test_binding_types_collapse_positions_into_ranges(tmp_path):
