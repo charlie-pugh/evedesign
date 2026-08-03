@@ -30,8 +30,8 @@ try:
     from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
     from boltz.data.types import Manifest
     from boltz.data.write.writer import BoltzWriter
+    from evedesign.models.boltz.chains import _chain_to_entity_map
     from evedesign.models.boltz.convert import (
-        _chain_to_entity_map,
         system_instance_to_yaml,
         prediction_to_instance,
     )
