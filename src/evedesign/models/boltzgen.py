@@ -6,7 +6,6 @@ NOTE: Requires the boltzgen package (pip install evedesign[boltzgen]).
 A CUDA GPU is mandatory: the boltzgen CLI calls torch.cuda.get_device_capability()
 unconditionally, so there is no CPU path.
 """
-import os
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +28,7 @@ from evedesign.models.boltz.convert_design import (
 )
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, EntityPosList, StatusCallback
+from evedesign.utils import ensure_sequence
 
 
 # Default checkpoint references (HuggingFace)
@@ -72,7 +72,7 @@ class BoltzGenGenerator(BaseModel, Generator):
     requires_fixed_length: bool = False
     handles_deletions: bool = False
     handles_insertions: bool = False
-    requires_gpu: bool = False
+    requires_gpu: bool = True
     supports_gpu: bool = True
     supports_gpu_parallel: bool = True
     supports_cpu_parallel: bool = False
@@ -108,8 +108,8 @@ class BoltzGenGenerator(BaseModel, Generator):
     ):
         if not self.available:
             logger.warning(
-                "boltzgen CLI not found on PATH. "
-                "Install via: pip install boltzgen "
+                "boltzgen CLI not found on PATH. Install with the "
+                "optional dependency pip install evedesign[boltzgen] "
                 "(generate() will fail until boltzgen is installed)"
             )
 
@@ -117,6 +117,14 @@ class BoltzGenGenerator(BaseModel, Generator):
             raise ValueError(
                 f"Unknown protocol '{protocol}', "
                 f"valid options: {PROTOCOLS}"
+            )
+
+        if device != "cuda":
+            raise ValueError(
+                f"BoltzGen requires a CUDA GPU (got device='{device}'). "
+                "The boltzgen CLI calls "
+                "torch.cuda.get_device_capability() unconditionally "
+                "(cli/boltzgen.py:921), so there is no CPU or MPS path."
             )
 
         self.protocol = protocol
@@ -171,8 +179,7 @@ class BoltzGenGenerator(BaseModel, Generator):
         """
         if data is not None:
             return False, (
-                "BoltzGen does not accept a data "
-                "parameter (must be None)"
+               "Model does not support data parameter (must be None)"
             )
 
         has_design = False
@@ -276,12 +283,6 @@ class BoltzGenGenerator(BaseModel, Generator):
         shells out to the boltzgen CLI, then parses
         the output CIFs into SystemInstance objects.
 
-        BoltzGen determines designable entities from
-        the System spec itself (entities with rep=None
-        or min_length/max_length), so the entities
-        parameter is accepted for interface compatibility
-        but logged as a warning.
-
         fixed_pos holds the given 1-based positions of an
         entity fixed while the rest of that chain is
         designed (motif scaffolding). The fixed residues
@@ -289,23 +290,17 @@ class BoltzGenGenerator(BaseModel, Generator):
         """
         self.ready_or_raise()
 
+        # verify validity of entity selection, even if not used since
+        # designability is derived from the System specification
         if entities is not None:
-            logger.warning(
-                "BoltzGen determines designable entities "
-                "from the System specification. The "
-                "'entities' parameter is ignored - entity "
-                "selection is controlled via Entity.rep / "
-                "Entity.min_length / Entity.max_length."
-            )
-
-        # Map temperature to step_scale if user didn't
-        # set it explicitly. BoltzGen recommends
-        # step_scale ~ 1.5 * temperature for sampling.
-        effective_step_scale = self.step_scale
-        if effective_step_scale is None and temperature != 1.0:
-            effective_step_scale = str(
-                round(1.5 * temperature, 2)
-            )
+            designable = [
+                i for i, e in enumerate(self._system) if _is_design_entity(e)
+            ]
+            if sorted(ensure_sequence(entities)) != designable:
+                raise ValueError(
+                    f"Model designs entities derived from the System "
+                    f"(entities = {designable} | None)"
+                )
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="boltzgen_"))
         try:
@@ -322,56 +317,22 @@ class BoltzGenGenerator(BaseModel, Generator):
             output_dir = tmp_dir / "output"
             output_dir.mkdir()
 
-            # Temporarily apply effective_step_scale to
-            # the instance so _build_cli_command picks
-            # it up
-            original_step_scale = self.step_scale
-            if effective_step_scale is not None:
-                self.step_scale = effective_step_scale
             cmd = self._build_cli_command(
                 yaml_path, output_dir, num_designs
             )
-            self.step_scale = original_step_scale
 
-            logger.info(
-                f"Running BoltzGen: {' '.join(cmd)}"
-            )
-            if status_callback is not None:
-                status_callback(
-                    "running",
-                    0.0,
-                    "Starting BoltzGen pipeline",
-                )
-
-            env = {**os.environ}
-            if self.device == "cpu":
-                env["CUDA_VISIBLE_DEVICES"] = ""
+            logger.info(f"Running BoltzGen: {' '.join(cmd)}")
 
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                env=env,
             )
 
             if result.returncode != 0:
-                logger.error(
-                    f"BoltzGen stderr:\n{result.stderr}"
-                )
                 raise RuntimeError(
-                    f"BoltzGen pipeline failed "
-                    f"(exit code {result.returncode}).\n"
-                    f"stderr: {result.stderr[-2000:]}"
-                )
-
-            logger.info(
-                "BoltzGen pipeline completed successfully"
-            )
-            if status_callback is not None:
-                status_callback(
-                    "running",
-                    0.8,
-                    "Parsing BoltzGen outputs",
+                    f"BoltzGen failed (exit code {result.returncode})\n"
+                    f"{result.stderr[-2000:]}"
                 )
 
             # 3. Parse outputs into list[SystemInstance]
@@ -380,13 +341,6 @@ class BoltzGenGenerator(BaseModel, Generator):
                 system=self._system,
             )
 
-            if status_callback is not None:
-                status_callback(
-                    "done",
-                    1.0,
-                    f"{len(instances)} designs parsed",
-                )
-
             return instances
 
         finally:
@@ -394,6 +348,6 @@ class BoltzGenGenerator(BaseModel, Generator):
                 shutil.rmtree(tmp_dir, ignore_errors=True)
             else:
                 logger.info(
-                    f"keep_tmp_dir=True — outputs preserved "
+                    f"keep_tmp_dir=True; outputs preserved "
                     f"at {tmp_dir}"
                 )
