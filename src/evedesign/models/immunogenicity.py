@@ -98,7 +98,15 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
             calculations on large mutation sets, but higher memory footprint)
         """
         self.alleles = {
-            allele.replace("HLA-", "").replace("*", "_").replace(":", "_"): weight
+            allele.replace(
+                "HLA-", ""
+            ).replace(
+                "*", "_"
+            ).replace(
+                ":", "_"
+            ).replace(
+                "/", "__"
+            ): weight
             for allele, weight in alleles.items()
         }
         self.peptide_lengths = peptide_lengths
