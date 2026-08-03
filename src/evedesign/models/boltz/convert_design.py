@@ -12,10 +12,12 @@ BoltzGen file conventions. boltzgen.py calls these
 functions without importing boltzgen directly.
 """
 import re
+from itertools import groupby
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+import pandas as pd
 import yaml
 from loguru import logger
 
@@ -23,6 +25,7 @@ from evedesign.models.boltz.chains import (
     _chain_to_entity_map,
     _get_chain_ids,
 )
+from evedesign.structure import Structure, StructureFile
 from evedesign.system import (
     Entity,
     EntityInstance,
@@ -97,13 +100,6 @@ def _entity_to_sequence_spec(
         1-based positions to hold fixed (motif scaffolding).
         Requires entity.rep, since the fixed residues are
         taken from it.
-
-    Notes
-    -----
-    Variable-length designed segments around a motif (e.g.
-    BoltzGen's "15..20AAAA18") are not expressible here: an
-    Entity carries one min/max for the whole chain, not
-    per-segment ranges. Motif specs are fixed-length.
     """
     if fixed_pos:
         if entity.rep is None:
@@ -113,28 +109,25 @@ def _entity_to_sequence_spec(
             )
         rep = list(entity.rep)
         length = len(rep)
-        keep = sorted({int(p) for p in fixed_pos})
+        keep = {int(p) for p in fixed_pos}
 
-        out_of_range = [p for p in keep if not 1 <= p <= length]
+        out_of_range = sorted(p for p in keep if not 1 <= p <= length)
         if out_of_range:
             raise ValueError(
                 f"Entity '{entity.id}': fixed_pos {out_of_range} outside "
                 f"1..{length}."
             )
 
-        keep_set = set(keep)
+        # Kept residues emit their letter, designed runs emit their length
         spec: list[str] = []
-        run = 0
-        for pos in range(1, length + 1):
-            if pos in keep_set:
-                if run:
-                    spec.append(str(run))
-                    run = 0
-                spec.append(str(rep[pos - 1]))
+        for kept, group in groupby(
+            range(1, length + 1), key=lambda pos: pos in keep
+        ):
+            run = list(group)
+            if kept:
+                spec.extend(str(rep[pos - 1]) for pos in run)
             else:
-                run += 1
-        if run:
-            spec.append(str(run))
+                spec.append(str(len(run)))
         return "".join(spec)
 
     if (
@@ -159,13 +152,13 @@ def _entity_to_sequence_spec(
     return "80..140"
 
 # 1c. Per-entity conditioning blocks
-#
+
 # Each helper mirrors one block of BoltzGen's spec parser in
 # boltzgen/data/parse/schema.py; line refs are for boltzgen 0.3.2.
 
 
-# H(elix), S(heet), L(oop), U(nspecified) -- schema.py:1113-1124
-_SS_TO_BOLTZGEN = {"H": "H", "E": "S", "C": "L"}
+# evedesign H/E/C (helix/sheet/coil) -> BoltzGen's range keys
+_SS_TO_BOLTZGEN = {"H": "helix", "E": "sheet", "C": "loop"}
 
 
 def _positions_to_range_spec(positions: Sequence[int]) -> str:
@@ -212,45 +205,39 @@ def _spec_length(entity: Entity) -> int | None:
     return None
 
 
-def _secondary_structure_spec(entity: Entity) -> str | None:
+def _secondary_structure_spec(entity: Entity) -> dict[str, str] | None:
     """
-    Per-residue secondary structure string, or None.
+    Secondary structure as {"helix": "10..30"}, or None.
 
-    Maps evedesign H/E/C (helix/sheet/coil) onto BoltzGen
-    H/S/L, padding with U (schema.py:1113-1124). BoltzGen
-    only accepts this on designed residues (data.py:1957).
+    The range form BoltzGen's examples use, e.g.
+    "secondary_structure: {sheet: 1,3..11}" beside a
+    variable-length sequence. Ranges carry no length, so
+    positions past min_length stay expressible, unlike the
+    per-residue string form. Parsed at schema.py:1134-1140;
+    only valid on designed residues (data.py:1957).
+
+    An item with pos=None covers the whole chain, which
+    BoltzGen spells "all".
     """
     ss = getattr(entity, "secondary_structure", None)
     if not ss:
         return None
 
-    length = _spec_length(entity)
-    if length is None:
-        raise ValueError(
-            f"Entity '{entity.id}': secondary_structure needs a "
-            "known length (set rep, min_length or max_length)."
-        )
-
-    chars = ["U"] * length
+    by_key: dict[str, list[int]] = {}
     for item in ss:
         if item.type not in _SS_TO_BOLTZGEN:
             raise ValueError(
                 f"Entity '{entity.id}': bad secondary structure type "
                 f"{item.type!r}, expected one of {sorted(_SS_TO_BOLTZGEN)}."
             )
-        symbol = _SS_TO_BOLTZGEN[item.type]
+        key = _SS_TO_BOLTZGEN[item.type]
         if item.pos is None:
-            chars = [symbol] * length
-            continue
-        idx = int(item.pos) - 1
-        if not 0 <= idx < length:
-            raise ValueError(
-                f"Entity '{entity.id}': secondary_structure position "
-                f"{item.pos} outside 1..{length}."
-            )
-        chars[idx] = symbol
+            return {key: "all"}
+        by_key.setdefault(key, []).append(int(item.pos))
 
-    return "".join(chars)
+    return {
+        k: _positions_to_range_spec(v) for k, v in by_key.items()
+    }
 
 
 def _binding_types_spec(entity: Entity) -> dict[str, str] | None:
@@ -408,21 +395,21 @@ def _emit_design_entity(
             }
         return entry, pointer + copies
 
-    # Protein / DNA / RNA: use type if valid, else protein
-    seq_spec = _entity_to_sequence_spec(entity, fixed_pos=fixed_pos)
-    entity_type = (
-        entity.type
-        if entity.type in ("protein", "dna", "rna")
-        else "protein"
-    )
+    # Ligands returned above, so only protein is left: can_model
+    # (boltzgen.py) admits protein and ligand entities only.
+    if entity.type != "protein":
+        raise ValueError(
+            f"Entity '{entity.id}': type {entity.type!r} unsupported; "
+            "BoltzGen models protein and ligand entities."
+        )
 
     entry_inner: dict = {
         "id": id_field,
-        "sequence": seq_spec,
+        "sequence": _entity_to_sequence_spec(entity, fixed_pos=fixed_pos),
     }
     _attach_conditioning(entity, entry_inner)
 
-    entry = {entity_type: entry_inner}
+    entry = {entity.type: entry_inner}
     return entry, pointer + copies
 
 
@@ -434,21 +421,14 @@ def _emit_context_entity(
     tmp_dir: Path,
 ) -> tuple[dict, int]:
     """
-    Emit a YAML entity dict for a context entity
-    (fixed structure target).
+    Emit a YAML entry for a fixed (context) entity: a file:
+    entry when structures are attached (PDB written to
+    tmp_dir/structures/), else an inline protein: entry with
+    the literal rep. Conditioning attaches as a dict inline
+    but as a list of chain blocks on file entries
+    (schema.py:2187-2191).
 
-    Writes the entity's structure to a CIF file in
-    tmp_dir/structures/ and references it from the YAML.
-
-    Falls back to a protein sequence-only entry if
-    no structure is available.
-
-    Conditioning is attached in whichever form the branch
-    needs: the inline entry takes the dict form, the file
-    entry a list of chain blocks (schema.py:2187-2191).
-
-    Returns the YAML dict and the updated chain ID
-    pointer.
+    Returns the entry and the advanced chain ID pointer.
     """
     _reject_unsupported(entity)
 
@@ -480,10 +460,7 @@ def _emit_context_entity(
 
     # PDB, not CIF: BoltzGen branches on the suffix
     # (schema.py:1920) and its mmCIF reader needs
-    # _entity_poly_seq (mmcif.py:980), which holds the full
-    # polymer sequence including unobserved residues and does
-    # not survive an AtomArray. parse_pdb uses the observed
-    # residues instead.
+    # _entity_poly_seq (mmcif.py:980)
     structure_path = (
         tmp_dir / "structures" / f"entity_{entity_idx}.pdb"
     )
@@ -496,9 +473,6 @@ def _emit_context_entity(
     model.to_file(str(structure_path), format="pdb")
 
     # Build the file entry for the chain at entity_idx.
-    # File entities take binding_types as a list of chain
-    # blocks (schema.py:2187-2191), not the dict form inline
-    # entities use, so _attach_conditioning does not apply.
     chain_id = chain_ids[pointer]
     file_entry: dict = {
         "path": str(structure_path.resolve()),
@@ -590,28 +564,18 @@ def system_to_boltzgen_yaml(
 ) -> Path:
     """
     Convert an evedesign System into a BoltzGen design
-    specification YAML file.
+    specification YAML.
 
-    Each entity in the system is classified as either:
-    - Designable (rep=None or min_length/max_length set)
-      -> emitted as a sequence/length spec via
-      _emit_design_entity
-    - Context (has a fixed structure attached)
-      -> emitted as a file: reference via
-      _emit_context_entity (the structure CIF is
-      written to output_path.parent / structures/)
+    Entities are emitted either as designable sequence/length
+    specs (_emit_design_entity) or as fixed context
+    (_emit_context_entity, writing a PDB to
+    output_path.parent / structures/). Entity.atom_bonds
+    become the top-level constraints block.
 
-    Entity.atom_bonds across the system become the top-level
-    constraints block.
+    fixed_pos maps entity index -> 1-based positions held fixed
+    within that entity (motif scaffolding), taken from its rep.
 
-    Parameters
-    ----------
-    fixed_pos : EntityPosList, optional
-        Entity index -> 1-based positions to hold fixed within
-        that entity (motif scaffolding). The fixed residues
-        come from the entity's rep.
-
-    Returns the output_path for chaining.
+    Returns output_path for chaining.
     """
     tmp_dir = output_path.parent
     chain_ids = _get_chain_ids(system)
@@ -686,25 +650,17 @@ def _parse_single_design(
     design_id: str | None = None,
 ) -> SystemInstance:
     """
-    Parse a single BoltzGen output CIF into a
-    SystemInstance.
+    Parse one BoltzGen output CIF into a SystemInstance.
 
-    Each chain in the CIF is matched against
-    chain_to_entity to find which evedesign entity
-    it belongs to. Sequence and structure are extracted
-    for designed entities; original entity.rep is kept
-    for context entities that have no chain in the CIF.
+    Chains are matched to entities via chain_to_entity;
+    designed entities take the CIF's sequence and structure,
+    context entities keep their original rep.
 
-    metrics_row (optional): a dict from the BoltzGen
-    metrics CSV. Used to populate instance.metadata
-    and instance.score (using iptm, falling back to
-    ptm, falling back to complex_plddt).
-
-    design_id (optional):the BoltzGen design id, e.g.
-    "design_spec_5". Must be given when the CIF filename
-    carries a rank prefix
+    metrics_row: a row from BoltzGen's metrics CSV, populating
+    metadata and score (iptm, else ptm, else complex_plddt).
+    design_id: BoltzGen's design id, e.g. "design_spec_5";
+    required when the CIF filename carries a rank prefix.
     """
-    from evedesign.structure import Structure, StructureFile
 
     sf = StructureFile(str(cif_path), format="cif")
     full_structure = sf.get_model()
@@ -839,7 +795,6 @@ def _parse_diverse_set(
     if metrics_files:
         metrics_path = metrics_files[0]
         try:
-            import pandas as pd
             df = pd.read_csv(metrics_path)
             if "id" in df.columns:
                 metrics_by_design_id = {
@@ -924,7 +879,6 @@ def _parse_diverse_set(
 
 def _parse_all_designs(
     output_dir: Path,
-    ranked_dir: Path,
     system: System,
     chain_to_entity: dict[str, int],
 ) -> list[SystemInstance]:
@@ -933,7 +887,9 @@ def _parse_all_designs(
     design that survived the analysis step. CIFs are
     sourced from intermediate_designs/.
     """
-    all_metrics_path = ranked_dir / "all_designs_metrics.csv"
+    all_metrics_path = (
+        output_dir / "final_ranked_designs" / "all_designs_metrics.csv"
+    )
     if not all_metrics_path.exists():
         logger.warning(
             f"all_designs_metrics.csv not found at "
@@ -942,7 +898,6 @@ def _parse_all_designs(
         return []
 
     try:
-        import pandas as pd
         df = pd.read_csv(all_metrics_path)
     except Exception as e:
         logger.warning(
@@ -1008,40 +963,20 @@ def parse_design_output(
     return_all: bool = False,
 ) -> list[SystemInstance]:
     """
-    Parse a BoltzGen output directory into a list of
-    SystemInstance objects.
+    Parse a BoltzGen --output directory into SystemInstances.
 
-    By default returns the **Diverse set**: the
-    budget-filtered, diversity-selected designs from
-    final_ranked_designs/final_<N>_designs/. This
-    matches BoltzGen's "final output" convention as
-    documented in boltzgen.task.filter.filter.Filter.
+    Returns the Diverse set by default: the budget-filtered,
+    diversity-selected designs in
+    final_ranked_designs/final_<N>_designs/, which is BoltzGen's
+    final output (boltzgen.task.filter.filter.Filter). With
+    return_all=True, returns every design in
+    all_designs_metrics.csv instead, sourcing CIFs from
+    intermediate_designs/ - the full post-analysis set, before
+    diversity filtering, for custom filtering downstream.
 
-    With return_all=True, returns every design listed
-    in all_designs_metrics.csv (the full post-analysis
-    set, before diversity filtering). Useful when you
-    want to apply custom filtering downstream.
-
-    Parameters
-    ----------
-    output_dir : Path
-        BoltzGen --output directory (the parent of
-        final_ranked_designs/).
-    system : System
-        Template system used for chain -> entity routing.
-        The chain ID -> entity index mapping is derived
-        from it via _chain_to_entity_map.
-    return_all : bool, default False
-        If False (default), return only the Diverse set
-        (--budget designs). If True, return all designs
-        in all_designs_metrics.csv (with CIFs sourced
-        from intermediate_designs/).
-
-    Returns
-    -------
-    list[SystemInstance]
-        Each instance has structures + metrics + score
-        + confidence populated. 
+    Chain -> entity routing is derived from system via
+    _chain_to_entity_map. Each instance has structures, metrics,
+    score and confidence populated.
     """
     chain_to_entity = _chain_to_entity_map(system)
     ranked_dir = output_dir / "final_ranked_designs"
@@ -1055,7 +990,7 @@ def parse_design_output(
 
     if return_all:
         return _parse_all_designs(
-            output_dir, ranked_dir, system, chain_to_entity
+            output_dir, system, chain_to_entity
         )
     return _parse_diverse_set(
         ranked_dir, system, chain_to_entity
