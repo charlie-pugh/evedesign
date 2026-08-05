@@ -16,7 +16,6 @@ from loguru import logger
 
 from evedesign.model import BaseModel, Generator
 from evedesign.models.boltz.convert_design import (
-    _is_design_entity,
     parse_design_output,
     system_to_boltzgen_yaml,
 )
@@ -179,15 +178,17 @@ class BoltzGenGenerator(BaseModel, Generator):
         Check if the system is suitable for BoltzGen
         de novo design.
 
-        Requires at least one designable entity
-        (rep=None or min_length/max_length specified).
+        Which entities are designed is a per-call choice
+        (generate(entities=...)), so it is not checked here.
         """
         if data is not None:
             return False, (
                "Model does not support data parameter (must be None)"
             )
 
-        has_design = False
+        if len(system) == 0:
+            return False, "System has no entities"
+
         for i, entity in enumerate(system):
             if entity.type not in ("protein", "ligand"):
                 return False, (
@@ -196,15 +197,6 @@ class BoltzGenGenerator(BaseModel, Generator):
                     "and ligand entities are currently "
                     "supported."
                 )
-            if _is_design_entity(entity):
-                has_design = True
-
-        if not has_design:
-            return False, (
-                "No designable entities found. At least "
-                "one entity must have rep=None or "
-                "min_length/max_length set to be designed."
-            )
 
         return True, ""
 
@@ -288,6 +280,9 @@ class BoltzGenGenerator(BaseModel, Generator):
         shells out to the boltzgen CLI, then parses
         the output CIFs into SystemInstance objects.
 
+        entities selects which entities are designed, the rest are
+        held fixed. Defaults to all of them.
+
         fixed_pos holds the given 1-based positions of an
         entity fixed while the rest of that chain is
         designed (motif scaffolding). The fixed residues
@@ -295,24 +290,19 @@ class BoltzGenGenerator(BaseModel, Generator):
         """
         self.ready_or_raise()
 
-        # verify validity of entity selection, even if not used since
-        # designability is derived from the System specification
         if entities is not None:
-            designable = [
-                i for i, e in enumerate(self._system) if _is_design_entity(e)
-            ]
-            if sorted(ensure_sequence(entities)) != designable:
-                raise ValueError(
-                    f"Model designs entities derived from the System "
-                    f"(entities = {designable} | None)"
-                )
+            entities = ensure_sequence(entities)
+            invalid = set(entities).difference(range(len(self._system)))
+            if invalid:
+                raise ValueError(f"Invalid entities: {sorted(invalid)}")
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="boltzgen_"))
         try:
             # 1. Write the YAML design spec
             yaml_path = tmp_dir / "design_spec.yaml"
             system_to_boltzgen_yaml(
-                self._system, yaml_path, fixed_pos=fixed_pos
+                self._system, yaml_path,
+                fixed_pos=fixed_pos, entities=entities,
             )
             logger.info(
                 f"BoltzGen YAML written to {yaml_path}"

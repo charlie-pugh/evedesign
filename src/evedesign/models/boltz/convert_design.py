@@ -37,29 +37,7 @@ from evedesign.types import EntityPosList
 # INPUT: evedesign System -> BoltzGen design YAML
 
 
-# 1a. Entity classification
-
-
-def _is_design_entity(entity: Entity) -> bool:
-    """
-    Determine whether an entity should be designed
-    by BoltzGen.
-
-    Returns True when:
-    - rep is None (no sequence specified), OR
-    - min_length / max_length are specified (length
-      range for design)
-    """
-    if entity.rep is None:
-        return True
-    if (
-        getattr(entity, "min_length", None) is not None
-        or getattr(entity, "max_length", None) is not None
-    ):
-        return True
-    return False
-
-# 1b. Sequence spec (letters fixed, numbers designed)
+# 1a. Sequence spec (letters fixed, numbers designed)
 
 
 def _entity_to_sequence_spec(
@@ -151,7 +129,7 @@ def _entity_to_sequence_spec(
     )
     return "80..140"
 
-# 1c. Per-entity conditioning blocks
+# 1b. Per-entity conditioning blocks
 
 # Each helper mirrors one block of BoltzGen's spec parser in
 # boltzgen/data/parse/schema.py; line refs are for boltzgen 0.3.2.
@@ -328,7 +306,7 @@ def _reject_unsupported(entity: Entity) -> None:
             "integer group index, not a point group."
         )
 
-# 1d. Entity emitters: the two input cases
+# 1c. Entity emitters: the two input cases
 
 def _emit_design_entity(
     entity: Entity,
@@ -448,12 +426,12 @@ def _emit_context_entity(
             if copies == 1
             else chain_ids[pointer:pointer + copies]
         )
-        seq = (
-            "".join(entity.rep)
-            if entity.rep is not None
-            else "A" * 10
-        )
-        inner: dict = {"id": id_field, "sequence": seq}
+        if entity.rep is None:
+            raise ValueError(
+                f"Entity '{entity.id}': nothing to emit as fixed, "
+                "needs rep or structures."
+            )
+        inner: dict = {"id": id_field, "sequence": "".join(entity.rep)}
         _attach_conditioning(entity, inner)
         entry = {"protein": inner}
         return entry, pointer + copies
@@ -488,7 +466,38 @@ def _emit_context_entity(
     entry = {"file": file_entry}
     return entry, pointer + copies
 
-# 1e. System level
+def _entity_to_boltzgen_yaml(
+    entity: Entity,
+    entity_idx: int,
+    chain_ids: list[str],
+    pointer: int,
+    tmp_dir: Path,
+    designed: bool,
+    fixed_pos: Sequence[int] | None = None,
+) -> tuple[dict, int]:
+    """
+    Emit one entity's YAML entry, designed or fixed.
+
+    Ligands always take the ligand: form. fixed_pos yields a spec
+    with digits, which BoltzGen counts as designed (schema.py:879).
+    """
+    if entity.type == "ligand" or designed or fixed_pos:
+        if entity.structures and entity.type != "ligand":
+            raise ValueError(
+                f"Entity '{entity.id}' has structures, so it cannot be "
+                "designed and used as a target at once. Exclude it from "
+                "entities to keep it fixed (in-place redesign is not "
+                "implemented)."
+            )
+        return _emit_design_entity(
+            entity, chain_ids, pointer, fixed_pos=fixed_pos
+        )
+    return _emit_context_entity(
+        entity, entity_idx, chain_ids, pointer, tmp_dir
+    )
+
+
+# 1d. System level
 
 
 def _atom_bond_constraints(
@@ -561,62 +570,47 @@ def system_to_boltzgen_yaml(
     system: System,
     output_path: Path,
     fixed_pos: EntityPosList | None = None,
+    entities: Sequence[int] | None = None,
 ) -> Path:
     """
     Convert an evedesign System into a BoltzGen design
     specification YAML.
 
-    Entities are emitted either as designable sequence/length
-    specs (_emit_design_entity) or as fixed context
-    (_emit_context_entity, writing a PDB to
-    output_path.parent / structures/). Entity.atom_bonds
-    become the top-level constraints block.
+    entities selects which entity indices are designed, the rest
+    are held fixed; defaults to all, per Generator.generate.
+    Designed entities become sequence/length specs, fixed ones a
+    file: entry or literal sequence (writing a PDB to
+    output_path.parent / structures/). Entity.atom_bonds become
+    the top-level constraints block.
 
     fixed_pos maps entity index -> 1-based positions held fixed
     within that entity (motif scaffolding), taken from its rep.
 
     Returns output_path for chaining.
     """
+    design = set(
+        range(len(system)) if entities is None else entities
+    )
     tmp_dir = output_path.parent
     chain_ids = _get_chain_ids(system)
     pointer = 0
 
     entities_list: list[dict] = []
 
-    n_design = sum(
-        1 for e in system if _is_design_entity(e)
-    )
-    n_context = len(system) - n_design
     logger.info(
-        f"System has {len(system)} entities: "
-        f"{n_design} designable, {n_context} context"
+        f"System has {len(system)} entities: {len(design)} designed, "
+        f"{len(system) - len(design)} context"
     )
 
     for entity_idx, entity in enumerate(system):
-        entity_fixed = (
-            fixed_pos.get(entity_idx)
-            if fixed_pos is not None else None
+        entry, pointer = _entity_to_boltzgen_yaml(
+            entity, entity_idx, chain_ids, pointer, tmp_dir,
+            designed=entity_idx in design,
+            fixed_pos=(
+                fixed_pos.get(entity_idx)
+                if fixed_pos is not None else None
+            ),
         )
-        # Ligands always emit a ligand: entry, designed or not.
-        # fixed_pos yields a spec with digits, which BoltzGen
-        # counts as designed (schema.py:879)
-        if (
-            entity.type == "ligand"
-            or _is_design_entity(entity)
-            or entity_fixed
-        ):
-            entry, pointer = _emit_design_entity(
-                entity, chain_ids, pointer,
-                fixed_pos=entity_fixed,
-            )
-        else:
-            entry, pointer = _emit_context_entity(
-                entity,
-                entity_idx,
-                chain_ids,
-                pointer,
-                tmp_dir,
-            )
         entities_list.append(entry)
 
     yaml_data: dict = {"entities": entities_list}

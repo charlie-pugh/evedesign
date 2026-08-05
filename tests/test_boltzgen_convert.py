@@ -112,7 +112,7 @@ def test_design_and_context_entities(tmp_path):
         Protein(rep=None, min_length=60, max_length=80, id="binder"),
     ])
     entities = yaml.safe_load(system_to_boltzgen_yaml(
-        system, tmp_path / "spec.yaml"
+        system, tmp_path / "spec.yaml", entities=[1]
     ).read_text())["entities"]
     assert entities[0]["protein"] == {"id": "A", "sequence": "MKTAYIAKQR"}
     assert entities[1]["protein"] == {"id": "B", "sequence": "60..80"}
@@ -170,7 +170,7 @@ def test_context_entity_with_structure_emits_a_file_entry(tmp_path):
         Protein(rep=None, min_length=10, id="binder"),
     ])
     entities = yaml.safe_load(system_to_boltzgen_yaml(
-        system, tmp_path / "spec.yaml"
+        system, tmp_path / "spec.yaml", entities=[1]
     ).read_text())["entities"]
 
     file_entry = entities[0]["file"]
@@ -440,7 +440,7 @@ def test_roundtrip_binding_types(tmp_path):
         ]),
         Protein(rep=None, min_length=6, max_length=6, id="binder"),
     ])
-    _, target = _parse_with_boltzgen(system, tmp_path)
+    _, target = _parse_with_boltzgen(system, tmp_path, entities=[1])
 
     start, end = _residue_slice(target, 0)
     by_id = {v: k for k, v in binding_type_ids.items()}
@@ -463,7 +463,7 @@ def test_roundtrip_covalent_bond_resolves_to_real_atoms(tmp_path):
                     target_entity_id="target", target_pos=2, target_atom="SG",
                 )]),
     ])
-    _, target = _parse_with_boltzgen(system, tmp_path, fixed_pos={1: [4]})
+    _, target = _parse_with_boltzgen(system, tmp_path, fixed_pos={1: [4]}, entities=[1])
     assert len(target.structure.bonds) >= 1
 
 
@@ -481,5 +481,5 @@ def test_roundtrip_structural_target(tmp_path):
         Protein(rep="MKTAYIAKQR", id="target", structures={"x": Structure(aa)}),
         Protein(rep=None, min_length=10, max_length=10, id="binder"),
     ])
-    _, target = _parse_with_boltzgen(system, tmp_path)
+    _, target = _parse_with_boltzgen(system, tmp_path, entities=[1])
     assert len(target.structure.chains) == 2
