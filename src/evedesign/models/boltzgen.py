@@ -14,12 +14,6 @@ from typing import Any, Self, Sequence
 
 from loguru import logger
 
-try:
-    # boltzgen is CLI-only — we only check it is on PATH
-    IMPORT_AVAILABLE = shutil.which("boltzgen") is not None
-except ImportError:
-    IMPORT_AVAILABLE = False
-
 from evedesign.model import BaseModel, Generator
 from evedesign.models.boltz.convert_design import (
     _is_design_entity,
@@ -29,6 +23,9 @@ from evedesign.models.boltz.convert_design import (
 from evedesign.system import System, SystemInstance
 from evedesign.types import DeviceType, EntityPosList, StatusCallback
 from evedesign.utils import ensure_sequence
+
+# boltzgen is CLI-only, so availability is a PATH check, not an import
+IMPORT_AVAILABLE = shutil.which("boltzgen") is not None
 
 
 # Default checkpoint references (HuggingFace)
@@ -62,6 +59,9 @@ class BoltzGenGenerator(BaseModel, Generator):
     conditioned on a target. Returned SystemInstance
     objects have both structures and designed sequences
     populated.
+
+    BoltzGen runs as a subprocess, so binary may point at
+    an executable in another environment
     """
     available = IMPORT_AVAILABLE
     name: str = "BoltzGen"
@@ -105,12 +105,16 @@ class BoltzGenGenerator(BaseModel, Generator):
         budget: int = 30,
         alpha: float | None = None,
         keep_tmp_dir: bool = False,
+        binary: str = "boltzgen",
     ):
-        if not self.available:
+        # Checked per instance, not via the class-level available
+        # flag, so a binary in another environment is resolved
+        # instead of whatever is on PATH
+        if shutil.which(binary) is None:
             logger.warning(
-                "boltzgen CLI not found on PATH. Install with the "
-                "optional dependency pip install evedesign[boltzgen] "
-                "(generate() will fail until boltzgen is installed)"
+                f"boltzgen CLI not found at '{binary}'. Install with "
+                "the optional dependency pip install "
+                "evedesign[boltzgen], or pass binary=<path> to run it "
             )
 
         if protocol not in PROTOCOLS:
@@ -153,6 +157,7 @@ class BoltzGenGenerator(BaseModel, Generator):
         self.budget = budget
         self.alpha = alpha
         self.keep_tmp_dir = keep_tmp_dir
+        self.binary = binary
 
         self._system = None
 
@@ -228,7 +233,7 @@ class BoltzGenGenerator(BaseModel, Generator):
         suitable for subprocess.run.
         """
         cmd = [
-            "boltzgen", "run",
+            self.binary, "run",
             str(yaml_path),
             "--output", str(output_dir),
             "--protocol", self.protocol,
