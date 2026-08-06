@@ -1,7 +1,8 @@
 import subprocess
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from math import log10
-from os import PathLike, path
+from os import PathLike, path, environ
 from tempfile import TemporaryDirectory
 from typing import Sequence, Any, Self
 import numpy as np
@@ -16,7 +17,7 @@ from evedesign.model import (
 )
 from evedesign.system import System, SystemInstance
 from evedesign.types import StatusCallback, Site
-from evedesign.utils import status_start, status_done
+from evedesign.utils import status_start, status_done, available_cpus
 
 MHCII_EPITOPE_CORE_LENGTH = 9
 
@@ -73,6 +74,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         floor_rank: float = 1e-05,
         truncate_rank: float | None = None,
         prediction_cache_size: int = 10 ** 8,
+        cpu: int | None = None
     ):
         """
         Create new MixMHC2pred predictor
@@ -96,6 +98,8 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         prediction_cache_size
             Size of LRU cache to reuse calculations for peptides (larger cache = quicker
             calculations on large mutation sets, but higher memory footprint)
+        cpu
+            Number of CPU cores to use. If None, use all available cores.
         """
         self.alleles = {
             allele.replace(
@@ -113,6 +117,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         self.binary = binary
         self.truncate_rank = truncate_rank
         self.floor_rank = floor_rank
+        self.cpu = cpu
         self._lru_cache = LRU(
             maxsize=prediction_cache_size
         )
@@ -146,28 +151,48 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
 
         return peps
 
-    def _run_mixmhc2pred(
-        self,
-        peptides_with_context: set[tuple[str, str]],
-    ):
+    def _run_mixmhc2pred_chunk(self, chunk: list[tuple[str, str]]) -> pd.DataFrame:
         with TemporaryDirectory() as tmpdir:
             input_file = path.join(tmpdir, "input.txt")
             output_file = path.join(tmpdir, "output.txt")
 
             with open(input_file, "w") as f:
-                for (pep, pep_ctx) in peptides_with_context:
-                    f.write(f"{pep}\t{pep_ctx}\n")
+                f.writelines(f"{pep}\t{pep_ctx}\n" for pep, pep_ctx in chunk)
 
             cmd = [
-                self.binary, "--input", input_file, "--output", output_file, "-a"
-            ] + list(self.alleles)
-
+                self.binary, "--input", input_file, "--output", output_file, "-a",
+                *self.alleles,
+            ]
             subprocess.run(
                 cmd, capture_output=True, text=True, check=True,
-                cwd=None, shell=False, env=None,
+                # keep the binary from spawning its own threads on top of ours
+                env={**environ, "OMP_NUM_THREADS": "1"},
             )
-
             return pd.read_csv(output_file, sep="\t", comment="#")
+
+
+    def _run_mixmhc2pred(
+        self,
+        peptides_with_context: set[tuple[str, str]],
+        min_chunk_size: int = 500,
+    ) -> pd.DataFrame:
+        items = list(peptides_with_context)
+        if not items:
+            return pd.DataFrame()
+
+        n_jobs = self.cpu or available_cpus()
+        # don't spawn more workers than there is meaningful work for
+        n_chunks = max(1, min(n_jobs, len(items) // min_chunk_size or 1))
+
+        if n_chunks == 1:
+            return self._run_mixmhc2pred_chunk(items)
+
+        chunks = [items[i::n_chunks] for i in range(n_chunks)]  # round-robin split
+
+        with ThreadPoolExecutor(max_workers=n_chunks) as pool:
+            dfs = list(pool.map(self._run_mixmhc2pred_chunk, chunks))
+
+        return pd.concat(dfs, ignore_index=True)
 
     @property
     def system(self) -> System | None:
