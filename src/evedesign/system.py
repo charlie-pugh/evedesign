@@ -8,7 +8,6 @@ from io import StringIO
 from math import isclose
 from typing import NamedTuple, Self, Any
 import numpy as np
-import copy
 
 from evedesign.sequence import valid_sequence, Sequences
 from evedesign.structure import Structure, StructureFile
@@ -1767,75 +1766,6 @@ class System(UserList[Entity]):
                 instances[instance_idx][entity_idx].rep = np.array(rep, dtype="U1")
 
         return instances
-
-    def with_instance_structures(
-        self,
-        instance: "SystemInstance",
-        model_key: str = "model_0",
-        structure_key: str = "input",
-    ) -> "System":
-        """
-        Return a copy of this System with each entity's
-        .structures populated from the given instance's
-        EntityInstance.models[model_key].
-
-        This bridges the sample-level structure channel
-        (EntityInstance.models, written by Generators like
-        BoltzGen and Transformers like BoltzFold) into the
-        template-level structure channel (Entity.structures,
-        read by models like LigandMPNN at .build() time).
-
-        Entities whose instance.models[model_key] is absent
-        are copied unchanged.
-
-        Parameters
-        ----------
-        instance : SystemInstance
-            The sample whose models should be promoted to
-            template structures. Typically a single backbone
-            from BoltzGen.generate() or a refold from
-            BoltzFold.transform().
-        model_key : str, default "model_0"
-            Key into EntityInstance.models. For BoltzFold
-            outputs with multiple diffusion samples, use
-            "model_1", "model_2", etc. to pick a specific
-            rank.
-        structure_key : str, default "input"
-            Key under which the promoted structures will
-            be stored in Entity.structures.
-
-        Returns
-        -------
-        System
-            A new System with the same entities as self,
-            plus Entity.structures populated from the
-            instance.
-        """
-
-        new_entities = []
-        for entity_idx, template_entity in enumerate(self):
-            new_entity = copy.copy(template_entity)
-
-            entity_instance = instance[entity_idx]
-            if (entity_instance.models is not None
-                    and model_key in entity_instance.models):
-                model = entity_instance.models[model_key]
-                # Handle both single Structure and
-                # list[Structure] (homo-oligomer) cases
-                if isinstance(model, list):
-                    new_entity.structures = {structure_key: model[0]}
-                else:
-                    new_entity.structures = {structure_key: model}
-
-            # Propagate sequence if the instance has one —
-            # ensures MPNN's "native" baseline matches what
-            # was actually folded / designed
-            if entity_instance.rep is not None:
-                new_entity.rep = entity_instance.rep.copy()
-
-            new_entities.append(new_entity)
-
-        return type(self)(new_entities)
 
 
 class _BiopolymerEntity(Entity):
