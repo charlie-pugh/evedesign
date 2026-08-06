@@ -83,6 +83,8 @@ class BoltzGenGenerator(BaseModel, Generator):
         "interactions",
         "atom_bonds",
         "copies",
+        "cyclic",
+        "ligand_rep_type",
         "min_length",
         "max_length",
     ]

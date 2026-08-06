@@ -288,24 +288,6 @@ def _attach_conditioning(entity: Entity, inner: dict) -> None:
         inner["cyclic"] = True
 
 
-def _reject_unsupported(entity: Entity) -> None:
-    """
-    Raise on Entity attributes with no settled BoltzGen
-    mapping, rather than dropping them silently.
-    """
-    if getattr(entity, "residue_bias", None):
-        raise NotImplementedError(
-            f"Entity '{entity.id}': residue_bias weights have no "
-            "BoltzGen equivalent; residue_constraints "
-            "(schema.py:804-822) take hard allowed/disallowed sets."
-        )
-    if getattr(entity, "symmetry", None) is not None:
-        raise NotImplementedError(
-            f"Entity '{entity.id}': symmetry {entity.symmetry!r} has no "
-            "BoltzGen equivalent; symmetric_group (schema.py:147) is an "
-            "integer group index, not a point group."
-        )
-
 # 1c. Entity emitters: the two input cases
 
 def _emit_design_entity(
@@ -332,8 +314,6 @@ def _emit_design_entity(
 
     Returns the YAML dict and the updated chain ID pointer.
     """
-    _reject_unsupported(entity)
-
     copies = (
         entity.copies if entity.copies is not None
         else 1
@@ -408,8 +388,6 @@ def _emit_context_entity(
 
     Returns the entry and the advanced chain ID pointer.
     """
-    _reject_unsupported(entity)
-
     copies = (
         entity.copies if entity.copies is not None
         else 1

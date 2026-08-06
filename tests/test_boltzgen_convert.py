@@ -282,30 +282,29 @@ def test_no_constraints_key_when_there_are_no_bonds(tmp_path):
     ).read_text())
 
 
-# Rejections: fail loudly rather than drop silently
-
-
-def test_rejects_residue_bias(tmp_path):
+def test_ignores_residue_bias(tmp_path):
+    # not in optional_entity_attributes, so it is simply unused
     system = System([
         Protein(rep="ACDE", min_length=4, max_length=4,
                residue_bias=[ResidueBias(pos=1, bias={"A": 1.0})],
                id="binder",
            ),
     ])
-    with pytest.raises(NotImplementedError, match="residue_bias"):
-        yaml.safe_load(system_to_boltzgen_yaml(
-            system, tmp_path / "spec.yaml"
-        ).read_text())
+    spec = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml"
+    ).read_text())
+    assert spec["entities"][0]["protein"] == {"id": "A", "sequence": "4..4"}
 
 
-def test_rejects_symmetry(tmp_path):
+def test_ignores_symmetry(tmp_path):
+    # symmetric_group is an int token label, not a point group
     system = System([
         Protein(rep=None, min_length=10, symmetry="C", copies=2, id="binder"),
     ])
-    with pytest.raises(NotImplementedError, match="symmetry"):
-        yaml.safe_load(system_to_boltzgen_yaml(
-            system, tmp_path / "spec.yaml"
-        ).read_text())
+    spec = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml"
+    ).read_text())
+    assert spec["entities"][0]["protein"] == {"id": ["A", "B"], "sequence": "10"}
 
 
 def test_rejects_interaction_partner_ids(tmp_path):
