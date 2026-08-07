@@ -73,7 +73,7 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         peptide_lengths: Sequence[int] = (15,),
         floor_rank: float = 1e-05,
         truncate_rank: float | None = None,
-        prediction_cache_size: int = 10 ** 8,
+        prediction_cache_size: int = 10 ** 6,
         cpu: int | None = None
     ):
         """
