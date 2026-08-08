@@ -1,16 +1,19 @@
-"""OASis-compatible antibody humanness scoring via :mod:`promb`."""
-
 from collections.abc import Callable, Sequence
 from statistics import fmean
 from typing import Any, Self
 
-from evedesign.model import BaseModel, MutationScorer, Scorer, assign_scores_to_instances
+from evedesign.model import (
+    BaseModel,
+    MutationScorer,
+    Scorer,
+    assign_scores_to_instances,
+)
 from evedesign.system import System, SystemInstance
 from evedesign.types import StatusCallback
-from evedesign.utils import status_done, status_start
+from evedesign.utils import model_param_context, status_done, status_start
 
 try:
-    from promb import init_db  # type: ignore[import-untyped]
+    from promb import init_db  # type: ignore[import-not-found,import-untyped]
 
     IMPORT_AVAILABLE = True
 except ImportError:
@@ -27,12 +30,7 @@ AGGREGATIONS: dict[str, Callable[[Sequence[float]], float]] = {
 
 
 class OASisHumanness(BaseModel, Scorer, MutationScorer):
-    """Score proteins by the fraction of 9-mers found in human OAS.
-
-    Scores range from 0.0 to 1.0, with higher values indicating greater
-    humanness. This uses promb's fixed peptide-content definition, not BioPhi's
-    configurable prevalence thresholds.
-    """
+    """Score proteins by the fraction of 9-mers found in human OAS."""
 
     available = IMPORT_AVAILABLE
     name: str = "OASisHumanness"
@@ -40,8 +38,8 @@ class OASisHumanness(BaseModel, Scorer, MutationScorer):
 
     requires_target: bool = True
     requires_fixed_length: bool = False
-    handles_deletions: bool = False
-    handles_insertions: bool = False
+    handles_deletions: bool = True
+    handles_insertions: bool = True
     requires_gpu: bool = False
     supports_gpu: bool = False
     supports_cpu_parallel: bool = False
@@ -52,26 +50,34 @@ class OASisHumanness(BaseModel, Scorer, MutationScorer):
 
     def __init__(
         self,
-        aggregation: Aggregation = "mean",
-        entities: Sequence[int] | None = None,
+        aggregation: Aggregation = "weighted_mean",
     ):
+        """
+        Parameters
+        ----------
+        aggregation
+            Combines scores across proteins. ``"weighted_mean"`` weights each
+            protein by its number of 9-mers. ``"mean"``, ``"min"``, and ``"max"``
+            combine protein scores directly. A callable receives the protein
+            scores and returns one value.
+        """
         if not self.available:
             raise ImportError(
                 "promb could not be imported. Install evedesign with the "
                 "'promb' optional dependency."
             )
 
-        if isinstance(aggregation, str):
-            valid_aggregation = aggregation in AGGREGATIONS
-        else:
-            valid_aggregation = callable(aggregation)
-        if not valid_aggregation:
-            raise ValueError("aggregation must be 'mean', 'min', 'max', or a callable")
+        if not callable(aggregation) and aggregation not in (
+            "weighted_mean",
+            *AGGREGATIONS,
+        ):
+            raise ValueError(
+                "aggregation must be 'weighted_mean', 'mean', 'min', 'max', "
+                "or a callable"
+            )
 
         self.aggregation = aggregation
-        self.entities = None if entities is None else tuple(entities)
         self._system: System | None = None
-        self._selected_entities: tuple[int, ...] | None = None
         self._db: Any = None
 
     @property
@@ -93,11 +99,6 @@ class OASisHumanness(BaseModel, Scorer, MutationScorer):
         for entity in system:
             if entity.type != "protein":
                 return False, "Can only handle protein entities"
-            if not entity.defined_sequence():
-                return False, "All entities must have defined rep sequences"
-            rep = entity.rep
-            if rep is None or len(rep) < 9:
-                return False, "Protein sequences must contain at least 9 residues"
 
         return True, ""
 
@@ -108,35 +109,34 @@ class OASisHumanness(BaseModel, Scorer, MutationScorer):
         status_callback: StatusCallback | None = None,
     ) -> Self:
         self.can_model_or_raise(system, data)
-
-        selected_entities = (
-            tuple(range(len(system)))
-            if self.entities is None
-            else self.entities
-        )
-        if not selected_entities:
-            raise ValueError("entities must select at least one entity")
-        if len(set(selected_entities)) != len(selected_entities):
-            raise ValueError("entities must not contain duplicate indices")
-        if any(
-            not isinstance(entity, int) or not 0 <= entity < len(system)
-            for entity in selected_entities
-        ):
-            raise ValueError("entities must contain valid system entity indices")
-
         self._system = system
-        self._selected_entities = selected_entities
         return self
 
     def _load_db(self) -> None:
         if self._db is None:
             self._db = init_db("human-oas", verbose=False)
 
-    def _aggregate(self, chain_scores: Sequence[float]) -> float:
-        if callable(self.aggregation):
-            return float(self.aggregation(chain_scores))
+    def _delete_db(self) -> None:
+        self._db = None
 
-        return float(AGGREGATIONS[self.aggregation](chain_scores))
+    def _aggregate(
+        self,
+        entity_scores: Sequence[float],
+        peptide_counts: Sequence[int],
+    ) -> float:
+        if callable(self.aggregation):
+            return float(self.aggregation(entity_scores))
+
+        if self.aggregation == "weighted_mean":
+            total_peptides = sum(peptide_counts)
+            if total_peptides == 0:
+                return 0.0
+            weighted_score = sum(
+                score * count for score, count in zip(entity_scores, peptide_counts)
+            )
+            return weighted_score / total_peptides
+
+        return float(AGGREGATIONS[self.aggregation](entity_scores))
 
     def score(
         self,
@@ -149,28 +149,24 @@ class OASisHumanness(BaseModel, Scorer, MutationScorer):
         if not instances:
             return []
 
-        assert self._selected_entities is not None
-        sequences = []
-        for instance in instances:
-            instance_sequences = []
-            for entity in self._selected_entities:
-                rep = instance[entity].rep
-                if rep is None or len(rep) < 9:
-                    raise ValueError("Protein sequences must contain at least 9 residues")
-                instance_sequences.append("".join(rep))
-            sequences.append(instance_sequences)
-
         status_start(status_callback, "Scoring human peptide content")
 
-        self._load_db()
+        scores: list[float] = []
+        with model_param_context(self._load_db, self._delete_db, keep_model=False):
+            for instance in instances:
+                entity_scores = []
+                peptide_counts = []
+                for entity in instance:
+                    sequence = "".join(entity.normalized_rep())
+                    peptide_count = max(len(sequence) - 8, 0)
+                    entity_scores.append(
+                        self._db.compute_peptide_content(sequence)
+                        if peptide_count
+                        else 0.0
+                    )
+                    peptide_counts.append(peptide_count)
 
-        scores = []
-        for instance_sequences in sequences:
-            chain_scores = [
-                self._db.compute_peptide_content(sequence)
-                for sequence in instance_sequences
-            ]
-            scores.append(self._aggregate(chain_scores))
+                scores.append(self._aggregate(entity_scores, peptide_counts))
 
         status_done(status_callback, "Scoring complete")
 
