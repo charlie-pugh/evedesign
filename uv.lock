@@ -17,7 +17,10 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ package = { name = "boltz" }, dependencies = [{ name = "numpy", specifier = ">=2.0" }, { name = "scipy", specifier = ">=1.14" }, { name = "numba", specifier = ">=0.64" }] }]
+overrides = [
+    { package = { name = "boltz" }, dependencies = [{ name = "numpy", specifier = ">=2.0" }, { name = "scipy", specifier = ">=1.14" }, { name = "numba", specifier = ">=0.64" }] },
+    { package = { name = "boltzgen" }, dependencies = [{ name = "numpy", specifier = ">=2.0" }, { name = "numba", specifier = ">=0.64" }] },
+]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -361,6 +364,42 @@ cuda = [
     { name = "cuequivariance-ops-cu12" },
     { name = "cuequivariance-ops-torch-cu12" },
     { name = "cuequivariance-torch" },
+]
+
+[[package]]
+name = "boltzgen"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "biopython" },
+    { name = "biotite" },
+    { name = "cuequivariance-ops-cu12" },
+    { name = "cuequivariance-ops-torch-cu12" },
+    { name = "cuequivariance-torch" },
+    { name = "edit-distance" },
+    { name = "einops" },
+    { name = "einx" },
+    { name = "gemmi" },
+    { name = "huggingface-hub" },
+    { name = "hydra-core" },
+    { name = "hydride" },
+    { name = "logomaker" },
+    { name = "mashumaro" },
+    { name = "matplotlib" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "nvidia-ml-py" },
+    { name = "pandas" },
+    { name = "pdbeccdutils" },
+    { name = "pydssp" },
+    { name = "pytorch-lightning" },
+    { name = "rdkit" },
+    { name = "scikit-learn" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4d/d8/3273c15814abcffca5a644b8b7f4b75342c0e8135ece4e271869d4370db9/boltzgen-0.3.2.tar.gz", hash = "sha256:ddc2832d2e73e24fae9cc027e7a5dd2a94ca49963d685f016d41205039eb1340", size = 312931, upload-time = "2026-05-01T14:23:35.548Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/12/ed2a838936894b5b36011dca88fd5b7922ecdb1c7ccd90005e465f8045ac/boltzgen-0.3.2-py3-none-any.whl", hash = "sha256:f832063040eb851deacca5641c1e41a5518696110142a937f888bd8db6806d96", size = 357057, upload-time = "2026-05-01T14:23:33.817Z" },
 ]
 
 [[package]]
@@ -797,6 +836,15 @@ wheels = [
 ]
 
 [[package]]
+name = "edit-distance"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/38/f5ceab4c9dfa045827921138d5c0b5a6411d7b29ebd4011b0364f7724b2e/edit_distance-1.0.9.tar.gz", hash = "sha256:074c29ec00c8e74ff2627759cf3d40aa2d95cd24a0cde4acc62c820df9f3af26", size = 10041, upload-time = "2026-06-29T16:09:18.558Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/08/a6c994306096eb15ad398def16ffe87df68314599b9f82f3235770c21095/edit_distance-1.0.9-py3-none-any.whl", hash = "sha256:6b3e95263b548e335c4982486afad31a17f79b6d2f48c3d1e7a37a5dfc1838f9", size = 11382, upload-time = "2026-06-29T16:09:17.722Z" },
+]
+
+[[package]]
 name = "einops"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -889,6 +937,9 @@ boltz2fold-cuda = [
     { name = "pyyaml" },
     { name = "torch" },
 ]
+boltzgen = [
+    { name = "boltzgen" },
+]
 esm2 = [
     { name = "torch" },
     { name = "transformers" },
@@ -928,6 +979,7 @@ requires-dist = [
     { name = "biotite" },
     { name = "boltz", marker = "extra == 'boltz2fold'", specifier = ">=2.2" },
     { name = "boltz", extras = ["cuda"], marker = "sys_platform == 'linux' and extra == 'boltz2fold-cuda'", specifier = ">=2.2" },
+    { name = "boltzgen", marker = "extra == 'boltzgen'", specifier = ">=0.3,<0.4" },
     { name = "dnachisel" },
     { name = "evcouplings", marker = "extra == 'evcouplings'" },
     { name = "evmutation2", marker = "extra == 'evmutation2'" },
@@ -952,7 +1004,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'esm2'" },
     { name = "umap-learn", marker = "extra == 'umap'" },
 ]
-provides-extras = ["evmutation2", "evcouplings", "esm2", "mpnn", "boltz2fold", "boltz2fold-cuda", "umap", "gpytorch", "notebooks"]
+provides-extras = ["evmutation2", "evcouplings", "esm2", "mpnn", "boltz2fold", "boltz2fold-cuda", "boltzgen", "umap", "gpytorch", "notebooks"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1327,6 +1379,22 @@ wheels = [
 ]
 
 [[package]]
+name = "hydride"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "biotite" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/63/a2/d600d62ea1f551002503066576cd45a7bc478da1acdc44c8796d5b05dc19/hydride-1.2.3.tar.gz", hash = "sha256:d1d06dcfb4c4957f109bd2445a115021cf69ff7c1639cb3f96961c58b38c6453", size = 293435, upload-time = "2024-11-04T11:37:06.648Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/fb/6163b0f4f6b89daa9045bf15fd2546ce43e717614116a477c7a40b7d73b7/hydride-1.2.3-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:3884f4969f2df7237e5bc8c82e47026b6c4ba91de3bbc546b5ac938b4365bac5", size = 451179, upload-time = "2024-11-04T11:36:58.665Z" },
+    { url = "https://files.pythonhosted.org/packages/87/23/409e5c2b1cfaf918c4d9c84d7a3a9f930e293e05affc6b5d020d08b0a9de/hydride-1.2.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2b7221eceb732539e42419c6612e5f9c6a33074ad0547e5048d0d5c38a23734c", size = 440277, upload-time = "2024-11-04T11:37:00.204Z" },
+    { url = "https://files.pythonhosted.org/packages/73/d4/7ca768b20e6d62ee0c967c3e770ca9bf720b396f03111ccaf230e94a023c/hydride-1.2.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:76ecdf1cebe6042549fa4580ee829670c472563a8b66b25cb74c48d4e0f1e2d2", size = 1186352, upload-time = "2024-11-04T11:37:04.144Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/2e/9095f2ba3da50db53e21db7d93a85e8f96c0ebb7eb43f375e81596f46e32/hydride-1.2.3-cp312-cp312-win_amd64.whl", hash = "sha256:051de12202d675e551b741e9f1734f375b504bd63486c5aa8b565f89d20c444d", size = 422029, upload-time = "2024-11-04T11:37:05.247Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.18"
 source = { registry = "https://pypi.org/simple" }
@@ -1629,6 +1697,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/27/98/a29133b4728671a175f7d616fab8b1c6e1d8c269d1523581d3160697bfb1/llvmlite-0.48.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1d9f952dff6c350c529997423d4fa43abae9722a884ac7ffafc37a3af676e7db", size = 59890119, upload-time = "2026-07-01T18:42:33.88Z" },
     { url = "https://files.pythonhosted.org/packages/1a/cf/7aac11a1f1c7ec54b60c7f6814e87561fb6b55b2f290455d7941eb113420/llvmlite-0.48.0-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:054aa7d46595935565f276cf0c1659b4f10929c996dd4a606875fae26fba2a23", size = 58343460, upload-time = "2026-07-01T18:42:29.545Z" },
     { url = "https://files.pythonhosted.org/packages/db/41/b96f440c7df5ebba07872cad4e30fbc3560387755b1ea0b629adb76d5ca8/llvmlite-0.48.0-cp314-cp314t-win_amd64.whl", hash = "sha256:d0b3c61aac83b42fb48cc96bffbf57c81b82b2aa92276b7ed6420c814629a99a", size = 42986383, upload-time = "2026-07-01T18:42:37.544Z" },
+]
+
+[[package]]
+name = "logomaker"
+version = "0.8.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/22/07/21b30aa773a38df7fa15e9bf8afa85594633c0ba014f9acd7c01dacc2cd6/logomaker-0.8.7.tar.gz", hash = "sha256:63783ce6e24449d6f1f01ce29c4ae1b91f6e54bc198e5da40ad18fcd0efc3302", size = 13176745, upload-time = "2025-03-25T19:08:25.727Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/1f/9be29e34615a4325a0ff6da18c55994cb546dcff4423c91f80f101a9858c/logomaker-0.8.7-py3-none-any.whl", hash = "sha256:8a65a5e5136a08823d199fbb5a9443674062a1c223236301accde19b0e401762", size = 13186440, upload-time = "2025-03-25T19:08:23.12Z" },
 ]
 
 [[package]]
@@ -2155,6 +2237,7 @@ dependencies = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/a2/c96163a0fff1839c0c9548bbdeae7b853b867009e33b9b9264adc238b1cf/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:5572131a59c3eebeeb1c4c8144f772d49372c20124916e072a0e3fc30df421d5", size = 575012079, upload-time = "2026-04-08T18:51:47.303Z" },
     { url = "https://files.pythonhosted.org/packages/cb/c0/0a517bfe63ccd3b92eb254d264e28fca3c7cab75d07daea315250fb1bf73/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:e4f53a8ca8c5d6e8c492d0d0a3d565ecb59a751b19cfdaa4f6da0ab2104c1702", size = 581240110, upload-time = "2026-04-08T18:52:31.532Z" },
+    { url = "https://files.pythonhosted.org/packages/20/e2/fc9a0e985249d873150276d5afb02e39a66817fedbf1a385724393e505ed/nvidia_cublas_cu12-12.9.2.10-py3-none-win_amd64.whl", hash = "sha256:623f43027d40d44ceadf0043f002bd25cf353e8f13ce90b9a87057019f560661", size = 553162896, upload-time = "2026-04-08T18:53:10.035Z" },
 ]
 
 [[package]]
@@ -2182,6 +2265,7 @@ source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/85/e4af82cc9202023862090bfca4ea827d533329e925c758f0cde964cb54b7/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4", size = 89568129, upload-time = "2025-06-05T20:02:41.973Z" },
     { url = "https://files.pythonhosted.org/packages/64/eb/c2295044b8f3b3b08860e2f6a912b702fc92568a167259df5dddb78f325e/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:096d4de6bda726415dfaf3198d4f5c522b8e70139c97feef5cd2ca6d4cd9cead", size = 44528905, upload-time = "2025-06-05T20:02:29.754Z" },
+    { url = "https://files.pythonhosted.org/packages/52/de/823919be3b9d0ccbf1f784035423c5f18f4267fb0123558d58b813c6ec86/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-win_amd64.whl", hash = "sha256:72972ebdcf504d69462d3bcd67e7b81edd25d0fb85a2c46d3ea3517666636349", size = 76408187, upload-time = "2025-06-05T20:12:27.819Z" },
 ]
 
 [[package]]
@@ -2405,6 +2489,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "pdbeccdutils"
+version = "0.8.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "gemmi" },
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "requests" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/b0/632f7692b29bdfe95eac7e00ce1c62a868aeaa6e3bd576b4d05c699f6c80/pdbeccdutils-0.8.5.tar.gz", hash = "sha256:1c8dd4168123f4808e6ae1621e146d0afa26ad9ecd5ec07285921e0a56fb274d", size = 121673, upload-time = "2024-05-24T08:45:07.464Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/50/0f2e5da81fa27e4fafae5fb915d6c18e781ca560c6d6677e7f081bf8a6f7/pdbeccdutils-0.8.5-py3-none-any.whl", hash = "sha256:900e3fbf085e0cfdf5371e7f8769a21bbfb050517d62f9a5c8cc5eff5cf266e2", size = 149037, upload-time = "2024-05-24T08:45:05.774Z" },
 ]
 
 [[package]]
@@ -2709,6 +2810,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b0/49/942c3b79878ba928324d1e17c274ed84581db8c0a749b24bcf4cbdf15bd3/pyarrow-24.0.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:d8ddd2768da81d3ee08cfea9b597f4abb4e8e1dc8ae7e204b608d23a0d3ab699", size = 49471890, upload-time = "2026-04-21T10:51:02.439Z" },
     { url = "https://files.pythonhosted.org/packages/76/97/ff71431000a75d84135a1ace5ca4ba11726a231a8007bbb320a4c54075d5/pyarrow-24.0.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:61a3d7eaa97a14768b542f3d284dc6400dd2470d9f080708b13cd46b6ae18136", size = 51932250, upload-time = "2026-04-21T10:51:10.576Z" },
     { url = "https://files.pythonhosted.org/packages/51/be/6f79d55816d5c22557cf27533543d5d70dfe692adfbee4b99f2760674f38/pyarrow-24.0.0-cp314-cp314t-win_amd64.whl", hash = "sha256:c91d00057f23b8d353039520dc3a6c09d8608164c692e9f59a175a42b2ae0c19", size = 28131282, upload-time = "2026-04-21T10:51:16.815Z" },
+]
+
+[[package]]
+name = "pydssp"
+version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "numpy" },
+    { name = "torch" },
+    { name = "tqdm" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/78/9cbcc1c073b9d4918e925af1a059762265dc65004e020511b2a06fbfd020/pydssp-0.9.1-py3-none-any.whl", hash = "sha256:74fb8129c07c1625bb687b80f7e94ae7ebf1277725258d7fc75fc1f3d12a67dc", size = 10266, upload-time = "2025-02-24T23:53:03.681Z" },
 ]
 
 [[package]]

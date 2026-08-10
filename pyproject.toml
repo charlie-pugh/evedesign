@@ -37,8 +37,6 @@ mpnn = ["torch", "prody"]
 # boltz2fold-cuda: adds boltz's [cuda] 
 boltz2fold = ["torch", "boltz>=2.2", "pyyaml"]
 boltz2fold-cuda = ["torch", "boltz[cuda]>=2.2; sys_platform == 'linux'", "pyyaml"]
-# boltzgen: CUDA-12 only — pins cuequivariance_* and
-# numpy==2.0.2, will not install on macOS or CPU-only
 boltzgen = ["boltzgen>=0.3,<0.4"]
 umap = ["umap-learn"]
 gpytorch = ["torch", "gpytorch"]
@@ -85,4 +83,6 @@ exclude_lines = [
 
 [tool.uv]
 override-dependencies = [
-    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64"] },]
+    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64"] },
+    { package = { name = "boltzgen" }, dependencies = ["numpy>=2.0", "numba>=0.64"] },
+]
