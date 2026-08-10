@@ -331,13 +331,18 @@ class MixMHC2Pred(BaseModel, Scorer, MutationScorer, ConditionalMutationScorer):
         scores = np.zeros((len(instances)))
         metadata = [None] * len(instances)
 
+        if self.truncate_rank is not None:
+            t = self.truncate_rank
+        else:
+            t = 100.0
+
         for instance_idx, pos_to_cores in core_map.items():
             # compute weighted sum of allele frequency * log-transformed rank for all cores,
             # apply floor to bound rank range based on # random peptides used for calibration,
             # and sum py core starting position
             pos_to_burden = {
                 pos: sum(
-                    self.alleles[core] * -log10(max(rank, self.floor_rank)) for core, rank in cores.items()
+                    self.alleles[core] * max(0.0, log10(t / max(rank, self.floor_rank))) for core, rank in cores.items()
                 )
                 for pos, cores in pos_to_cores.items()
             }
