@@ -20,7 +20,10 @@ import yaml
 from evedesign.models.boltz.convert_design import (
     _atom_bond_constraints,
     _entity_to_sequence_spec,
+    _parse_single_design,
+    _positions_to_range_spec,
     _secondary_structure_spec,
+    _to_spec_pos,
     parse_design_output,
     system_to_boltzgen_yaml,
 )
@@ -59,6 +62,101 @@ def test_length_from_rep_when_no_range():
 
 def test_falls_back_to_vanilla_range():
     assert _entity_to_sequence_spec(Protein(rep=None, id="binder")) == "80..140"
+
+
+# Position numbering: evedesign first_index -> BoltzGen's 1-based spec
+
+
+@pytest.mark.parametrize("first_index", [1, 20])
+def test_spec_pos_shifts_first_index_to_one(first_index):
+    e = Protein(rep="ACDEFGHIKL", first_index=first_index, id="binder")
+    positions = [first_index, first_index + 4, first_index + 9]
+    assert _to_spec_pos(e, positions, "test") == [1, 5, 10]
+
+
+@pytest.mark.parametrize("first_index", [1, 20])
+def test_spec_pos_agrees_with_boltzgen_parse_range(first_index):
+    # Check the index math against upstream rather than against our
+    # reading of it: every position must land on the same residue
+    parse_range = pytest.importorskip(
+        "boltzgen.data.parse.schema"
+    ).parse_range
+    rep = "ACDEFGHIKL"
+    e = Protein(rep=rep, first_index=first_index, id="binder")
+    for pos in range(first_index, first_index + len(rep)):
+        (spec_pos,) = _to_spec_pos(e, [pos], "test")
+        (offset,) = parse_range(str(spec_pos))  # 0-based into the chain
+        assert rep[offset] == rep[pos - first_index]
+
+
+@pytest.mark.parametrize("bad_pos", [19, 30])
+def test_spec_pos_rejects_positions_outside_the_entity(bad_pos):
+    e = Protein(rep="ACDEFGHIKL", first_index=20, id="binder")
+    with pytest.raises(ValueError, match=r"outside 20\.\.29"):
+        _to_spec_pos(e, [bad_pos], "test")
+
+
+def test_spec_pos_range_form_agrees_with_boltzgen():
+    # Consumers emit collapsed ranges, so check that form too
+    parse_range = pytest.importorskip(
+        "boltzgen.data.parse.schema"
+    ).parse_range
+    e = Protein(rep="ACDEFGHIKL", first_index=20, id="binder")
+    spec = _positions_to_range_spec(
+        _to_spec_pos(e, [24, 25, 26, 29], "test")
+    )
+    assert spec == "5..7,10"
+    assert parse_range(spec) == [4, 5, 6, 9]
+
+
+# MASK in rep: positions that must be designed
+
+
+@pytest.mark.parametrize(
+    "rep,expected",
+    [
+        ("ACD***GHI", "ACD3GHI"),   # masked run in the middle
+        ("***DEFGHI", "3DEFGHI"),   # at the start
+        ("ACDEFG***", "ACDEFG3"),   # at the end
+        ("*CD***GH*", "1CD3GH1"),   # several runs
+        ("*********", "9"),         # fully masked
+        ("ACDEFGHIK", "9"),         # no mask -> whole rep designable
+    ],
+)
+def test_mask_marks_designed_positions(rep, expected):
+    assert _entity_to_sequence_spec(Protein(rep=rep, id="binder")) == expected
+
+
+def test_masked_positions_are_fixed_length_and_numbered():
+    # 3 stars are 3 real positions, numbered from first_index
+    e = Protein(rep="ACD***GHI", first_index=20, id="binder")
+    assert e.positions() == list(range(20, 29))
+    assert _entity_to_sequence_spec(e) == "ACD3GHI"
+
+
+def test_fixed_pos_cannot_name_a_masked_position():
+    e = Protein(rep="ACD***GHI", first_index=20, id="binder")
+    with pytest.raises(ValueError, match=r"fixed_pos \[23\] names masked"):
+        _entity_to_sequence_spec(e, fixed_pos=[23])
+
+
+def test_fixed_pos_alongside_mask_is_allowed_on_defined_residues():
+    e = Protein(rep="ACD***GHI", first_index=20, id="binder")
+    assert _entity_to_sequence_spec(e, fixed_pos=[20, 21, 22]) == "ACD3GHI"
+
+
+def test_mask_routes_an_unselected_entity_to_the_design_emitter(tmp_path):
+    # A masked position has no residue to hold fixed, so the entity is
+    # designed even though entities did not name it, same as fixed_pos.
+    # Emitting it as context would drop the '*' and shorten the chain.
+    system = System([
+        Protein(rep="ACD***GHI", id="motif"),
+        Protein(rep=None, min_length=60, max_length=80, id="binder"),
+    ])
+    spec = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml", entities=[1]
+    ).read_text())
+    assert spec["entities"][0]["protein"]["sequence"] == "ACD3GHI"
 
 
 # Motif scaffolding: letters kept, numbers designed
@@ -218,6 +316,19 @@ def test_secondary_structure_beyond_the_shortest_length():
     assert _secondary_structure_spec(e) == {"helix": "40"}
 
 
+def test_secondary_structure_positions_shift_by_first_index(tmp_path):
+    e = Protein(
+        rep="ACDEFGHIKL", first_index=20,
+        secondary_structure=[
+            SecondaryStructure(pos=24, type="H"),
+            SecondaryStructure(pos=25, type="H"),
+            SecondaryStructure(pos=29, type="E"),
+        ],
+        id="binder",
+    )
+    assert _secondary_structure_spec(e) == {"helix": "5..6", "sheet": "10"}
+
+
 def test_binding_types_collapse_positions_into_ranges(tmp_path):
     system = System([
         Protein(
@@ -249,6 +360,42 @@ def test_interaction_without_positions_covers_the_whole_entity(tmp_path):
     assert entities[0]["protein"]["binding_types"] == {"not_binding": "1..4"}
 
 
+def test_binding_positions_shift_by_first_index(tmp_path):
+    # Same chain residues as the test above, named from first_index=20
+    # instead of 1, so the emitted spec must come out identical:
+    #   evedesign 21,22,23 -> spec 2,3,4 ; evedesign 27 -> spec 8
+    system = System([
+        Protein(
+            rep="MKTAYIAKQR", id="target", first_index=20,
+            interactions=[
+                Interaction(id="avoid", pos=[21, 22, 23], avoid=True),
+                Interaction(id="want", pos=[27]),
+            ],
+        ),
+        Protein(rep=None, min_length=10, id="binder"),
+    ])
+    entities = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml"
+    ).read_text())["entities"]
+    assert entities[0]["protein"]["binding_types"] == {
+        "binding": "8", "not_binding": "2..4",
+    }
+
+
+def test_whole_entity_interaction_spans_from_first_index(tmp_path):
+    # pos=None covers the chain, which runs 20..23 here, not 1..4.
+    # Collecting 1..4 instead would send position 1 to spec -18.
+    system = System([
+        Protein(rep="MKTA", id="target", first_index=20,
+                interactions=[Interaction(id="none", pos=None, avoid=True)]),
+        Protein(rep=None, min_length=10, id="binder"),
+    ])
+    entities = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml"
+    ).read_text())["entities"]
+    assert entities[0]["protein"]["binding_types"] == {"not_binding": "1..4"}
+
+
 def test_cyclic_flag(tmp_path):
     system = System([Protein(rep=None, min_length=10, cyclic=True, id="binder")])
     assert yaml.safe_load(system_to_boltzgen_yaml(
@@ -264,6 +411,27 @@ def test_atom_bonds_become_top_level_constraints(tmp_path):
             atom_bonds=[AtomBond(
                 type="covalent", source_pos=4, source_atom="SG",
                 target_entity_id="target", target_pos=2, target_atom="SG",
+            )],
+        ),
+    ])
+    spec = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml"
+    ).read_text())
+    assert spec["constraints"] == [
+        {"bond": {"atom1": ["B", 4, "SG"], "atom2": ["A", 2, "SG"]}}
+    ]
+
+
+def test_bond_ends_shift_by_their_own_entity(tmp_path):
+    # target starts at 20, binder at 1, so a single global offset would
+    # get one end wrong: source 4 stays 4, target 21 becomes 2
+    system = System([
+        Protein(rep="MCTAYIAKQR", id="target", first_index=20),
+        Protein(
+            rep="AAACAAAAAAAA", min_length=12, max_length=12, first_index=1,
+            atom_bonds=[AtomBond(
+                type="covalent", source_pos=4, source_atom="SG",
+                target_entity_id="target", target_pos=21, target_atom="SG",
             )],
         ),
     ])
@@ -362,6 +530,29 @@ def test_parse_returns_empty_when_the_run_did_not_reach_filtering(tmp_path):
     assert parse_design_output(tmp_path, system) == []
 
 
+def test_design_output_is_renumbered_from_first_index(tmp_path):
+    # BoltzGen numbers output residues from 1; EntityInstance.models must
+    # match the entity's numbering, as Boltz-2 output already does
+    import biotite.structure as struc
+
+    from evedesign.structure import Structure
+
+    atoms = [
+        struc.Atom([i * 3.8, 0.0, 0.0], chain_id="A", res_id=i,
+                   res_name="ALA", atom_name=name, element=el)
+        for i in range(1, 6)
+        for name, el in [("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")]
+    ]
+    cif = tmp_path / "design_spec_0.cif"
+    Structure(struc.array(atoms)).to_file(str(cif), format="cif")
+
+    system = System([Protein(rep="AAAAA", first_index=20, id="binder")])
+    instance = _parse_single_design(cif, system, {"A": 0})
+
+    res_ids = sorted(set(instance[0].models["model_0"].res_df()["res_id"]))
+    assert res_ids == list(range(20, 25))
+
+
 # Round-trip: our YAML through BoltzGen's own parser
 
 MOLDIR = Path(
@@ -404,6 +595,19 @@ def test_roundtrip_motif_yields_the_intended_design_mask(tmp_path):
     mask = target.design_info.res_design_mask[start:end].tolist()
     # 3 designed, E/F/G kept, 4 designed
     assert mask == [True] * 3 + [False] * 3 + [True] * 4
+
+
+def test_roundtrip_mask_yields_the_intended_design_mask(tmp_path):
+    system = System([
+        Protein(rep="MKTAYIAKQR", id="target"),
+        Protein(rep="ACD***GHI", id="binder"),
+    ])
+    _, target = _parse_with_boltzgen(system, tmp_path, entities=[1])
+
+    start, end = _residue_slice(target, 1)
+    mask = target.design_info.res_design_mask[start:end].tolist()
+    # ACD kept, 3 designed, GHI kept -- and 9 residues, not 6
+    assert mask == [False] * 3 + [True] * 3 + [False] * 3
 
 
 def test_roundtrip_secondary_structure_types(tmp_path):

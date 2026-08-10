@@ -22,6 +22,7 @@ import pandas as pd
 import yaml
 from loguru import logger
 
+from evedesign.constants import MASK
 from evedesign.models.boltz.chains import (
     _chain_to_entity_map,
     _get_chain_ids,
@@ -38,7 +39,49 @@ from evedesign.types import EntityPosList
 # INPUT: evedesign System -> BoltzGen design YAML
 
 
-# 1a. Sequence spec (letters fixed, numbers designed)
+# 1a. Length and position primitives, shared by every spec below
+
+
+def _to_spec_pos(
+    entity: Entity,
+    positions: Sequence[int],
+    label: str,
+) -> list[int]:
+    """
+    evedesign positions -> BoltzGen's 1-based spec positions.
+
+    Both sides are one-based, they just differ in origin. evedesign
+    numbers entity positions from entity.first_index, mandatory and
+    >= 1 for biopolymers (system.py:741) and forbidden for ligands,
+    which never carry positional specs. BoltzGen counts from 1 within
+    the chain (parse_range, schema.py:655-682, which rejects a 0), so
+    the mapping is a shift, and the identity when first_index is 1.
+    """
+    length = (
+        entity.max_length
+        or (len(entity.rep) if entity.rep is not None else None)
+        or entity.min_length
+    )
+
+    out = []
+    for pos in positions:
+        spec_pos = int(pos) - entity.first_index + 1
+        if spec_pos < 1 or (
+            length is not None and spec_pos > length
+        ):
+            last = (
+                "?" if length is None
+                else entity.first_index + length - 1
+            )
+            raise ValueError(
+                f"Entity '{entity.id}': {label} position {pos} "
+                f"outside {entity.first_index}..{last}."
+            )
+        out.append(spec_pos)
+    return out
+
+
+# 1b. Sequence spec (letters fixed, numbers designed)
 
 
 def _entity_to_sequence_spec(
@@ -64,38 +107,56 @@ def _entity_to_sequence_spec(
       handled elsewhere)
 
     Resolution order:
-    1. fixed_pos given -> interleaved motif spec built from
-       entity.rep (requires rep; length fixed at len(rep))
-    2. min_length and max_length both set -> "min..max"
-    3. min_length only -> "min"
-    4. max_length only -> "max"
-    5. rep is set -> len(rep) (fixed length matching rep)
-    6. Fallback -> "80..140" (matches BoltzGen's vanilla
+    1. MASK in rep -> masked positions designed, the rest kept.
+       MASK is fixed-length by convention (5 stars are 5 real
+       positions), so length is len(rep).
+    2. fixed_pos given -> those positions kept, the rest designed
+       (requires rep; length fixed at len(rep))
+    3. min_length and max_length both set -> "min..max"
+    4. min_length only -> "min"
+    5. max_length only -> "max"
+    6. rep is set -> len(rep) (fixed length matching rep)
+    7. Fallback -> "80..140" (matches BoltzGen's vanilla
        binder default; emits a warning when triggered)
 
     Parameters
     ----------
     fixed_pos : Sequence[int], optional
-        1-based positions to hold fixed (motif scaffolding).
-        Requires entity.rep, since the fixed residues are
-        taken from it.
+        Positions to hold fixed (motif scaffolding), numbered from
+        entity.first_index. Requires entity.rep, since the fixed
+        residues are taken from it, and may not name a MASK
+        position, which carries no residue to fix.
     """
-    if fixed_pos:
-        if entity.rep is None:
+    rep = list(entity.rep) if entity.rep is not None else None
+    masked = (
+        {i for i, symbol in enumerate(rep, start=1) if symbol == MASK}
+        if rep is not None else set()
+    )
+
+    if masked or fixed_pos:
+        if rep is None:
             raise ValueError(
                 f"Entity '{entity.id}': fixed_pos needs rep, which "
                 "supplies the fixed residues."
             )
-        rep = list(entity.rep)
         length = len(rep)
-        keep = {int(p) for p in fixed_pos}
+        fixed_spec = _to_spec_pos(entity, fixed_pos or [], "fixed_pos")
 
-        out_of_range = sorted(p for p in keep if not 1 <= p <= length)
-        if out_of_range:
+        clash = sorted(
+            ev for ev, spec_pos in zip(fixed_pos or [], fixed_spec)
+            if spec_pos in masked
+        )
+        if clash:
             raise ValueError(
-                f"Entity '{entity.id}': fixed_pos {out_of_range} outside "
-                f"1..{length}."
+                f"Entity '{entity.id}': fixed_pos {clash} names masked "
+                "positions, which carry no residue to fix."
             )
+
+        # MASK marks what must be designed, so it decides the split
+        keep = (
+            set(range(1, length + 1)) - masked
+            if masked else set(fixed_spec)
+        )
 
         # Kept residues emit their letter, designed runs emit their length
         spec: list[str] = []
@@ -130,7 +191,7 @@ def _entity_to_sequence_spec(
     )
     return "80..140"
 
-# 1b. Per-entity conditioning blocks
+# 1c. Per-entity conditioning blocks
 
 # Each helper mirrors one block of BoltzGen's spec parser in
 # boltzgen/data/parse/schema.py; line refs are for boltzgen 0.3.2.
@@ -167,23 +228,6 @@ def _positions_to_range_spec(positions: Sequence[int]) -> str:
     )
 
 
-def _spec_length(entity: Entity) -> int | None:
-    """
-    Residue count for per-residue specs, or None if unknown.
-
-    schema.py:1127-1132 pads a short per-residue string with
-    UNSPECIFIED but raises when it is longer than the sampled
-    chain, so anchor on the shortest length the entity allows.
-    """
-    if entity.rep is not None:
-        return len(entity.rep)
-    if entity.min_length is not None:
-        return entity.min_length
-    if entity.max_length is not None:
-        return entity.max_length
-    return None
-
-
 def _secondary_structure_spec(entity: Entity) -> dict[str, str] | None:
     """
     Secondary structure as {"helix": "10..30"}, or None.
@@ -215,7 +259,10 @@ def _secondary_structure_spec(entity: Entity) -> dict[str, str] | None:
         by_key.setdefault(key, []).append(int(item.pos))
 
     return {
-        k: _positions_to_range_spec(v) for k, v in by_key.items()
+        k: _positions_to_range_spec(
+            _to_spec_pos(entity, v, "secondary_structure")
+        )
+        for k, v in by_key.items()
     }
 
 
@@ -231,7 +278,10 @@ def _binding_types_spec(entity: Entity) -> dict[str, str] | None:
     if not interactions:
         return None
 
-    length = _spec_length(entity)
+    length = (
+        len(entity.rep) if entity.rep is not None
+        else entity.min_length or entity.max_length
+    )
     binding: list[int] = []
     not_binding: list[int] = []
 
@@ -248,7 +298,11 @@ def _binding_types_spec(entity: Entity) -> dict[str, str] | None:
                     f"Entity '{entity.id}': Interaction '{item.id}' "
                     "covers the whole entity but its length is unknown."
                 )
-            target.extend(range(1, length + 1))
+            target.extend(
+                range(
+                    entity.first_index, entity.first_index + length
+                )
+            )
             continue
         target.extend(int(p) for p in item.pos)
 
@@ -261,9 +315,13 @@ def _binding_types_spec(entity: Entity) -> dict[str, str] | None:
 
     spec: dict[str, str] = {}
     if binding:
-        spec["binding"] = _positions_to_range_spec(binding)
+        spec["binding"] = _positions_to_range_spec(
+            _to_spec_pos(entity, binding, "interactions")
+        )
     if not_binding:
-        spec["not_binding"] = _positions_to_range_spec(not_binding)
+        spec["not_binding"] = _positions_to_range_spec(
+            _to_spec_pos(entity, not_binding, "interactions")
+        )
     return spec or None
 
 
@@ -289,7 +347,7 @@ def _attach_conditioning(entity: Entity, inner: dict) -> None:
         inner["cyclic"] = True
 
 
-# 1c. Entity emitters: the two input cases
+# 1d. Entity emitters: the two input cases
 
 def _emit_design_entity(
     entity: Entity,
@@ -457,10 +515,14 @@ def _entity_to_boltzgen_yaml(
     """
     Emit one entity's YAML entry, designed or fixed.
 
-    Ligands always take the ligand: form. fixed_pos yields a spec
-    with digits, which BoltzGen counts as designed (schema.py:879).
+    Ligands always take the ligand: form. fixed_pos and MASK in rep
+    are both per-position design specs, yielding a spec with digits
+    that BoltzGen counts as designed (schema.py:879), so either routes
+    to the design emitter even when entities left the entity out. A
+    masked position has no residue, so fixed is not expressible for it.
     """
-    if entity.type == "ligand" or designed or fixed_pos:
+    masked = entity.rep is not None and MASK in entity.rep
+    if entity.type == "ligand" or designed or fixed_pos or masked:
         if entity.structures and entity.type != "ligand":
             raise ValueError(
                 f"Entity '{entity.id}' has structures, so it cannot be "
@@ -476,7 +538,7 @@ def _entity_to_boltzgen_yaml(
     )
 
 
-# 1d. System level
+# 1e. System level
 
 
 def _atom_bond_constraints(
@@ -497,11 +559,13 @@ def _atom_bond_constraints(
     rather than silently dropped.
     """
     entity_id_to_chain: dict[str, str] = {}
+    entity_by_id: dict[str, Entity] = {}
     pointer = 0
     for entity in system:
         copies = entity.copies if entity.copies is not None else 1
         if entity.id is not None:
             entity_id_to_chain[entity.id] = chain_ids[pointer]
+            entity_by_id[entity.id] = entity
         pointer += copies
 
     constraints: list[dict] = []
@@ -528,18 +592,19 @@ def _atom_bond_constraints(
                     f"Entity '{entity.id}': AtomBond needs explicit "
                     "source_pos and target_pos."
                 )
+            # Each end is numbered against its own entity, so the two
+            # can carry different first_index values
+            (source_pos,) = _to_spec_pos(
+                entity, [bond.source_pos], "AtomBond source_pos"
+            )
+            (target_pos,) = _to_spec_pos(
+                entity_by_id[bond.target_entity_id],
+                [bond.target_pos], "AtomBond target_pos",
+            )
             constraints.append({
                 "bond": {
-                    "atom1": [
-                        source_chain,
-                        int(bond.source_pos),
-                        bond.source_atom,
-                    ],
-                    "atom2": [
-                        target_chain,
-                        int(bond.target_pos),
-                        bond.target_atom,
-                    ],
+                    "atom1": [source_chain, source_pos, bond.source_atom],
+                    "atom2": [target_chain, target_pos, bond.target_atom],
                 }
             })
     return constraints
@@ -668,6 +733,23 @@ def _parse_single_design(
             )
             entity_instances.append(EntityInstance(rep=rep))
             continue
+
+        # BoltzGen numbers output residues from 1; remap to the entity's
+        # first_index, as the Boltz-2 converter does (convert.py:363-368).
+        # Designs are variable length here, so the mapping comes from the
+        # chain's own res_ids rather than len(rep): remap silently drops
+        # any residue the mapping does not cover.
+        if entity.first_index is not None:
+            chains = [
+                chain.remap({
+                    int(res_id): pos
+                    for pos, res_id in enumerate(
+                        chain.res_df()["res_id"],
+                        start=entity.first_index,
+                    )
+                })
+                for chain in chains
+            ]
 
         # Extract sequence from the primary chain
         primary_chain = chains[0]
