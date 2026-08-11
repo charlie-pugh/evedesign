@@ -202,6 +202,13 @@ class Sequences:
     Note: weights are a property of sequence list (relative weights of sequences to each other),
      not of individual sequences on purpose.
     """
+    # The query these sequences are aligned against, in alignment convention
+    # (uppercase match columns, '-' deletions). Only differs from its own
+    # ungapped form when the alignment was built by aligning the query into an
+    # existing frame rather than by searching with it. Set by from_file for
+    # aligned formats; remap_query needs it to know what the columns mean.
+    query: str | None = None
+
     def __init__(
         self,
         seqs: abc.Sequence[Sequence],
@@ -252,12 +259,17 @@ class Sequences:
                     Sequence(seq=seq_str, id=seq_id, type=type)
                 )
 
-        return cls(
+        sequences = cls(
             seqs=seq_list,
             aligned=aligned,
             type=type,
             format=format,
         )
+        
+        if aligned and seq_list:
+            sequences.query = seq_list[0].seq
+
+        return sequences
         
     def remove_inserts(self) -> Self:
         """
@@ -267,12 +279,15 @@ class Sequences:
         if self.format_ == 'fasta':
             raise NotImplementedError(f"remove_inserts is not supported for format: {self.format_}")
         
-        return type(self)(
+        sequences = type(self)(
             seqs=[s.remove_insertions() for s in self.seqs],
             aligned=True,
             weights=self.weights,
             format=self.format_
         )
+        # match columns are unchanged, so the frame still describes them
+        sequences.query = self.query
+        return sequences
 
     def compute_weights(
         self,
@@ -322,19 +337,21 @@ class Sequences:
 
         weights = [float(w) for w in 1.0 / num_cluster_members]
 
-        return type(self)(
+        sequences = type(self)(
             seqs=self.seqs,
             aligned=self.aligned,
             type=self.type_,
             weights=weights,
             format=self.format_,
         )
+        # only the weights change, so the frame still describes the columns
+        sequences.query = self.query
+        return sequences
 
     def remap_query(
         self,
         old_query: str | RepSequence,
         new_query: str | RepSequence,
-        prepend_new_query: bool = True,
     ) -> "Sequences":
         """
         Remap this alignment to a new query sequence.
@@ -348,24 +365,17 @@ class Sequences:
         Parameters
         ----------
         old_query
-            The query that produced the current alignment (the system rep or
-            whatever was used to populate self).
+            The query that produced the current alignment (typically
+            ``self.query``).
         new_query
             The new query in A3M convention: uppercase for alignment columns,
             '-' for deletions, lowercase for insertions.
-        prepend_new_query
-            If True (default), the new query is inserted as the first sequence
-            of the returned alignment. Most tools expect the query in the first
-            position by convention, so this saves callers from prepending it
-            themselves. The query is stored in ungapped, uppercase form (gaps
-            removed, insertions uppercased) — i.e. the actual designed residues.
 
         Returns
         -------
         Sequences
-            A new Sequences containing the same hits with columns remapped,
-            optionally with the new query as the first sequence.
-            Format is preserved.
+            A new Sequences containing the same hits with columns remapped, with
+            ``query`` set to the new query. Format is preserved.
 
         Raises
         ------
@@ -455,21 +465,16 @@ class Sequences:
                 )
             )
 
-        if prepend_new_query:
-            # Store the query as the actual designed residues: gaps (deletions)
-            # dropped and insertions uppercased, matching the match columns the
-            # remapped hits are now aligned to.
-            query_residues = new_q.replace(GAP, "").upper()
-            seq_cls = type(remapped[0]) if remapped else Sequence
-            query_type = remapped[0].type_ if remapped else "protein"
-            remapped.insert(0, seq_cls(seq=query_residues, type=query_type))
-
-        return type(self)(
+        sequences = type(self)(
             seqs=remapped,
             aligned=True,
             weights=self.weights,
             format=self.format_,
         )
+        # The remapped hits span the new query's residues, not its columns:
+        # gaps (deletions) dropped and insertions uppercased.
+        sequences.query = new_q.replace(GAP, "").upper()
+        return sequences
 
     def serialize(self) -> dict[str, Any]:
         """
@@ -485,6 +490,7 @@ class Sequences:
             "type": self.type_,
             "weights": self.weights,
             "format": self.format_,
+            "query": self.query,
         }
 
     @classmethod
@@ -502,13 +508,15 @@ class Sequences:
         -------
         Deserialized Sequence object
         """
-        return cls(
+        sequences = cls(
             seqs=[Sequence.deserialize(seq) for seq in serialized_seqs["seqs"]],
             aligned=serialized_seqs.get("aligned"),
             type=serialized_seqs.get("type"),
             weights=serialized_seqs.get("weights"),
             format=serialized_seqs.get("format"),
         )
+        sequences.query = serialized_seqs.get("query")
+        return sequences
 
     def dealign(self) -> Self:
         # remove gaps from sequences and return new

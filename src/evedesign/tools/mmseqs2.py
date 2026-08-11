@@ -487,7 +487,10 @@ def add_sequences_mmseqs2(
             seqs.extend(_sequences_from_entries(unpaired_entries).seqs)
 
         if seqs:
-            system[entity_idx].sequences = Sequences(seqs, aligned=True, format="a3m")
+            sequences = Sequences(seqs, aligned=True, format="a3m")
+            # the hits are aligned against the rep that was searched with
+            sequences.query = rep
+            system[entity_idx].sequences = sequences
 
     return system
 
