@@ -159,7 +159,6 @@ class MotifRestraint(BaseModel, Scorer, MutationScorer, ConditionalMutationScore
         if self.exposure_source == "system":
             self._sasa_map = {}
             for entity_idx, entity in enumerate(self._system):
-                print(entity_idx, entity)
                 self._sasa_map[entity_idx] = self._entity_sasa_map(
                     entity.structures
                 )
