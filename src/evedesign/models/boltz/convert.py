@@ -100,7 +100,7 @@ def _write_a3m(
         if old_query_str != new_query:
             try:
                 sequences = entity.sequences.remap_query(
-                    old_query_str, new_query, prepend_new_query=False
+                    old_query_str, new_query, prepend_new_query=True
                 )
             except (ValueError, NotImplementedError) as exc:
                 logger.warning(
@@ -156,7 +156,7 @@ def _write_csv(
         if old_query_str != new_query:
             try:
                 sequences = entity.sequences.remap_query(
-                    old_query_str, new_query, prepend_new_query=False
+                    old_query_str, new_query, prepend_new_query=True
                 )
             except (ValueError, NotImplementedError) as exc:
                 logger.warning(

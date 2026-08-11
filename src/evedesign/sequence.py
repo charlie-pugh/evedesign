@@ -6,6 +6,7 @@ from typing import Any, Literal, Self, TextIO
 from pathlib import Path
 from collections import abc
 
+from loguru import logger
 import numpy as np
 from numba import jit, prange, get_num_threads, set_num_threads
 
@@ -385,6 +386,8 @@ class Sequences:
         # accept both str and RepSequence (numpy U1 array)
         old_q = "".join(old_query)
         new_q = "".join(new_query)
+
+        logger.info(f"Remapping query from {old_q} to {new_q}")
 
         # match columns = uppercase (aligned) or gap; lowercase = insert (0 cols)
         def match_columns(s: str) -> int:
