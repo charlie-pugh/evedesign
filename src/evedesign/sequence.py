@@ -202,10 +202,6 @@ class Sequences:
     Note: weights are a property of sequence list (relative weights of sequences to each other),
      not of individual sequences on purpose.
     """
-    # The query these sequences are aligned against. Set by from_file for
-    # aligned formats; remap_query needs it to know what the columns mean.
-    query: str | None = None
-
     def __init__(
         self,
         seqs: abc.Sequence[Sequence],
@@ -213,13 +209,17 @@ class Sequences:
         type: BioPolymer = "protein",  # noqa
         weights: abc.Sequence[float] | None = None,
         format: Literal["a3m", "a2m", "fasta", "fasta_unaligned"] | None = None,  # noqa
+        query: str | None = None
     ):
         self.seqs = seqs
         self.aligned = aligned
         self.type_ = type
         self.weights = weights
         self.format_ = format
-        # TODO: check alignment integrity and/or autodetect properties/format
+
+        # The query these sequences are aligned against. Set by from_file for
+        # aligned formats; remap_query needs it to know what the columns mean.
+        self.query = query
 
     @classmethod
     def from_file(
@@ -256,15 +256,18 @@ class Sequences:
                     Sequence(seq=seq_str, id=seq_id, type=type)
                 )
 
+        if aligned and seq_list:
+            query = seq_list[0].seq
+        else:
+            query = None
+
         sequences = cls(
             seqs=seq_list,
             aligned=aligned,
             type=type,
             format=format,
+            query=query,
         )
-        
-        if aligned and seq_list:
-            sequences.query = seq_list[0].seq
 
         return sequences
         
@@ -280,10 +283,10 @@ class Sequences:
             seqs=[s.remove_insertions() for s in self.seqs],
             aligned=True,
             weights=self.weights,
-            format=self.format_
+            format=self.format_,
+            query=self.query,  # match columns are unchanged
         )
-        # match columns are unchanged, so the frame still describes them
-        sequences.query = self.query
+
         return sequences
 
     def compute_weights(
@@ -340,16 +343,16 @@ class Sequences:
             type=self.type_,
             weights=weights,
             format=self.format_,
+            query=self.query  # only the weights change, so the frame still describes the columns
         )
-        # only the weights change, so the frame still describes the columns
-        sequences.query = self.query
+
         return sequences
 
     def remap_query(
         self,
         old_query: str | RepSequence,
         new_query: str | RepSequence,
-    ) -> "Sequences":
+    ) -> Self:
         """
         Remap this alignment to a new query sequence.
 
@@ -467,10 +470,11 @@ class Sequences:
             aligned=True,
             weights=self.weights,
             format=self.format_,
+            # The remapped hits span the new query's residues, not its columns:
+            # gaps (deletions) dropped and insertions uppercased.
+            query=new_q.replace(GAP, "").upper()
         )
-        # The remapped hits span the new query's residues, not its columns:
-        # gaps (deletions) dropped and insertions uppercased.
-        sequences.query = new_q.replace(GAP, "").upper()
+
         return sequences
 
     def serialize(self) -> dict[str, Any]:
@@ -511,8 +515,9 @@ class Sequences:
             type=serialized_seqs.get("type"),
             weights=serialized_seqs.get("weights"),
             format=serialized_seqs.get("format"),
+            query=serialized_seqs.get("query")
         )
-        sequences.query = serialized_seqs.get("query")
+
         return sequences
 
     def dealign(self) -> Self:
