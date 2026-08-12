@@ -202,10 +202,7 @@ class Sequences:
     Note: weights are a property of sequence list (relative weights of sequences to each other),
      not of individual sequences on purpose.
     """
-    # The query these sequences are aligned against, in alignment convention
-    # (uppercase match columns, '-' deletions). Only differs from its own
-    # ungapped form when the alignment was built by aligning the query into an
-    # existing frame rather than by searching with it. Set by from_file for
+    # The query these sequences are aligned against. Set by from_file for
     # aligned formats; remap_query needs it to know what the columns mean.
     query: str | None = None
 
