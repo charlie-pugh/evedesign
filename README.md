@@ -72,16 +72,22 @@ We are happy to help if you have any questions!
 
 ### Biomolecular models, embedders and restraints
 
-| Name                        | Class                                                  | Interfaces                           | 
-|-----------------------------|--------------------------------------------------------|--------------------------------------|
-| EVmutation2                 | `evedesign.models.evmutation2.EVmutation2`             | `Generator`, `Scorer`, `Transformer` |
-| LigandMPNN/ProteinMPNN      | `evedesign.models.mpnn.LigandMPNN`                     | `Generator`, `Scorer`                |
-| ESM-2                       | `evedesign.models.esm2.ESM2`                           | `Transformer` `Scorer`               |
-| Boltz-2                     | `evedesign.models.boltzfold.BoltzFoldTransformer`      | `Transformer`, `Scorer`              |
-| EVcouplings                 | `evedesign.models.evcouplings.EVcouplings`             | `Scorer`                             |
-| Sequence distance restraint | `evedesign.restraints.seq_dist.LinearSeqDistRestraint` | `Scorer`                             |
-| One-hot encoding embedder   | `evedesign.models.embedders.OneHotEmbedder`            | `Transformer`                        |
-| BLOSUM embedder             | `evedesign.models.embedders.BLOSUMEmbedder`            | `Transformer`                        |
+Note that most methods listed as `Scorer` also support the `MutationScorer` and `ConditionalMutationScorer` interfaces. 
+
+| Name                        | Class                                                            | Interfaces                           | 
+|-----------------------------|------------------------------------------------------------------|--------------------------------------|
+| EVmutation2                 | `evedesign.models.evmutation2.EVmutation2`                       | `Generator`, `Scorer`, `Transformer` |
+| LigandMPNN/ProteinMPNN      | `evedesign.models.mpnn.LigandMPNN`                               | `Generator`, `Scorer`                |
+| ESM-2                       | `evedesign.models.esm2.ESM2`                                     | `Transformer` `Scorer`               |
+| Boltz-2                     | `evedesign.models.boltzfold.BoltzFoldTransformer`                | `Transformer`, `Scorer`              |
+| EVcouplings                 | `evedesign.models.evcouplings.EVcouplings`                       | `Scorer`                             |
+| MixMHC2pred                 | `evedesign.models.immunogenicity.MixMHC2Pred`                    | `Scorer`                             |
+| One-hot encoding embedder   | `evedesign.models.embedders.OneHotEmbedder`                      | `Transformer`                        |
+| BLOSUM embedder             | `evedesign.models.embedders.BLOSUMEmbedder`                      | `Transformer`                        |
+| Sequence distance restraint | `evedesign.restraints.seq_dist.LinearSeqDistRestraint`           | `Scorer`                             |
+| Exposed sequence motifs     | `evedesign.restraints.motif.ExposedMotifRestraint`               | `Scorer`                             |
+| Isoelectric point restraint | `evedesign.restraints.physicochemical.IsoelectricPointRestraint` | `Scorer`                             |
+| Molecular weight restraint  | `evedesign.restraints.physicochemical.MolecularWeightRestraint`  | `Scorer`                             |
 
 ### Supervised models
 
