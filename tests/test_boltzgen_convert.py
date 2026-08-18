@@ -553,6 +553,44 @@ def test_design_output_is_renumbered_from_first_index(tmp_path):
     assert res_ids == list(range(20, 25))
 
 
+def _write_design_cif(path, n_res=5, chain="A"):
+    import biotite.structure as struc
+    from evedesign.structure import Structure
+
+    atoms = [
+        struc.Atom([i * 3.8, 0.0, 0.0], chain_id=chain, res_id=i,
+                   res_name="ALA", atom_name=name, element=el)
+        for i in range(1, n_res + 1)
+        for name, el in [("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")]
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Structure(struc.array(atoms)).to_file(str(path), format="cif")
+
+
+@pytest.mark.parametrize(
+    "cif_name,design_id",
+    [
+        ("rank01_design_spec_5.cif", "design_spec_5"),  # batch of designs
+        ("rank1_design_spec.cif", "design_spec"),       # num_designs=1
+    ],
+)
+def test_parses_both_ranked_filename_forms(tmp_path, cif_name, design_id):
+    # BoltzGen prepends rank<N>_ to whatever it named the design
+    # (filter.py:567), and drops the _<M> index for a single design
+    final = tmp_path / "final_ranked_designs" / "final_10_designs"
+    _write_design_cif(final / cif_name)
+    (tmp_path / "final_ranked_designs" / "final_designs_metrics_10.csv").write_text(
+        f"id,iptm,complex_plddt\n{design_id},0.8,0.9\n"
+    )
+
+    system = System([Protein(rep="AAAAA", id="binder")])
+    instances = parse_design_output(tmp_path, system)
+
+    assert len(instances) == 1
+    assert instances[0].metadata["boltzgen_design_id"] == design_id
+    assert instances[0].score == 0.8
+
+
 # Round-trip: our YAML through BoltzGen's own parser
 
 MOLDIR = Path(

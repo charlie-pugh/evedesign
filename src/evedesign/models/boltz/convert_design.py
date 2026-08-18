@@ -11,7 +11,6 @@ NOTE: This module is the only place that knows about
 BoltzGen file conventions. boltzgen.py calls these
 functions without importing boltzgen directly.
 """
-import copy
 import re
 from itertools import groupby
 from pathlib import Path
@@ -878,9 +877,12 @@ def _parse_diverse_set(
             f"{ranked_dir}"
         )
 
-    # Parse each rank-prefixed CIF
+    # Parse each rank-prefixed CIF. BoltzGen prepends "rank<N>_" to
+    # whatever it already named the design (filter.py:567), which is
+    # "design_spec_<M>" for a batch but plain "design_spec" for a single
+    # design, so the id is matched loosely rather than assumed.
     rank_pattern = re.compile(
-        r"rank(\d+)_(design_spec_\d+)\.cif$"
+        r"rank(\d+)_(.+)\.cif$"
     )
 
     cif_entries = []
@@ -898,8 +900,7 @@ def _parse_diverse_set(
 
     if not cif_entries:
         logger.warning(
-            f"No rank<N>_design_spec_<M>.cif files in "
-            f"{final_designs_dir}"
+            f"No rank<N>_*.cif files in {final_designs_dir}"
         )
         return []
 
@@ -1050,46 +1051,3 @@ def parse_design_output(
     return _parse_diverse_set(
         ranked_dir, system, chain_to_entity
     )
-
-# 2d. Feeding designs back in as templates
-
-
-def system_with_design_structures(
-    system: System,
-    instance: SystemInstance,
-    model_key: str = "model_0",
-    structure_key: str = "input",
-) -> System:
-    """
-    Copy system with each entity's structures and rep taken from
-    instance, bridging generated structures (EntityInstance.models)
-    into the template channel that LigandMPNN and BoltzFold read at
-    build() time.
-
-    Assumes instance numbering matches system numbering. That holds
-    for BoltzGen output, whose handles_insertions and
-    handles_deletions are both False, but not for generators that
-    design insertions: the promoted rep would be a different length
-    while interactions, secondary_structure and atom_bonds still
-    carry the original positions.
-
-    Entities with no model under model_key keep their structures.
-    """
-    new_entities = []
-    for entity_idx, template_entity in enumerate(system):
-        new_entity = copy.copy(template_entity)
-        entity_instance = instance[entity_idx]
-
-        models = entity_instance.models
-        if models is not None and model_key in models:
-            model = models[model_key]
-            # a list is homo-oligomer copies of the chain
-            new_entity.structures = {
-                structure_key: model[0] if isinstance(model, list) else model
-            }
-        if entity_instance.rep is not None:
-            new_entity.rep = entity_instance.rep.copy()
-
-        new_entities.append(new_entity)
-
-    return type(system)(new_entities)
