@@ -27,6 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+eve = ["torch", "tqdm"]
 evmutation2 = ["torch", "evmutation2"]
 esm2 = ["torch", "transformers"]
 mpnn = ["torch", "prody"]

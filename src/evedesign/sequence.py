@@ -271,6 +271,16 @@ class Sequences:
         #  cf. https://github.com/debbiemarkslab/EVcouplings/blob/75bfc9677fc9412ddb7089a9f26c7a01f65bfa12/evcouplings/align/alignment.py#L236
         if self.format_ == "a2m":
             return self
+        elif self.format_ == "a3m":
+            # a3m match-state columns are consistent width across rows by definition,
+            # so dropping inserts (lowercase/'.') yields a valid a2m alignment directly
+            return type(self)(
+                seqs=[s.remove_insertions() for s in self.seqs],
+                aligned=True,
+                type=self.type_,
+                weights=self.weights,
+                format="a2m",
+            )
         else:
             raise NotImplementedError(
                 "Conversion into a2m format not yet implemented"
