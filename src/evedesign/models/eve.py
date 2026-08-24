@@ -2,14 +2,6 @@
 Wrapper class around EVE (Evolutionary model of Variant Effects)
 
 EVE is a family-specific Bayesian VAE trained on an MSA of homologs (Frazer et al. 2021).
-It is built for variant effect prediction rather than design, so this wrapper exposes only
-building (training/loading the VAE) and scoring; it does not implement Generator.
-
-The per-sequence score is the (sample-averaged) ELBO, which approximates the model
-log-likelihood. Mutation scores from the MutationScorer interface are therefore log-odds
-relative to the provided instance (ELBO_mutant - ELBO_wt): beneficial > 0, damaging < 0.
-This is the *negative* of EVE's published "evolutionary index" (ELBO_wt - ELBO_mutant,
-higher = more pathogenic); negate the mutation scores to recover the evolutionary index.
 """
 import os
 import copy
