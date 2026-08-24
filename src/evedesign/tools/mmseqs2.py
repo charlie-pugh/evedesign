@@ -10,7 +10,7 @@ from typing import Literal, Sequence as SequenceType
 from pathlib import Path
 from loguru import logger
 
-from evedesign.__about__ import __version__
+from evedesign import __version__
 from evedesign.tools.api_utils import _request_with_retries
 from evedesign.system import System, Entity
 from evedesign.sequence import read_fasta, Sequence, Sequences
@@ -487,7 +487,8 @@ def add_sequences_mmseqs2(
             seqs.extend(_sequences_from_entries(unpaired_entries).seqs)
 
         if seqs:
-            system[entity_idx].sequences = Sequences(seqs, aligned=True, format="a3m")
+            sequences = Sequences(seqs, aligned=True, format="a3m", query=rep)
+            system[entity_idx].sequences = sequences
 
     return system
 

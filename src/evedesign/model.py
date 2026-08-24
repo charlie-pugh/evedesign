@@ -317,11 +317,13 @@ class Scorer(_Core):
 def assign_scores_to_instances(
     instances: Sequence[SystemInstance],
     scores: Sequence[float],
+    confidences: Sequence[float] | None = None,
 ):
     """
     Helper function to assign a sequence of scores to a sequence of instances, creating
     a shallow copy of each instance and its entities. All sequences must have the same length.
-    The confidence attribute will be set to None.
+
+    The confidence attribute will be set to the corresponding value in confidences if provided
 
     Parameters
     ----------
@@ -329,15 +331,24 @@ def assign_scores_to_instances(
         Sequence of instances to which scores will be assigned
     scores
         Sequence of scores to assign, must have same length as instances
+    confidences
+        Optional sequence of values to assign to the confidence attribute of each instance.
+        If None (default), the confidence attribute is set to None. If provided, must have same length
+        as instances.
 
     Returns
     -------
     scored_instances
-        Sequence of instances with assigned scores
+        Sequence of instances with assigned scores (and confidences if applicable)
     """
     if len(scores) != len(instances):
         raise ValueError(
             "Length of scores does not match length of instances"
+        )
+
+    if confidences is not None and len(confidences) != len(instances):
+        raise ValueError(
+            "Length of confidences does not match length of instances"
         )
 
     # create shallow copy of instances
@@ -345,9 +356,9 @@ def assign_scores_to_instances(
         inst.copy() for inst in instances
     ]
 
-    for inst, score in zip(instances_scored, scores):
+    for idx, (inst, score) in enumerate(zip(instances_scored, scores)):
         inst.score = score
-        inst.confidence = None
+        inst.confidence = confidences[idx] if confidences is not None else None
 
     return instances_scored
 
@@ -614,8 +625,24 @@ class MutationScorer(_Core, ABC):
         # build into dataframe and return
         series = pd.Series(scores)
 
+        # update ref on inserts so they end up in the same row in dataframe
+        pos_to_ref = {
+            (mutant[0].entity, mutant[0].pos): mutant[0].ref
+            for mutant in mutants if mutant[0].ref != ""
+        }
+
+        mutants_updated_ref = [
+            (
+                mutant[0].entity,
+                mutant[0].pos,
+                pos_to_ref.get((mutant[0].entity, mutant[0].pos), ""),
+                mutant[0].to,
+            )
+            for mutant in mutants
+        ]
+
         series.index = pd.MultiIndex.from_tuples(
-            [mutant[0] for mutant in mutants], names=["entity", "pos", "ref", "to"]
+           mutants_updated_ref, names=["entity", "pos", "ref", "to"]
         )
 
         # make sure column index (symbols) has right order
