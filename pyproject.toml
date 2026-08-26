@@ -1,10 +1,10 @@
 [build-system]
-requires = ["uv_build>=0.11.22,<0.12.0"]
+requires = ["uv_build>=0.11.22,<=0.12.6"]
 build-backend = "uv_build"
 
 [project]
 name = "evedesign"
-version = "0.0.5"
+version = "0.0.6"
 description = ''
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,7 +25,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "numpy", "pandas", "loguru", "biotite", "biopython", "dnachisel", "scikit-learn", "numba", "scipy", "requests"
+  "numpy", "pandas", "loguru", "biotite", "biopython>=1.85", "dnachisel", "scikit-learn", "numba", "scipy", "requests"
 ]
 
 [project.optional-dependencies]
@@ -87,4 +87,4 @@ exclude_lines = [
 
 [tool.uv]
 override-dependencies = [
-    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64"] },]
+    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64", "biopython>=1.85"] },]
