@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build>=0.11.22"]
+requires = ["uv_build>=0.11.22,<=0.12.6"]
 build-backend = "uv_build"
 
 [project]
@@ -87,4 +87,4 @@ exclude_lines = [
 
 [tool.uv]
 override-dependencies = [
-    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64"] },]
+    { package = { name = "boltz" }, dependencies = ["numpy>=2.0", "scipy>=1.14", "numba>=0.64", "biopython>=1.85"] },]
