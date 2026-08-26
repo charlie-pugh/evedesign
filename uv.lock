@@ -911,6 +911,9 @@ mpnn = [
 notebooks = [
     { name = "py3dmol" },
 ]
+promb = [
+    { name = "promb" },
+]
 umap = [
     { name = "umap-learn" },
 ]
@@ -937,6 +940,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "prody", marker = "extra == 'mpnn'" },
+    { name = "promb", marker = "extra == 'promb'" },
     { name = "py3dmol", marker = "extra == 'notebooks'" },
     { name = "pyyaml", marker = "extra == 'boltz2fold'" },
     { name = "pyyaml", marker = "extra == 'boltz2fold-cuda'" },
@@ -952,7 +956,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'esm2'" },
     { name = "umap-learn", marker = "extra == 'umap'" },
 ]
-provides-extras = ["evmutation2", "evcouplings", "esm2", "mpnn", "boltz2fold", "boltz2fold-cuda", "umap", "gpytorch", "notebooks"]
+provides-extras = ["evmutation2", "evcouplings", "esm2", "mpnn", "promb", "boltz2fold", "boltz2fold-cuda", "umap", "gpytorch", "notebooks"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2521,6 +2525,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c2/af/c108866c452eda1132f3d6b3cb6be2ae8430c97e9309f38ca9dbd430af37/proglog-0.1.12.tar.gz", hash = "sha256:361ee074721c277b89b75c061336cb8c5f287c92b043efa562ccf7866cda931c", size = 8794, upload-time = "2025-05-09T14:36:18.316Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/1b/f7ea6cde25621cd9236541c66ff018f4268012a534ec31032bcb187dc5e7/proglog-0.1.12-py3-none-any.whl", hash = "sha256:ccaafce51e80a81c65dc907a460c07ccb8ec1f78dc660cfd8f9ec3a22f01b84c", size = 6337, upload-time = "2025-05-09T14:36:16.798Z" },
+]
+
+[[package]]
+name = "promb"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pandas" },
+    { name = "scipy" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e1/bc/8a78638f65becbdc5f22c6766db489726bcaeb3720f10f3b8c03e5effd9f/promb-1.0.2.tar.gz", hash = "sha256:b388f42a25b3945d6c51c2462cae2299627ac2ff301fd69070777cf00990c140", size = 39342567, upload-time = "2025-05-17T13:31:39.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/b8/6315b46baf27331c4117ceb7aa3ce2c26fee9dd20719378e53717f7033a9/promb-1.0.2-py3-none-any.whl", hash = "sha256:7c14f54ccde18975fced953c54f7acd3c55918b2b14b80f20a0b35f3c721b46f", size = 39339317, upload-time = "2025-05-17T13:31:32.825Z" },
 ]
 
 [[package]]

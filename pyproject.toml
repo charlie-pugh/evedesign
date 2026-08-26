@@ -33,6 +33,7 @@ evmutation2 = ["torch", "evmutation2"]
 evcouplings = ["evcouplings"]
 esm2 = ["torch", "transformers"]
 mpnn = ["torch", "prody"]
+promb = ["promb"]
 # boltz2fold: CPU/MPS install (default).
 # boltz2fold-cuda: adds boltz's [cuda] extra, which pulls
 # cuequivariance_ops_cu12, cuequivariance_ops_torch_cu12, and
