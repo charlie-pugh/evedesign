@@ -24,7 +24,7 @@ from evedesign.system import System, SystemInstance, EntityInstance
 from evedesign.constants import GAP
 from evedesign.utils import status_start, status_done
 from evedesign.types import DeviceType, StatusCallback, BatchSize
-from .params import DEFAULT_MODEL_PARAMETERS
+from .evemodel.params import DEFAULT_MODEL_PARAMETERS
 
 torch = None
 DataLoader = None
@@ -42,7 +42,7 @@ def _import_eve() -> bool:
     try:
         import torch
         from torch.utils.data import DataLoader
-        from . import VAE_model, data_utils  # noqa
+        from .evemodel import VAE_model, data_utils  # noqa
 
         return True
     except ImportError:
@@ -76,7 +76,7 @@ class EVE(BaseModel, Scorer, MutationScorer):
 
     def __init__(
         self,
-        model_parameters: str | PathLike | dict | None = None,
+        model_hyperparameters: str | PathLike | dict | None = None,
         model_checkpoint_path: str | PathLike | None = None,
         theta: float = 0.2,
         use_weights: bool = True,
@@ -94,14 +94,14 @@ class EVE(BaseModel, Scorer, MutationScorer):
 
         Parameters
         ----------
-        model_parameters
+        model_hyperparameters
             VAE hyperparameters (encoder/decoder/training): a path to a JSON file in the
             format of EVE's default parameters, or a parsed dict. If None, uses EVE's
             defaults.
         model_checkpoint_path
             Path to a trained EVE VAE checkpoint. If it exists, it is loaded in build()
             (no training); otherwise the VAE is trained on the MSA and saved to this path.
-            If None, the model is trained and stored to a temporary file.
+            If None, the trained model is retained in this object without being saved.
         theta
             MSA sequence re-weighting threshold (EVE default 0.2; viruses ~0.01).
         use_weights
@@ -112,7 +112,9 @@ class EVE(BaseModel, Scorer, MutationScorer):
             when the System's Sequences object has no weights.
         preprocess_msa
             Run EVE's MSA pre-processing (drop fragment sequences and low-occupancy
-            columns). The resulting focus columns must match the target rep length.
+            columns). Focus columns may be a subset of the target positions, but sequence
+            representations remain the full target length; excluded positions are ignored
+            during scoring.
         num_samples
             Number of samples used to approximate the ELBO when scoring (EVE uses 20000).
             Higher is more accurate but slower.
@@ -148,17 +150,19 @@ class EVE(BaseModel, Scorer, MutationScorer):
         self.available = True
 
         # resolve model hyperparameters
-        if model_parameters is None:
-            model_parameters = DEFAULT_MODEL_PARAMETERS
-        if isinstance(model_parameters, dict):
-            self._model_parameters = copy.deepcopy(model_parameters)
+        if model_hyperparameters is None:
+            model_hyperparameters = DEFAULT_MODEL_PARAMETERS
+        if isinstance(model_hyperparameters, dict):
+            self._model_hyperparameters = copy.deepcopy(model_hyperparameters)
         else:
-            with open(model_parameters) as f:
-                self._model_parameters = json.load(f)
+            with open(model_hyperparameters) as f:
+                self._model_hyperparameters = json.load(f)
 
         for key in ("encoder_parameters", "decoder_parameters", "training_parameters"):
-            if key not in self._model_parameters:
-                raise ValueError(f"model_parameters is missing required section '{key}'")
+            if key not in self._model_hyperparameters:
+                raise ValueError(
+                    f"model_hyperparameters is missing required section '{key}'"
+                )
 
         self.model_checkpoint_path = model_checkpoint_path
         self.theta = theta
@@ -184,13 +188,13 @@ class EVE(BaseModel, Scorer, MutationScorer):
         # modelled system
         self._system: System | None = None
 
-        # lazy-loaded VAE; reconstructed from checkpoint when needed
+        # Trained VAE, retained in memory unless an existing checkpoint is loaded lazily.
         self.model: Any | None = None
 
         # model name (per-family); derived from entity id at build time
         self.model_name: str | None = None
 
-        # path to the final checkpoint used for (re)loading the VAE
+        # Path to a final checkpoint supplied by the caller.
         self._checkpoint_path: str | None = None
 
         # information required to reconstruct the VAE and to encode sequences,
@@ -208,7 +212,7 @@ class EVE(BaseModel, Scorer, MutationScorer):
     def ready(self):
         return (
             self._system is not None and
-            self._checkpoint_path is not None and
+            (self.model is not None or self._checkpoint_path is not None) and
             self._seq_len is not None and
             self._focus_cols is not None
         )
@@ -317,8 +321,12 @@ class EVE(BaseModel, Scorer, MutationScorer):
         model = VAE_model.VAE_model(
             model_name=self.model_name,
             data=shim_data,
-            encoder_parameters=copy.deepcopy(self._model_parameters["encoder_parameters"]),
-            decoder_parameters=copy.deepcopy(self._model_parameters["decoder_parameters"]),
+            encoder_parameters=copy.deepcopy(
+                self._model_hyperparameters["encoder_parameters"]
+            ),
+            decoder_parameters=copy.deepcopy(
+                self._model_hyperparameters["decoder_parameters"]
+            ),
             random_seed=self.random_seed,
         )
 
@@ -416,24 +424,26 @@ class EVE(BaseModel, Scorer, MutationScorer):
             self._checkpoint_path = str(self.model_checkpoint_path)
         else:
             status_start(status_callback, "Training EVE VAE")
-            self._checkpoint_path = self._train(msa_data)
+            self._train(msa_data)
 
         status_done(status_callback, "EVE model ready")
 
         # return self to allow method chaining
         return self
 
-    def _train(self, msa_data) -> str:
+    def _train(self, msa_data) -> None:
         """
-        Train the EVE VAE on the processed MSA and save the final checkpoint.
-
-        Returns
-        -------
-        Path to the saved checkpoint
+        Train the EVE VAE and optionally save it to the caller-supplied checkpoint.
         """
-        encoder_parameters = copy.deepcopy(self._model_parameters["encoder_parameters"])
-        decoder_parameters = copy.deepcopy(self._model_parameters["decoder_parameters"])
-        training_parameters = copy.deepcopy(self._model_parameters["training_parameters"])
+        encoder_parameters = copy.deepcopy(
+            self._model_hyperparameters["encoder_parameters"]
+        )
+        decoder_parameters = copy.deepcopy(
+            self._model_hyperparameters["decoder_parameters"]
+        )
+        training_parameters = copy.deepcopy(
+            self._model_hyperparameters["training_parameters"]
+        )
 
         # redirect logs / intermediate checkpoints to the working directory
         training_parameters["training_logs_location"] = self._work_dir
@@ -450,25 +460,21 @@ class EVE(BaseModel, Scorer, MutationScorer):
 
         model.train_model(data=msa_data, training_parameters=training_parameters)
 
-        # persist final checkpoint either to the requested path or the working directory
+        # Persist only when the caller requested a checkpoint. Otherwise the trained
+        # model remains part of this object and is serialized with it.
         if self.model_checkpoint_path is not None:
             checkpoint_path = str(self.model_checkpoint_path)
             os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
-        else:
-            checkpoint_path = os.path.join(self._work_dir, self.model_name + "_final")
+            model.save(
+                model_checkpoint=checkpoint_path,
+                encoder_parameters=self._model_hyperparameters["encoder_parameters"],
+                decoder_parameters=self._model_hyperparameters["decoder_parameters"],
+                training_parameters=training_parameters,
+            )
+            self._checkpoint_path = checkpoint_path
 
-        model.save(
-            model_checkpoint=checkpoint_path,
-            encoder_parameters=self._model_parameters["encoder_parameters"],
-            decoder_parameters=self._model_parameters["decoder_parameters"],
-            training_parameters=training_parameters,
-        )
-
-        # release the trained model; it is reloaded lazily for scoring
-        del model
-        self._release_cache()
-
-        return checkpoint_path
+        model.eval()
+        self.model = model
 
     def _one_hot_encode(self, seqs: Sequence[str]) -> np.ndarray:
         """
