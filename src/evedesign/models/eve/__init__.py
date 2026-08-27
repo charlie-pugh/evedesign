@@ -135,12 +135,10 @@ class EVE(BaseModel, Scorer, MutationScorer):
             EVE's threshold for excluding a wild-type-covered column from training when
             too many family members have a gap there (default in the original EVE code
             is 0.3). Real, evolutionarily diverse alignments almost always have some
-            natural indel variation, which trips this threshold at a handful of
-            positions and shrinks the focus-column count below the wild-type length --
-            breaking the position mapping this wrapper relies on (build() raises if the
-            two don't match exactly). Defaulting to 1.0 keeps every wild-type-covered
+            natural indel variation. Defaulting to 1.0 keeps every wild-type-covered
             column regardless of family gap coverage; pass 0.3 to restore EVE's default
-            (stricter) column-dropping behavior.
+            (stricter) column-dropping behavior. Excluded columns are omitted from
+            positions() and ignored when scoring.
         """
         if not _import_eve():
             raise ImportError(
@@ -201,6 +199,7 @@ class EVE(BaseModel, Scorer, MutationScorer):
         self._alphabet_size: int | None = None
         self._neff: float | None = None
         self._aa_dict: dict | None = None
+        self._focus_cols: list[int] | None = None
 
         # working directory for training logs / intermediate checkpoints
         self._work_dir: str | None = None
@@ -210,12 +209,24 @@ class EVE(BaseModel, Scorer, MutationScorer):
         return (
             self._system is not None and
             self._checkpoint_path is not None and
-            self._seq_len is not None
+            self._seq_len is not None and
+            self._focus_cols is not None
         )
 
     @property
     def system(self) -> System | None:
         return self._system
+
+    def positions(
+        self,
+        instance: SystemInstance | None = None,
+    ) -> list[tuple[int, int]]:
+        """
+        Return the target positions retained as EVE focus columns.
+        """
+        self.ready_or_raise()
+        first_index = self.system[0].first_index
+        return [(0, first_index + col) for col in self._focus_cols]
 
     @classmethod
     def can_model(cls, system: System, data: Any = None) -> tuple[bool, str]:
@@ -382,13 +393,14 @@ class EVE(BaseModel, Scorer, MutationScorer):
             sequence_weights=msa_weights,
         )
 
-        # focus columns must align with the entity rep positions, otherwise position
-        # numbering (and mutation mapping) would be inconsistent with the system
-        if msa_data.seq_len != len(target.rep):
+        focus_cols = [int(col) for col in msa_data.focus_cols]
+        if not focus_cols:
             raise ValueError(
-                f"Number of MSA focus columns ({msa_data.seq_len}) does not match target "
-                f"rep length ({len(target.rep)}). Provide an MSA whose match columns "
-                "correspond to the target sequence, or adjust MSA pre-processing."
+                "All positions exceed threshold_focus_cols_frac_gaps"
+            )
+        if any(col < 0 or col >= len(target.rep) for col in focus_cols):
+            raise ValueError(
+                "EVE focus columns do not map onto the target sequence positions"
             )
 
         # store lightweight info needed for reconstruction / encoding at scoring time
@@ -396,6 +408,7 @@ class EVE(BaseModel, Scorer, MutationScorer):
         self._alphabet_size = msa_data.alphabet_size
         self._neff = msa_data.Neff
         self._aa_dict = dict(msa_data.aa_dict)
+        self._focus_cols = focus_cols
 
         # load an existing checkpoint if available, otherwise train and save
         if self.model_checkpoint_path is not None and os.path.exists(self.model_checkpoint_path):
@@ -467,7 +480,8 @@ class EVE(BaseModel, Scorer, MutationScorer):
             (len(seqs), self._seq_len, self._alphabet_size)
         )
         for i, seq in enumerate(seqs):
-            for j, letter in enumerate(seq):
+            for j, col in enumerate(self._focus_cols):
+                letter = seq[col]
                 k = self._aa_dict.get(letter)
                 if k is not None:
                     encoding[i, j, k] = 1.0
