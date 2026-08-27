@@ -14,7 +14,8 @@ class MSA_processing:
         preprocess_MSA=True,
         threshold_sequence_frac_gaps=0.5,
         threshold_focus_cols_frac_gaps=0.3,
-        remove_sequences_with_indeterminate_AA_in_focus_cols=True
+        remove_sequences_with_indeterminate_AA_in_focus_cols=True,
+        sequence_weights=None,
         ):
         
         """
@@ -47,6 +48,7 @@ class MSA_processing:
         self.threshold_sequence_frac_gaps = threshold_sequence_frac_gaps
         self.threshold_focus_cols_frac_gaps = threshold_focus_cols_frac_gaps
         self.remove_sequences_with_indeterminate_AA_in_focus_cols = remove_sequences_with_indeterminate_AA_in_focus_cols
+        self.sequence_weights = sequence_weights
 
         self.gen_alignment()
         self.create_all_singles()
@@ -68,6 +70,17 @@ class MSA_processing:
                         self.focus_seq_name = name
                 else:
                     self.seq_name_to_sequence[name] += line
+
+        if self.sequence_weights is not None:
+            if len(self.sequence_weights) != len(self.seq_name_to_sequence):
+                raise ValueError(
+                    "Number of supplied sequence weights must match the MSA depth"
+                )
+            self.seq_name_to_weight = dict(
+                zip(self.seq_name_to_sequence, self.sequence_weights)
+            )
+        else:
+            self.seq_name_to_weight = None
 
         
         ## MSA pre-processing to remove inadequate columns and sequences
@@ -142,7 +155,13 @@ class MSA_processing:
                     k = self.aa_dict[letter]
                     self.one_hot_encoding[i,j,k] = 1.0
 
-        if self.use_weights:
+        if self.use_weights and self.seq_name_to_weight is not None:
+            self.weights = np.array([
+                self.seq_name_to_weight[seq_name]
+                for seq_name in self.seq_name_to_sequence
+            ])
+            print("Using sequence weights supplied with the MSA")
+        elif self.use_weights:
             try:
                 self.weights = np.load(file=self.weights_location)
                 print("Loaded sequence weights from disk")

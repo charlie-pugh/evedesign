@@ -22,13 +22,9 @@ from evedesign.model import (
 )
 from evedesign.system import System, SystemInstance, EntityInstance
 from evedesign.constants import GAP
-from evedesign.utils import model_param_context, status_start, status_done
+from evedesign.utils import status_start, status_done
 from evedesign.types import DeviceType, StatusCallback, BatchSize
-
-# default VAE hyperparameters shipped with the vendored EVE codebase
-DEFAULT_MODEL_PARAMS_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "_vendor", "eve", "EVE", "default_model_params.json"
-)
+from .params import DEFAULT_MODEL_PARAMETERS
 
 torch = None
 DataLoader = None
@@ -46,8 +42,7 @@ def _import_eve() -> bool:
     try:
         import torch
         from torch.utils.data import DataLoader
-        from evedesign._vendor.eve.EVE import VAE_model  # noqa
-        from evedesign._vendor.eve.utils import data_utils  # noqa
+        from . import VAE_model, data_utils  # noqa
 
         return True
     except ImportError:
@@ -90,7 +85,6 @@ class EVE(BaseModel, Scorer, MutationScorer):
         num_samples: int = 20000,
         batch_size: BatchSize = 2048,
         random_seed: int = 42,
-        keep_model_after_build: bool = False,
         device: DeviceType = "cpu",
         max_msa_depth: int | None = 200_000,
         threshold_focus_cols_frac_gaps: float = 1.0,
@@ -102,8 +96,8 @@ class EVE(BaseModel, Scorer, MutationScorer):
         ----------
         model_parameters
             VAE hyperparameters (encoder/decoder/training): a path to a JSON file in the
-            format of EVE's default_model_params.json, or a parsed dict. If None, uses the
-            default_model_params.json shipped with the EVE repository.
+            format of EVE's default parameters, or a parsed dict. If None, uses EVE's
+            defaults.
         model_checkpoint_path
             Path to a trained EVE VAE checkpoint. If it exists, it is loaded in build()
             (no training); otherwise the VAE is trained on the MSA and saved to this path.
@@ -111,9 +105,11 @@ class EVE(BaseModel, Scorer, MutationScorer):
         theta
             MSA sequence re-weighting threshold (EVE default 0.2; viruses ~0.01).
         use_weights
-            If True, re-weight MSA sequences (cached at msa_weights_path if provided).
+            If True, use weights attached to the System's Sequences object where
+            available, otherwise compute EVE weights.
         msa_weights_path
-            Location to load/save the MSA sequence weights (.npy); a temporary file if None.
+            Location to load/save EVE-computed MSA sequence weights (.npy); only used
+            when the System's Sequences object has no weights.
         preprocess_msa
             Run EVE's MSA pre-processing (drop fragment sequences and low-occupancy
             columns). The resulting focus columns must match the target rep length.
@@ -124,9 +120,6 @@ class EVE(BaseModel, Scorer, MutationScorer):
             Maximum number of sequences to score concurrently.
         random_seed
             Random seed for the VAE.
-        keep_model_after_build
-            If True, keep the VAE parameters on the instance after build() to avoid
-            reloading when scoring. Set to False to avoid storing them when serializing.
         device
             Device to use for computations.
         max_msa_depth
@@ -151,14 +144,14 @@ class EVE(BaseModel, Scorer, MutationScorer):
         """
         if not _import_eve():
             raise ImportError(
-                "EVE codebase could not be imported (vendored under "
-                "evedesign._vendor.eve). Ensure torch is installed (the 'eve' extra)."
+                "EVE codebase could not be imported. Ensure torch is installed "
+                "(the 'eve' extra)."
             )
         self.available = True
 
         # resolve model hyperparameters
         if model_parameters is None:
-            model_parameters = DEFAULT_MODEL_PARAMS_FILE
+            model_parameters = DEFAULT_MODEL_PARAMETERS
         if isinstance(model_parameters, dict):
             self._model_parameters = copy.deepcopy(model_parameters)
         else:
@@ -179,9 +172,6 @@ class EVE(BaseModel, Scorer, MutationScorer):
         self.random_seed = random_seed
         self.max_msa_depth = max_msa_depth
         self.threshold_focus_cols_frac_gaps = threshold_focus_cols_frac_gaps
-        self.keep_model_after_build = keep_model_after_build
-        # by default, keep parameters loaded once loaded for prediction to avoid reloading
-        self.keep_model_after_pred = True
         self.device = device
 
         if self.num_samples < 1:
@@ -252,24 +242,31 @@ class EVE(BaseModel, Scorer, MutationScorer):
 
         return True, ""
 
-    def _write_msa(self, target, msa_path: str) -> None:
+    def _write_msa(self, target, msa_path: str) -> list[float] | None:
         """
         Write the entity MSA to disk in the format expected by EVE's MSA_processing:
         a fixed-width a2m alignment whose focus (first) sequence header carries the
-        "/start-stop" position range. EVE indexes every sequence at the focus match
-        columns, so the alignment must keep its full (insert-padded) width; an a3m
-        conversion would drop inserts and misalign the non-focus rows.
+        "/start-stop" position range. EVE ignores A3M inserts, so they are removed
+        explicitly here rather than through a generic, implicit format conversion.
         """
-        seqs = target.sequences.to_a2m().seqs
+        if target.sequences.format_ == "a3m":
+            seqs = target.sequences.remove_inserts().seqs
+        else:
+            seqs = target.sequences.to_a2m().seqs
+
+        weights = target.sequences.weights if self.use_weights else None
+        if weights is not None and len(weights) != len(seqs):
+            raise ValueError("Number of MSA weights must match number of sequences")
 
         # re-weighting is O(depth^2); cap non-focus depth to keep it tractable (see
         # max_msa_depth docstring). Sampling (not truncating) avoids any bias from
         # the MSA's original ordering.
-        non_focus = seqs[1:]
-        if self.max_msa_depth is not None and len(non_focus) > self.max_msa_depth:
+        selected_indices = list(range(1, len(seqs)))
+        if self.max_msa_depth is not None and len(selected_indices) > self.max_msa_depth:
             rng = random.Random(self.random_seed)
-            non_focus = rng.sample(non_focus, self.max_msa_depth)
-        seqs = [seqs[0]] + non_focus
+            selected_indices = rng.sample(selected_indices, self.max_msa_depth)
+        selected_indices = [0] + selected_indices
+        seqs = [seqs[i] for i in selected_indices]
 
         # number of match-state columns in the query (uppercase, non-gap)
         focus_len = sum(
@@ -288,6 +285,10 @@ class EVE(BaseModel, Scorer, MutationScorer):
             for i, seq in enumerate(seqs[1:], start=1):
                 seq_id = seq.id_ if seq.id_ is not None else f"seq_{i}"
                 msa_file.write(f">{seq_id}_{i}\n{seq.seq}\n")
+
+        if weights is None:
+            return None
+        return [float(weights[i]) for i in selected_indices]
 
     def _load_model(self):
         # avoid reloading if already loaded
@@ -361,8 +362,8 @@ class EVE(BaseModel, Scorer, MutationScorer):
 
         # working directory for MSA file, sequence weights, and training artefacts
         self._work_dir = tempfile.mkdtemp(prefix="eve_")
-        msa_path = os.path.join(self._work_dir, "msa.a3m")
-        self._write_msa(target, msa_path)
+        msa_path = os.path.join(self._work_dir, "msa.a2m")
+        msa_weights = self._write_msa(target, msa_path)
 
         weights_location = (
             str(self.msa_weights_path) if self.msa_weights_path is not None
@@ -378,6 +379,7 @@ class EVE(BaseModel, Scorer, MutationScorer):
             weights_location=weights_location,
             preprocess_MSA=self.preprocess_msa,
             threshold_focus_cols_frac_gaps=self.threshold_focus_cols_frac_gaps,
+            sequence_weights=msa_weights,
         )
 
         # focus columns must align with the entity rep positions, otherwise position
@@ -402,10 +404,6 @@ class EVE(BaseModel, Scorer, MutationScorer):
         else:
             status_start(status_callback, "Training EVE VAE")
             self._checkpoint_path = self._train(msa_data)
-
-        # optionally keep the model loaded after building
-        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_build):
-            pass
 
         status_done(status_callback, "EVE model ready")
 
@@ -484,31 +482,31 @@ class EVE(BaseModel, Scorer, MutationScorer):
         Compute the sample-averaged ELBO for a batch of fixed-length sequences.
         """
         one_hot = self._one_hot_encode(seqs)
+        self._load_model()
 
-        with model_param_context(self._load_model, self._delete_model, self.keep_model_after_pred):
-            tensor = torch.tensor(one_hot)
-            dataloader = DataLoader(
-                tensor, batch_size=self.batch_size, shuffle=False
-            )
+        tensor = torch.tensor(one_hot)
+        dataloader = DataLoader(
+            tensor, batch_size=self.batch_size, shuffle=False
+        )
 
-            prediction_matrix = torch.zeros((len(seqs), self.num_samples))
+        prediction_matrix = torch.zeros((len(seqs), self.num_samples))
 
-            with torch.no_grad():
-                for batch_idx, batch in enumerate(dataloader):
-                    x = batch.type(self.model.dtype).to(self.device)
-                    offset = batch_idx * self.batch_size
-                    for sample_idx in range(self.num_samples):
-                        elbo, _, _ = self.model.all_likelihood_components(x)
-                        prediction_matrix[offset:offset + len(x), sample_idx] = elbo
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(dataloader):
+                x = batch.type(self.model.dtype).to(self.device)
+                offset = batch_idx * self.batch_size
+                for sample_idx in range(self.num_samples):
+                    elbo, _, _ = self.model.all_likelihood_components(x)
+                    prediction_matrix[offset:offset + len(x), sample_idx] = elbo
 
-                    if status_callback is not None:
-                        progress = ((batch_idx + 1) * self.batch_size / len(seqs)) * 100
-                        status_callback(
-                            "running", min(progress, 100.0),
-                            f"Scored {min(offset + len(x), len(seqs))}/{len(seqs)} sequences"
-                        )
+                if status_callback is not None:
+                    progress = ((batch_idx + 1) * self.batch_size / len(seqs)) * 100
+                    status_callback(
+                        "running", min(progress, 100.0),
+                        f"Scored {min(offset + len(x), len(seqs))}/{len(seqs)} sequences"
+                    )
 
-            mean_elbo = prediction_matrix.mean(dim=1).detach().cpu().numpy()
+        mean_elbo = prediction_matrix.mean(dim=1).detach().cpu().numpy()
 
         assert len(mean_elbo) == len(seqs), "Length of scores does not match number of sequences"
 
