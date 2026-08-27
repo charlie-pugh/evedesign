@@ -28,7 +28,7 @@ framework. bioRxiv (2026) doi:10.64898/2026.03.17.712115](https://www.biorxiv.or
 Use the following command to install *evedesign* with support for all currently implemented models.
 You can remove any of the options if you do not need the respective model. Please see specific instructions for Boltz-2 further below.
 ```
-pip install evedesign[evmutation2,esm2,mpnn,umap,gpytorch,eve] 
+pip install evedesign[evmutation2,esm2,mpnn,umap,gpytorch,eve,promb] 
 ```
 
 ### Boltz2 installation 
@@ -83,6 +83,7 @@ Note that most methods listed as `Scorer` also support the `MutationScorer` and 
 | EVcouplings                 | `evedesign.models.evcouplings.EVcouplings`                       | `Scorer`                             |
 | EVE                         | `evedesign.models.eve.EVE`                                       | `Scorer`                             |
 | MixMHC2pred                 | `evedesign.models.immunogenicity.MixMHC2Pred`                    | `Scorer`                             |
+| promb/OASis humanness       | `evedesign.models.oasis_humanness.OASisHumanness`                | `Scorer`                             |
 | One-hot encoding embedder   | `evedesign.models.embedders.OneHotEmbedder`                      | `Transformer`                        |
 | BLOSUM embedder             | `evedesign.models.embedders.BLOSUMEmbedder`                      | `Transformer`                        |
 | Sequence distance restraint | `evedesign.restraints.seq_dist.LinearSeqDistRestraint`           | `Scorer`                             |
@@ -99,9 +100,9 @@ Note that most methods listed as `Scorer` also support the `MutationScorer` and 
 
 ### Samplers
 
-| Name          | Class                                  | Interfaces  | 
-|---------------|----------------------------------------|-------------|
-| Gibbs sampler |`evedesign.samplers.gibbs.GibbsSampler` | `Generator` |
+| Name          | Class                                   | Interfaces  | 
+|---------------|-----------------------------------------|-------------|
+| Gibbs sampler | `evedesign.samplers.gibbs.GibbsSampler` | `Generator` |
 
 ### Analyzers
 
