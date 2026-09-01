@@ -654,14 +654,19 @@ def test_design_output_is_renumbered_from_first_index(tmp_path):
     assert res_ids == list(range(20, 25))
 
 
-def _write_design_cif(path, n_res=5, chain="A"):
+_AA3 = {"A": "ALA", "C": "CYS", "D": "ASP", "E": "GLU", "F": "PHE",
+        "G": "GLY", "H": "HIS", "I": "ILE", "K": "LYS"}
+
+
+def _write_design_cif(path, n_res=5, chain="A", seq=None):
     import biotite.structure as struc
     from evedesign.structure import Structure
 
+    names = [_AA3[c] for c in seq] if seq else ["ALA"] * n_res
     atoms = [
         struc.Atom([i * 3.8, 0.0, 0.0], chain_id=chain, res_id=i,
-                   res_name="ALA", atom_name=name, element=el)
-        for i in range(1, n_res + 1)
+                   res_name=names[i - 1], atom_name=name, element=el)
+        for i in range(1, len(names) + 1)
         for name, el in [("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")]
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -690,6 +695,69 @@ def test_parses_both_ranked_filename_forms(tmp_path, cif_name, design_id):
     assert len(instances) == 1
     assert instances[0].metadata["boltzgen_design_id"] == design_id
     assert instances[0].score == 0.8
+
+
+@pytest.mark.parametrize(
+    "insertions,design,expected",
+    [
+        # fixed insert after position 4
+        ([Insertion(pos=4, min_length=3, max_length=3)],
+         "ACDEKKKFGHI", "ACDEkkkFGHI"),
+        # a variable insert takes whatever length is left over
+        ([Insertion(pos=4, min_length=2, max_length=5)],
+         "ACDEKKKKFGHI", "ACDEkkkkFGHI"),
+        # N-terminal extension
+        ([Insertion(pos=0, min_length=2, max_length=2)],
+         "KKACDEFGHI", "kkACDEFGHI"),
+        # C-terminal extension
+        ([Insertion(pos=8, min_length=2, max_length=2)],
+         "ACDEFGHIKK", "ACDEFGHIkk"),
+        # two fixed inserts, each after the position it names
+        ([Insertion(pos=2, min_length=2, max_length=2),
+          Insertion(pos=6, min_length=3, max_length=3)],
+         "ACKKDEFGKKKHI", "ACkkDEFGkkkHI"),
+    ],
+)
+def test_inserted_residues_are_lowercased(tmp_path, insertions, design, expected):
+    # BoltzGen's output has no record of where an insert landed, so the
+    # spans come from the length difference
+    cif = tmp_path / "d.cif"
+    _write_design_cif(cif, seq=design)
+    system = System([Protein(rep="ACDEFGHI", id="b", insertions=insertions)])
+
+    instance = _parse_single_design(cif, system, {"A": 0})
+
+    assert "".join(instance[0].rep) == expected
+
+
+def test_unexplained_length_leaves_the_rep_uncoded(tmp_path):
+    # 2 extra residues, but the only insertion adds exactly 3
+    cif = tmp_path / "d.cif"
+    _write_design_cif(cif, seq="ACDEKKFGHI")
+    system = System([Protein(
+        rep="ACDEFGHI", id="b",
+        insertions=[Insertion(pos=4, min_length=3, max_length=3)])])
+
+    instance = _parse_single_design(cif, system, {"A": 0})
+
+    assert "".join(instance[0].rep) == "ACDEKKFGHI"
+
+
+def test_insert_coded_design_validates_with_its_structure(tmp_path):
+    # Structure.represents compares rep symbols against residue names, so
+    # the lowercase coding must not read as a mismatch
+    cif = tmp_path / "d.cif"
+    _write_design_cif(cif, seq="ACDEKKKFGHI")
+    system = System([Protein(
+        rep="ACDEFGHI", id="b",
+        insertions=[Insertion(pos=4, min_length=3, max_length=3)])])
+
+    instance = _parse_single_design(cif, system, {"A": 0})
+
+    assert instance[0].models is not None
+    assert system.valid_instance(
+        instance, fixed_length=False, require_reps=True
+    )
 
 
 # Round-trip: our YAML through BoltzGen's own parser

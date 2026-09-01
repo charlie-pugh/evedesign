@@ -793,6 +793,50 @@ def system_to_boltzgen_yaml(
 # OUTPUT: BoltzGen output tree -> SystemInstance
 
 
+def _mark_insertions(entity: Entity, rep: np.ndarray) -> np.ndarray:
+    """
+    Lowercase the inserted residues in a design's rep.
+
+    EntityInstance codes insertions as lowercase symbols (system.py:1046),
+    but BoltzGen's output has no record of where an insert landed, so the
+    spans are recovered from the length difference: fixed-length inserts
+    contribute known amounts and at most one variable insert takes the
+    remainder, which _insertion_tokens guarantees.
+    """
+    inserted = len(rep) - len(entity.rep)
+    spans = sorted(
+        (ins.pos - entity.first_index + 1, ins.min_length, ins.max_length)
+        for ins in entity.insertions
+    )
+    fixed = sum(lo for _, lo, hi in spans if lo == hi)
+    variable = [s for s in spans if s[1] != s[2]]
+
+    if variable:
+        _, lo, hi = variable[0]
+        if not lo <= inserted - fixed <= hi:
+            logger.warning(
+                f"Entity '{entity.id}': +{inserted} residues fits no "
+                "insertion layout, rep left uncoded."
+            )
+            return rep
+    elif inserted != fixed:
+        logger.warning(
+            f"Entity '{entity.id}': +{inserted} residues but insertions "
+            f"add {fixed}, rep left uncoded."
+        )
+        return rep
+
+    out = rep.copy()
+    out_idx = consumed = 0
+    for offset, lo, hi in spans:
+        out_idx += offset - consumed
+        consumed = offset
+        n = lo if lo == hi else inserted - fixed
+        out[out_idx:out_idx + n] = np.char.lower(out[out_idx:out_idx + n])
+        out_idx += n
+    return out
+
+
 # 2a. Single design
 
 
@@ -879,6 +923,9 @@ def _parse_single_design(
             seq_array = np.array(
                 ["X"] * len(res_df), dtype="U1"
             )
+
+        if getattr(entity, "insertions", None):
+            seq_array = _mark_insertions(entity, seq_array)
 
         # Build the models dict: single chain or
         # homo-oligomer list

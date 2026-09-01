@@ -70,7 +70,7 @@ class BoltzGenGenerator(BaseModel, Generator):
     requires_target: bool = False
     requires_fixed_length: bool = False
     handles_deletions: bool = False
-    handles_insertions: bool = False
+    handles_insertions: bool = True
     requires_gpu: bool = True
     supports_gpu: bool = True
     supports_gpu_parallel: bool = True
@@ -84,6 +84,7 @@ class BoltzGenGenerator(BaseModel, Generator):
         "atom_bonds",
         "copies",
         "cyclic",
+        "insertions",
         "ligand_rep_type",
         "min_length",
         "max_length",
