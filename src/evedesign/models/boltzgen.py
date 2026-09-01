@@ -201,6 +201,12 @@ class BoltzGenGenerator(BaseModel, Generator):
                     "supported."
                 )
 
+            if entity.deletions:
+                return False, (
+                    f"Entity {i} sets deletions, which BoltzGen cannot "
+                    "express."
+                )
+
         return True, ""
 
     def build(
