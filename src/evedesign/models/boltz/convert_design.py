@@ -80,12 +80,98 @@ def _to_spec_pos(
     return out
 
 
+def _insertion_tokens(entity: Entity) -> dict[int, str]:
+    """
+    Map spec position -> range token to emit directly after it.
+
+    Insertion.pos is the position *after* which residues are inserted
+    (system.py:547), numbered from first_index, with first_index - 1
+    meaning an N-terminal extension. BoltzGen expresses an insert as an
+    inline range in the sequence spec, e.g. "ACDE5..10FGHI", sampled at
+    schema.py:942-948.
+
+    Inline sequence specs only. A structure-backed entity would need
+    BoltzGen's design_insertions block on its file: entry (schema.py:2265),
+    which is not implemented.
+    """
+    insertions = getattr(entity, "insertions", None)
+    if not insertions:
+        return {}
+
+    if entity.rep is None:
+        raise ValueError(
+            f"Entity '{entity.id}': insertions need rep, which supplies the "
+            "residues they are inserted between."
+        )
+
+    for ins in insertions:
+        if ins.pos is None:
+            raise ValueError(
+                f"Entity '{entity.id}': Insertion needs pos; BoltzGen places "
+                "an inline range at a position, not anywhere in the chain."
+            )
+        if ins.max_length is None:
+            raise ValueError(
+                f"Entity '{entity.id}': Insertion at {ins.pos} needs both "
+                "min_length and max_length. BoltzGen's inline spec has only "
+                "a fixed count or a bounded range (schema.py:942-948); an "
+                "open-ended '5..' is not a token and silently reads as 5."
+            )
+        if ins.max_length < ins.min_length:
+            raise ValueError(
+                f"Entity '{entity.id}': Insertion at {ins.pos} has "
+                f"max_length {ins.max_length} below min_length "
+                f"{ins.min_length}."
+            )
+        if ins.secondary_structure is not None:
+            raise ValueError(
+                f"Entity '{entity.id}': Insertion at {ins.pos} sets "
+                "secondary_structure, which BoltzGen reads only per-insertion "
+                "on structure-backed entities (design_insertions, "
+                "schema.py:2281), not in an inline sequence spec."
+            )
+        if ins.interactions:
+            raise ValueError(
+                f"Entity '{entity.id}': Insertion at {ins.pos} sets "
+                "interactions, but BoltzGen fixes inserted residues to "
+                "UNSPECIFIED binding type (schema.py:2329)."
+            )
+
+    variable = [ins for ins in insertions if ins.max_length != ins.min_length]
+    if len(variable) > 1:
+        raise ValueError(
+            f"Entity '{entity.id}': at most one variable-length insertion is "
+            "supported. BoltzGen reports only the total designed length, so "
+            "several variable inserts cannot be told apart on output."
+        )
+
+    tokens: dict[int, str] = {}
+    for ins in insertions:
+        # first_index - 1 is the N-terminal extension, before spec position 1
+        if ins.pos == entity.first_index - 1:
+            spec_pos = 0
+        else:
+            (spec_pos,) = _to_spec_pos(entity, [ins.pos], "Insertion")
+
+        if spec_pos in tokens:
+            raise ValueError(
+                f"Entity '{entity.id}': two insertions at position {ins.pos}."
+            )
+        tokens[spec_pos] = (
+            str(ins.min_length) if ins.min_length == ins.max_length
+            else f"{ins.min_length}..{ins.max_length}"
+        )
+
+    return tokens
+
+
 # 1b. Sequence spec (letters fixed, numbers designed)
 
 
 def _entity_to_sequence_spec(
     entity: Entity,
     fixed_pos: Sequence[int] | None = None,
+    designed: bool = True,
 ) -> str:
     """
     Convert entity length info into BoltzGen sequence
@@ -118,6 +204,9 @@ def _entity_to_sequence_spec(
     7. Fallback -> "80..140" (matches BoltzGen's vanilla
        binder default; emits a warning when triggered)
 
+    Entity.insertions are orthogonal to the above: each adds an inline
+    range token after the position it follows, e.g. "ACDE5..10FGHI".
+
     Parameters
     ----------
     fixed_pos : Sequence[int], optional
@@ -125,14 +214,19 @@ def _entity_to_sequence_spec(
         entity.first_index. Requires entity.rep, since the fixed
         residues are taken from it, and may not name a MASK
         position, which carries no residue to fix.
+    designed : bool
+        Whether the entity was named in generate(entities=...). False
+        means it reached the design emitter only because it carries
+        insertions, so its rep is kept and only the inserts designed.
     """
     rep = list(entity.rep) if entity.rep is not None else None
     masked = (
         {i for i, symbol in enumerate(rep, start=1) if symbol == MASK}
         if rep is not None else set()
     )
+    tokens = _insertion_tokens(entity)
 
-    if masked or fixed_pos:
+    if masked or fixed_pos or tokens:
         if rep is None:
             raise ValueError(
                 f"Entity '{entity.id}': fixed_pos needs rep, which "
@@ -151,23 +245,41 @@ def _entity_to_sequence_spec(
                 "positions, which carry no residue to fix."
             )
 
-        # MASK marks what must be designed, so it decides the split
-        keep = (
-            set(range(1, length + 1)) - masked
-            if masked else set(fixed_spec)
-        )
+        # MASK marks what must be designed, so it decides the split.
+        # With neither MASK nor fixed_pos, an entity named in entities has
+        # its whole rep designed, while one promoted here only by its
+        # insertions keeps the rep and designs just the inserted residues.
+        if masked:
+            keep = set(range(1, length + 1)) - masked
+        elif fixed_pos:
+            keep = set(fixed_spec)
+        else:
+            keep = set() if designed else set(range(1, length + 1))
 
-        # Kept residues emit their letter, designed runs emit their length
+        # One item per rep position: its letter if kept, None if designed,
+        # with insertion tokens spliced in after the position they follow
+        items: list[str | None] = [tokens[0]] if 0 in tokens else []
+        for pos in range(1, length + 1):
+            items.append(str(rep[pos - 1]) if pos in keep else None)
+            if pos in tokens:
+                items.append(tokens[pos])
+
+        # Collapse consecutive designed positions into their count
         spec: list[str] = []
-        for kept, group in groupby(
-            range(1, length + 1), key=lambda pos: pos in keep
-        ):
-            run = list(group)
-            if kept:
-                spec.extend(str(rep[pos - 1]) for pos in run)
+        for is_designed, group in groupby(items, key=lambda i: i is None):
+            if is_designed:
+                spec.append(str(len(list(group))))
             else:
-                spec.append(str(len(run)))
-        return "".join(spec)
+                spec.extend(group)
+
+        # Adjacent numeric tokens need a comma: BoltzGen splits on commas
+        # first (schema.py:936), so without one "4" + "5..10" + "4" would
+        # tokenize as the single range 45..104
+        return "".join(
+            "," + tok if i and tok[:1].isdigit() and spec[i - 1][-1:].isdigit()
+            else tok
+            for i, tok in enumerate(spec)
+        )
 
     if (
         entity.min_length is not None
@@ -353,6 +465,7 @@ def _emit_design_entity(
     chain_ids: list[str],
     pointer: int,
     fixed_pos: Sequence[int] | None = None,
+    designed: bool = True,
 ) -> tuple[dict, int]:
     """
     Emit a YAML entity dict for a designable entity.
@@ -421,7 +534,9 @@ def _emit_design_entity(
 
     entry_inner: dict = {
         "id": id_field,
-        "sequence": _entity_to_sequence_spec(entity, fixed_pos=fixed_pos),
+        "sequence": _entity_to_sequence_spec(
+            entity, fixed_pos=fixed_pos, designed=designed
+        ),
     }
     _attach_conditioning(entity, entry_inner)
 
@@ -514,14 +629,16 @@ def _entity_to_boltzgen_yaml(
     """
     Emit one entity's YAML entry, designed or fixed.
 
-    Ligands always take the ligand: form. fixed_pos and MASK in rep
-    are both per-position design specs, yielding a spec with digits
-    that BoltzGen counts as designed (schema.py:879), so either routes
-    to the design emitter even when entities left the entity out. A
-    masked position has no residue, so fixed is not expressible for it.
+    Ligands always take the ligand: form. fixed_pos, MASK in rep and
+    insertions are all per-position design specs, yielding a spec with
+    digits that BoltzGen counts as designed (schema.py:879), so any of
+    them routes to the design emitter even when entities left the entity
+    out. A masked position has no residue, so fixed is not expressible
+    for it.
     """
     masked = entity.rep is not None and MASK in entity.rep
-    if entity.type == "ligand" or designed or fixed_pos or masked:
+    inserted = bool(getattr(entity, "insertions", None))
+    if entity.type == "ligand" or designed or fixed_pos or masked or inserted:
         if entity.structures and entity.type != "ligand":
             raise ValueError(
                 f"Entity '{entity.id}' has structures, so it cannot be "
@@ -530,7 +647,7 @@ def _entity_to_boltzgen_yaml(
                 "implemented)."
             )
         return _emit_design_entity(
-            entity, chain_ids, pointer, fixed_pos=fixed_pos
+            entity, chain_ids, pointer, fixed_pos=fixed_pos, designed=designed
         )
     return _emit_context_entity(
         entity, entity_idx, chain_ids, pointer, tmp_dir
