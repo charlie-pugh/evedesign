@@ -30,6 +30,7 @@ from evedesign.models.boltz.convert_design import (
 from evedesign.models.boltz.chains import _get_chain_ids
 from evedesign.system import (
     AtomBond,
+    Insertion,
     Interaction,
     Ligand,
     Protein,
@@ -199,6 +200,106 @@ def test_fixed_pos_routes_entity_to_the_design_emitter(tmp_path):
         system, tmp_path / "spec.yaml", fixed_pos={1: [4, 5, 6]}
     ).read_text())
     assert spec["entities"][1]["protein"]["sequence"] == "3EFG4"
+
+
+# Insertions: inline range tokens spliced into the spec
+
+
+@pytest.mark.parametrize(
+    "entity,expected",
+    [
+        # insert between kept residues
+        (Protein(rep="ACDEFGHI", id="b",
+                 insertions=[Insertion(pos=4, min_length=5, max_length=10)]),
+         "ACDE5..10FGHI"),
+        # fixed length insert (min == max) emits a bare count
+        (Protein(rep="ACDEFGHI", id="b",
+                 insertions=[Insertion(pos=4, min_length=3, max_length=3)]),
+         "ACDE3FGHI"),
+        # first_index - 1 is the N-terminal extension
+        (Protein(rep="ACDEFGHI", id="b",
+                 insertions=[Insertion(pos=0, min_length=2, max_length=4)]),
+         "2..4ACDEFGHI"),
+        # after the last position is a C-terminal extension
+        (Protein(rep="ACDEFGHI", id="b",
+                 insertions=[Insertion(pos=8, min_length=2, max_length=4)]),
+         "ACDEFGHI2..4"),
+        # several inserts, each after the position it names
+        (Protein(rep="ACDEFGHI", id="b",
+                 insertions=[Insertion(pos=2, min_length=2, max_length=2),
+                             Insertion(pos=6, min_length=3, max_length=3)]),
+         "AC2DEFG3HI"),
+        # MASK decides the split, the insert still lands after position 8
+        (Protein(rep="ACD***GHI", id="b",
+                 insertions=[Insertion(pos=8, min_length=4, max_length=6)]),
+         "ACD3GH4..6I"),
+    ],
+)
+def test_insertions_emit_inline_range_tokens(entity, expected):
+    assert _entity_to_sequence_spec(entity, designed=False) == expected
+
+
+def test_adjacent_numeric_tokens_are_comma_separated():
+    # without the comma "4" + "5..10" + "4" would tokenize as the single
+    # range 45..104 (schema.py:936), a 45 to 104 residue chain
+    e = Protein(rep="ACDEFGHI", id="b",
+                insertions=[Insertion(pos=4, min_length=5, max_length=10)])
+    assert _entity_to_sequence_spec(e, designed=True) == "4,5..10,4"
+
+
+def test_insertions_promote_an_unselected_entity_but_keep_its_rep(tmp_path):
+    # insertions imply design, so the entity is not emitted as context,
+    # but only the inserted residues are designed
+    system = System([
+        Protein(rep="ACDEFGHI", id="motif",
+                insertions=[Insertion(pos=4, min_length=5, max_length=10)]),
+        Protein(rep=None, min_length=60, max_length=80, id="binder"),
+    ])
+    spec = yaml.safe_load(system_to_boltzgen_yaml(
+        system, tmp_path / "spec.yaml", entities=[1]
+    ).read_text())
+    assert spec["entities"][0]["protein"]["sequence"] == "ACDE5..10FGHI"
+
+
+@pytest.mark.parametrize(
+    "insertions,match",
+    [
+        ([Insertion(pos=None, min_length=2, max_length=4)], "needs pos"),
+        ([Insertion(pos=4, min_length=2)], "needs both"),
+        ([Insertion(pos=4, min_length=9, max_length=4)], "below min_length"),
+        ([Insertion(pos=4, min_length=2, max_length=4,
+                    secondary_structure="H")], "secondary_structure"),
+        ([Insertion(pos=4, min_length=2, max_length=4,
+                    interactions=[Interaction(id="x")])], "interactions"),
+        ([Insertion(pos=2, min_length=1, max_length=4),
+          Insertion(pos=6, min_length=1, max_length=4)], "one variable-length"),
+    ],
+)
+def test_insertions_reject_what_boltzgen_cannot_express(insertions, match):
+    e = Protein(rep="ACDEFGHI", id="b", insertions=insertions)
+    with pytest.raises(ValueError, match=match):
+        _entity_to_sequence_spec(e)
+
+
+def test_insertions_require_a_rep():
+    e = Protein(rep=None, min_length=10, id="b",
+                insertions=[Insertion(pos=4, min_length=2, max_length=4)])
+    with pytest.raises(ValueError, match="insertions need rep"):
+        _entity_to_sequence_spec(e)
+
+
+def test_roundtrip_insertion_yields_the_intended_design_mask(tmp_path):
+    system = System([
+        Protein(rep="MKTAYIAKQR", id="target"),
+        Protein(rep="ACDEFGHI", id="binder",
+                insertions=[Insertion(pos=4, min_length=3, max_length=3)]),
+    ])
+    _, target = _parse_with_boltzgen(system, tmp_path, entities=[])
+
+    start, end = _residue_slice(target, 1)
+    mask = target.design_info.res_design_mask[start:end].tolist()
+    # ACDE kept, 3 inserted residues designed, FGHI kept
+    assert mask == [False] * 4 + [True] * 3 + [False] * 4
 
 
 # Entity kinds
