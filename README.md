@@ -55,6 +55,26 @@ are overridden in `[tool.uv]` in `pyproject.toml`, and pip does not honor those 
 
 For CPU/MPS-only use (no CUDA), install the `boltz2fold` extra instead of `boltz2fold-cuda`.
 
+### BoltzGen installation
+
+For *de novo* structure generation with BoltzGen (CUDA 12 only — there is no
+CPU or macOS path):
+```bash
+uv pip install evedesign[boltzgen]
+```
+
+The extra is only needed to install BoltzGen *alongside* evedesign. evedesign
+invokes the `boltzgen` CLI as a subprocess, so if you already have it in a
+separate environment, skip the extra and point at that executable:
+```python
+BoltzGenGenerator(binary="/path/to/other/env/bin/boltzgen")
+```
+
+**uv is required if you want BoltzGen and Boltz-2 in the same environment**:
+BoltzGen pins `numpy==2.0.2` and `numba==0.61.0`, which conflict with Boltz-2's
+requirements and are overridden in `[tool.uv]` in `pyproject.toml`. pip does not
+honor those overrides.
+
 ## Getting started
 
 Please refer to some of our [examples](examples) how to use *evedesign*. We are continuously extending these as new 
@@ -80,6 +100,7 @@ Note that most methods listed as `Scorer` also support the `MutationScorer` and 
 | LigandMPNN/ProteinMPNN      | `evedesign.models.mpnn.LigandMPNN`                               | `Generator`, `Scorer`                |
 | ESM-2                       | `evedesign.models.esm2.ESM2`                                     | `Transformer` `Scorer`               |
 | Boltz-2                     | `evedesign.models.boltzfold.BoltzFoldTransformer`                | `Transformer`, `Scorer`              |
+| BoltzGen                    | `evedesign.models.boltzgen.BoltzGenGenerator`          | `Generator`                          |
 | EVcouplings                 | `evedesign.models.evcouplings.EVcouplings`                       | `Scorer`                             |
 | EVE                         | `evedesign.models.eve.EVE`                                       | `Scorer`                             |
 | MixMHC2pred                 | `evedesign.models.immunogenicity.MixMHC2Pred`                    | `Scorer`                             |
@@ -123,7 +144,7 @@ Note that most methods listed as `Scorer` also support the `MutationScorer` and 
 ## Roadmap and contributing
 
 We plan to continuously add more models, restraints, oracles and samplers to the framework, e.g. *de novo* 3D structure generation
-with BoltzGen or BindCraft. 
+with BindCraft. 
 
 We are actively looking for further contributors to develop our framework jointly with the community. 
 If you are interested or feel like an important model is missing from the framework, please get in contact with us!

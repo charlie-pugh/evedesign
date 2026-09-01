@@ -15,52 +15,13 @@ import yaml
 import json
 from loguru import logger
 
+from evedesign.models.boltz.chains import _get_chain_ids
 from evedesign.system import Entity, EntityInstance, System, SystemInstance, StructureChainMap, Structure
 from evedesign.sequence import Sequence, Sequences
 from evedesign.structure import StructureFile
 from evedesign.types import Score, RepSequence
 
 # 1. evedesign Entity --> to Boltz-2 YAML
-
-# Chain ID generation
-# Boltz-2 uses chain IDs to identify entities in the system. We need to generate unique chain IDs for each entity instance. 
-# The convention is to use uppercase letters (A-Z) for the first 26 entities, then double letters (AA, AB, AC, ...) for additional entities. 
-# This function generates the appropriate chain ID based on the entity's position in the system.
-def _get_chain_id(chain_num: int) -> str:
-    """Generate chain ID: A-Z, then AA, AB, AC, ..."""
-    if chain_num < 26:
-        return chr(65 + chain_num)
-    else:
-        first = chr(65 + (chain_num - 26) // 26)
-        second = chr(65 + (chain_num - 26) % 26)
-        return first + second
-
-
-def _get_chain_ids(system: System) -> list[str]:
-    """
-    Generate one chain ID per chain in the system.
-
-    IDs follow the sequence A-Z, then AA, AB, AC, ...
-    Each entity consumes max(entity.copies, 1) IDs.
-    """
-    total = sum(
-        max(e.copies, 1) if e.copies is not None else 1
-        for e in system
-    )
-    return [_get_chain_id(i) for i in range(total)]
-
-
-def _chain_to_entity_map(system: System) -> dict[str, int]:
-    """Maps each Boltz-2 chain ID back to its evedesign entity index."""
-    chain_ids = _get_chain_ids(system)
-    result: dict[str, int] = {}
-    pointer = 0
-    for entity_idx, entity in enumerate(system):
-        copies = entity.copies if entity.copies is not None else 1
-        for chain_id in chain_ids[pointer:pointer + copies]:
-            result[chain_id] = entity_idx
-        pointer += copies
-    return result
 
 
 def _match_columns(seq: str) -> int:
